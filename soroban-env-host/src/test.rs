@@ -1,4 +1,4 @@
-mod util;
+pub(crate) mod util;
 
 mod account;
 mod basic;
@@ -18,3 +18,6 @@ mod invocation;
 #[cfg(all(feature = "vm", feature = "testutils"))]
 mod lifecycle;
 mod tuple;
+
+#[cfg(feature = "testutils")]
+mod token;

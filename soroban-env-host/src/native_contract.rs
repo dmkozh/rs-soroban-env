@@ -1,5 +1,5 @@
-mod base_types;
-mod token;
+pub(crate) mod base_types;
+pub(crate) mod token;
 
 use crate::host::{Host, HostError};
 use soroban_env_common::{RawVal, Symbol};
@@ -9,3 +9,6 @@ pub trait NativeContract {
 }
 
 pub use token::Token;
+
+#[cfg(feature = "testutils")]
+pub(crate) mod testutils;

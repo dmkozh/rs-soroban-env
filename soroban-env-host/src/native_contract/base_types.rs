@@ -2,8 +2,7 @@ use crate::host::{Host, HostError};
 use core::cmp::Ordering;
 use soroban_env_common::xdr::ScObjectType;
 use soroban_env_common::{
-    CheckedEnv, ConversionError, EnvBase, EnvVal, Object, RawVal, RawValConvertible, TryFromVal,
-    TryIntoVal,
+    CheckedEnv, ConversionError, EnvBase, EnvVal, Object, RawVal, TryFromVal, TryIntoVal,
 };
 
 #[derive(Clone)]
@@ -162,6 +161,7 @@ impl Bytes {
 
     #[cfg(feature = "testutils")]
     pub(crate) fn to_vec(&self) -> std::vec::Vec<u8> {
+        use soroban_env_common::RawValConvertible;
         let env = self.0.env();
         let mut res = std::vec::Vec::<u8>::new();
         let size = unsafe {
