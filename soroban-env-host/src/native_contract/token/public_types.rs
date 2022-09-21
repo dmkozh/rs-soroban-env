@@ -1,8 +1,8 @@
 use crate::host::Host;
-use crate::native_contract::base_types::{AccountId, Bytes, BytesN, Map, Vec};
+pub(crate) use crate::native_contract::base_types::{AccountId, Bytes, BytesN, Map, Vec};
 use crate::native_contract::invoker::{invoker, Invoker};
 use crate::native_contract::token::error::Error;
-use soroban_env_common::{Symbol, TryIntoVal};
+use soroban_env_common::{CheckedEnv, Symbol, TryIntoVal};
 use soroban_native_sdk_macros::contracttype;
 
 #[derive(Clone)]
