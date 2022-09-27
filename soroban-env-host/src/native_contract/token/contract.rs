@@ -72,15 +72,9 @@ pub trait TokenTrait {
         amount: BigInt,
     ) -> Result<(), Error>;
 
-    fn burn(
-        e: &Host,
-        admin: Signature,
-        nonce: BigInt,
-        from: Identifier,
-        amount: BigInt,
-    ) -> Result<(), Error>;
-
     fn freeze(e: &Host, admin: Signature, nonce: BigInt, id: Identifier) -> Result<(), Error>;
+
+    fn unfreeze(e: &Host, admin: Signature, nonce: BigInt, id: Identifier) -> Result<(), Error>;
 
     fn mint(
         e: &Host,
@@ -90,14 +84,20 @@ pub trait TokenTrait {
         amount: BigInt,
     ) -> Result<(), Error>;
 
+    fn burn(
+        e: &Host,
+        admin: Signature,
+        nonce: BigInt,
+        from: Identifier,
+        amount: BigInt,
+    ) -> Result<(), Error>;
+
     fn set_admin(
         e: &Host,
         admin: Signature,
         nonce: BigInt,
         new_admin: Identifier,
     ) -> Result<(), Error>;
-
-    fn unfreeze(e: &Host, admin: Signature, nonce: BigInt, id: Identifier) -> Result<(), Error>;
 
     fn decimals(e: &Host) -> Result<u32, Error>;
 
