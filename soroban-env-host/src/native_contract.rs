@@ -11,5 +11,5 @@ pub trait NativeContract {
 
 pub use token::Token;
 
-#[cfg(feature = "testutils")]
+#[cfg(test)]
 pub(crate) mod testutils;

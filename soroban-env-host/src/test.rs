@@ -20,5 +20,4 @@ mod invocation;
 mod lifecycle;
 mod tuple;
 
-#[cfg(feature = "testutils")]
 mod token;
