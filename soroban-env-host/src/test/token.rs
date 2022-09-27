@@ -2,23 +2,32 @@ use std::{convert::TryInto, rc::Rc};
 
 use crate::{
     budget::Budget,
+    host_vec,
     native_contract::{
         base_types::BigInt,
-        testutils::{generate_keypair, signer_to_id_bytes, TestSigner},
-        token::{public_types::TokenMetadata, test_token::TestToken},
+        testutils::{
+            generate_bytes, generate_keypair, sign_args, signer_to_id_bytes, HostVec, TestSigner,
+        },
+        token::{
+            public_types::{Ed25519Signature, Identifier, Signature, TokenMetadata},
+            test_token::TestToken,
+        },
     },
     storage::{test_storage::MockSnapshotSource, Storage},
-    Host, LedgerInfo,
+    Host, HostError, LedgerInfo,
 };
 use ed25519_dalek::Keypair;
-use soroban_env_common::xdr::{
-    AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext,
-    AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountId, AlphaNum12, AlphaNum4, Asset,
-    AssetCode12, AssetCode4, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, Liabilities,
-    PublicKey, SequenceNumber, SignerKey, Thresholds, TrustLineEntry, TrustLineEntryExt,
-    TrustLineEntryV1, TrustLineEntryV1Ext, TrustLineFlags,
+use soroban_env_common::{
+    xdr::{
+        AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext,
+        AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountId, AlphaNum12, AlphaNum4,
+        Asset, AssetCode12, AssetCode4, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
+        Liabilities, PublicKey, SequenceNumber, SignerKey, Thresholds, TrustLineEntry,
+        TrustLineEntryExt, TrustLineEntryV1, TrustLineEntryV1Ext, TrustLineFlags,
+    },
+    Status,
 };
-use soroban_env_common::{EnvBase, TryFromVal};
+use soroban_env_common::{CheckedEnv, EnvBase, Symbol, TryFromVal, TryIntoVal};
 
 use crate::native_contract::base_types::{Bytes, BytesN};
 
@@ -238,16 +247,19 @@ fn test_smart_token_init_and_balance() {
     let test = TokenTest::setup();
     let token = TestToken::new(&test.host);
     let admin = TestSigner::Ed25519(&test.admin_key);
+    let token_metadata = TokenMetadata {
+        name: test.convert_bytes(&[0, 0, b'a']),
+        symbol: test.convert_bytes(&[255, 123, 0, b'a']),
+        decimals: 0xffffffff,
+    };
     token
-        .init_token(
-            admin.get_identifier(&test.host),
-            TokenMetadata {
-                name: test.convert_bytes(&[0, 0, b'a']),
-                symbol: test.convert_bytes(&[255, 123, 0, b'a']),
-                decimals: 0xffffffff,
-            },
-        )
+        .init_token(admin.get_identifier(&test.host), token_metadata.clone())
         .unwrap();
+
+    // Make sure double initialization is not possible.
+    assert!(token
+        .init_token(admin.get_identifier(&test.host), token_metadata.clone())
+        .is_err());
 
     assert_eq!(token.name().unwrap().to_vec(), vec![0, 0, b'a']);
     assert_eq!(token.symbol().unwrap().to_vec(), vec![255, 123, 0, b'a']);
@@ -323,6 +335,26 @@ fn test_native_token_smart_roundtrip() {
     assert_eq!(token.name().unwrap().to_vec(), b"native".to_vec());
 
     let user = TestSigner::account(&account_id, vec![&test.user_key]);
+
+    // Wrapped token can't be initialized as regular token.
+    assert!(token
+        .init_token(
+            user.get_identifier(&test.host),
+            TokenMetadata {
+                name: test.convert_bytes(b"native"),
+                symbol: test.convert_bytes(b"native"),
+                decimals: 7,
+            },
+        )
+        .is_err());
+    // Also can't set a new admin (and there is no admin in the first place).
+    assert!(token
+        .set_admin(
+            &user,
+            BigInt::from_u64(&test.host, 0).unwrap(),
+            user.get_identifier(&test.host)
+        )
+        .is_err());
 
     assert_eq!(test.get_native_balance(&account_id), 10_000_000);
     assert_eq!(
@@ -447,6 +479,18 @@ fn test_classic_asset_roundtrip(asset_code: &[u8]) {
     );
 
     let user = TestSigner::account(&account_id, vec![&test.user_key]);
+
+    // Wrapped token can't be initialized as regular token.
+    assert!(token
+        .init_token(
+            user.get_identifier(&test.host),
+            TokenMetadata {
+                name: test.convert_bytes(b"native"),
+                symbol: test.convert_bytes(b"native"),
+                decimals: 7,
+            },
+        )
+        .is_err());
 
     assert_eq!(
         test.get_classic_trustline_balance(&trustline_key),
