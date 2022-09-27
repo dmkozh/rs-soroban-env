@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::{
     native_contract::token::public_types::{
         AccountSignatures, Ed25519Signature, Signature, SignaturePayload, SignaturePayloadV0,
