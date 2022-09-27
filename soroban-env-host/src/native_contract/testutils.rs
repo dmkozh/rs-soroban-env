@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::{
     native_contract::token::public_types::{
         AccountSignatures, Ed25519Signature, Signature, SignaturePayload, SignaturePayloadV0,
@@ -55,6 +53,8 @@ pub(crate) fn signer_to_id_bytes(host: &Host, key: &Keypair) -> BytesN<32> {
 }
 
 pub(crate) enum TestSigner<'a> {
+    // TODO: This is yet to be covered.
+    #[allow(dead_code)]
     Contract(BytesN<32>),
     Ed25519(&'a Keypair),
     Account(AccountSigner<'a>),

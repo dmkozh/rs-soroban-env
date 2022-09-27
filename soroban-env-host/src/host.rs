@@ -869,7 +869,7 @@ impl Host {
 
     // Writes an arbitrary ledger entry to storage.
     // "testutils" is not covered by budget metering.
-    #[cfg(feature = "testutils")]
+    #[cfg(any(test, feature = "testutils"))]
     pub fn add_ledger_entry(&self, key: LedgerKey, val: LedgerEntry) -> Result<(), HostError> {
         self.visit_storage(|storage| storage.put(&key, &val))
     }

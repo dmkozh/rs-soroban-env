@@ -82,7 +82,7 @@ impl BigInt {
         Ok(i.cmp(&0))
     }
 
-    #[cfg(feature = "testutils")]
+    #[cfg(test)]
     pub(crate) fn to_i64(&self) -> i64 {
         self.0.env.bigint_to_i64(self.0.val).unwrap()
     }
@@ -159,7 +159,7 @@ impl Bytes {
         Ok(())
     }
 
-    #[cfg(feature = "testutils")]
+    #[cfg(test)]
     pub(crate) fn to_vec(&self) -> std::vec::Vec<u8> {
         use soroban_env_common::RawValConvertible;
         let env = self.0.env();
@@ -261,7 +261,7 @@ impl<const N: u32> BytesN<N> {
             .map_err(|status| status.into())
     }
 
-    #[cfg(feature = "testutils")]
+    #[cfg(test)]
     pub(crate) fn to_vec(&self) -> std::vec::Vec<u8> {
         Bytes::from(self.clone()).to_vec()
     }
