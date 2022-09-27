@@ -9,7 +9,7 @@ mod nonce;
 pub(crate) mod public_types;
 mod storage_types;
 
-#[cfg(test)]
+#[cfg(feature = "testutils")]
 pub(crate) mod test_token;
 
 pub use contract::Token;

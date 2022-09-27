@@ -82,7 +82,7 @@ impl BigInt {
         Ok(i.cmp(&0))
     }
 
-    #[cfg(test)]
+    #[cfg(feature = "testutils")]
     pub(crate) fn to_i64(&self) -> i64 {
         self.0.env.bigint_to_i64(self.0.val).unwrap()
     }
@@ -265,11 +265,11 @@ impl<const N: u32> BytesN<N> {
     pub fn from_slice(env: &Host, items: &[u8]) -> Result<BytesN<N>, HostError> {
         Ok(BytesN(env.bytes_new_from_slice(items)?.in_env(env)))
     }
-    
+
     #[cfg(test)]
     pub(crate) fn to_vec(&self) -> std::vec::Vec<u8> {
         Bytes::from(self.clone()).to_vec()
-    }    
+    }
 }
 
 #[derive(Clone)]
