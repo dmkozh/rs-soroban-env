@@ -128,10 +128,8 @@ impl Host {
     }
 
     // notes on metering: `get` from storage and `to_u256` covered. Rest are free.
-    pub fn load_account(&self, a: Object) -> Result<AccountEntry, HostError> {
-        let acc = LedgerKey::Account(LedgerKeyAccount {
-            account_id: AccountId(PublicKey::PublicKeyTypeEd25519(self.to_u256(a)?)),
-        });
+    pub fn load_account(&self, account_id: Object) -> Result<AccountEntry, HostError> {
+        let acc = self.to_account_key(account_id)?;
         self.visit_storage(|storage| match storage.get(&acc)?.data {
             LedgerEntryData::Account(ae) => Ok(ae),
             _ => Err(self.err_general("not account")),
@@ -144,6 +142,12 @@ impl Host {
             account_id: AccountId(PublicKey::PublicKeyTypeEd25519(self.to_u256(a)?)),
         });
         self.visit_storage(|storage| storage.has(&acc))
+    }
+
+    pub fn to_account_key(&self, account_id: Object) -> Result<LedgerKey, HostError> {
+        Ok(LedgerKey::Account(LedgerKeyAccount {
+            account_id: AccountId(PublicKey::PublicKeyTypeEd25519(self.to_u256(account_id)?)),
+        }))
     }
 
     pub fn to_trustline_key(

@@ -867,6 +867,13 @@ impl Host {
         self.create_contract_with_id(ScContractCode::Token, contract_id)
     }
 
+    // Writes an arbitrary ledger entry to storage.
+    // "testutils" is not covered by budget metering.
+    #[cfg(feature = "testutils")]
+    pub fn add_ledger_entry(&self, key: LedgerKey, val: LedgerEntry) -> Result<(), HostError> {
+        self.visit_storage(|storage| storage.put(&key, &val))
+    }
+
     /// Records a `System` contract event. `topics` is expected to be a `SCVec`
     /// length <= 4 that cannot contain `Vec`, `Map`, or `Bytes` with length > 32
     /// On success, returns an `SCStatus::Ok`.
@@ -882,16 +889,14 @@ impl Host {
         account_id: Object,
         amount: i64,
     ) -> Result<(), HostError> {
-        use xdr::{AccountEntryExt, AccountEntryExtensionV1Ext, LedgerKeyAccount};
+        use xdr::{AccountEntryExt, AccountEntryExtensionV1Ext};
 
         self.with_current_frame(|frame| match frame {
             Frame::Token(id, _) => Ok(()),
             _ => Err(self.err_general("only native token can transfer classic balance")),
         })?;
 
-        let lk = LedgerKey::Account(LedgerKeyAccount {
-            account_id: AccountId(PublicKey::PublicKeyTypeEd25519(self.to_u256(account_id)?)),
-        });
+        let lk = self.to_account_key(account_id)?;
         self.visit_storage(|storage| {
             let mut le = storage.get(&lk)?;
             let ae = match &mut le.data {
@@ -2665,6 +2670,7 @@ impl VmCallerCheckedEnv for Host {
                 .verify(bytes, &sig)
                 .map_err(|_| self.err_general("Failed ED25519 verification"))
         });
+
         Ok(res?.into())
     }
 
