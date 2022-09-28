@@ -14,7 +14,7 @@ use crate::{
         },
     },
     storage::{test_storage::MockSnapshotSource, Storage},
-    Host, HostError, LedgerInfo,
+    Host, LedgerInfo,
 };
 use ed25519_dalek::Keypair;
 use soroban_env_common::{
@@ -37,6 +37,7 @@ struct TokenTest {
     user_key: Keypair,
     user_key_2: Keypair,
     user_key_3: Keypair,
+    user_key_4: Keypair,
 }
 
 impl TokenTest {
@@ -57,6 +58,7 @@ impl TokenTest {
             user_key: generate_keypair(),
             user_key_2: generate_keypair(),
             user_key_3: generate_keypair(),
+            user_key_4: generate_keypair(),
         }
     }
 
@@ -1239,4 +1241,136 @@ fn test_auth_rejected_for_incorrect_function_args() {
         .try_into_val(&test.host)
         .unwrap();
     assert_ne!(res, Status::OK);
+}
+
+#[test]
+fn test_classic_account_multisig_auth() {
+    let test = TokenTest::setup();
+
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    test.create_classic_account(
+        &account_id,
+        vec![
+            (&test.user_key_2, u32::MAX),
+            (&test.user_key_3, 60),
+            (&test.user_key_4, 59),
+        ],
+        10_000_000,
+        1,
+        // NB: first threshold is in fact weight of account_id signature.
+        [40, 10, 100, 150],
+        None,
+        None,
+    );
+    let account_ident = Identifier::Account(account_id.clone());
+    let token = TestToken::new_wrapped(&test.host, Asset::Native);
+
+    // Success: account weight (60) + 40 = 100
+    token
+        .to_smart(
+            &TestSigner::account(&account_id, vec![&test.user_key, &test.user_key_3]),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .unwrap();
+
+    // Success: 1 high weight signer (u32::MAX)
+    token
+        .to_smart(
+            &TestSigner::account(&account_id, vec![&test.user_key_2]),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .unwrap();
+
+    // Success: 60 + 59 > 100, no account signature
+    token
+        .to_smart(
+            &TestSigner::account(&account_id, vec![&test.user_key_3, &test.user_key_4]),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .unwrap();
+
+    // Success: 40 + 60 + 59 > 100
+    token
+        .to_smart(
+            &TestSigner::account(
+                &account_id,
+                vec![&test.user_key, &test.user_key_3, &test.user_key_4],
+            ),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .unwrap();
+
+    // Success: all signers
+    token
+        .to_smart(
+            &TestSigner::account(
+                &account_id,
+                vec![
+                    &test.user_key,
+                    &test.user_key_2,
+                    &test.user_key_3,
+                    &test.user_key_4,
+                ],
+            ),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .unwrap();
+
+    // Failure: only account weight (40)
+    assert!(token
+        .to_smart(
+            &TestSigner::account(&account_id, vec![&test.user_key]),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .is_err());
+
+    // Failure: 40 + 59 < 100
+    assert!(token
+        .to_smart(
+            &TestSigner::account(&account_id, vec![&test.user_key, &test.user_key_4]),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .is_err());
+
+    // Failure: 60 < 100, duplicate signatures
+    assert!(token
+        .to_smart(
+            &TestSigner::account(&account_id, vec![&test.user_key_3, &test.user_key_3]),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .is_err());
+
+    // Success: 60 + 59 > 100, duplicate signatures
+    token
+        .to_smart(
+            &TestSigner::account(
+                &account_id,
+                vec![&test.user_key_3, &test.user_key_4, &test.user_key_3],
+            ),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .unwrap();
+
+    // Failure: too many signatures (even though weight would be enough after
+    // deduplication).
+    let mut too_many_sigs = vec![];
+    for _ in 0..22 {
+        too_many_sigs.push(&test.user_key_2);
+    }
+    assert!(token
+        .to_smart(
+            &TestSigner::account(&account_id, too_many_sigs,),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .is_err());
 }
