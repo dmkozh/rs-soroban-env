@@ -1004,3 +1004,239 @@ fn test_set_admin() {
         )
         .unwrap();
 }
+
+#[test]
+fn test_contract_signatures_do_not_work_outside_of_contract_call() {
+    // TODO: we still need a positive test for contract auth.
+    let test = TokenTest::setup();
+    let contract_signer = TestSigner::Contract(generate_bytes(&test.host));
+    let user = TestSigner::Ed25519(&test.user_key);
+    let token = test.default_smart_token(&contract_signer);
+
+    assert!(token
+        .mint(
+            &contract_signer,
+            BigInt::from_u64(&test.host, 0).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 1000).unwrap(),
+        )
+        .is_err());
+}
+
+#[test]
+fn test_auth_rejected_with_incorrect_nonce() {
+    let test = TokenTest::setup();
+    let admin = TestSigner::Ed25519(&test.admin_key);
+    let token = test.default_smart_token(&admin);
+    let user = TestSigner::Ed25519(&test.user_key);
+    let user_2 = TestSigner::Ed25519(&test.user_key_2);
+
+    token
+        .mint(
+            &admin,
+            token.nonce(admin.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 100_000_000).unwrap(),
+        )
+        .unwrap();
+
+    // Bump user's nonce and approve some amount to cover xfer_from below.
+    token
+        .approve(
+            &user,
+            BigInt::from_u64(&test.host, 0).unwrap(),
+            user_2.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 1000).unwrap(),
+        )
+        .unwrap();
+
+    assert!(token
+        .xfer(
+            &user,
+            BigInt::from_u64(&test.host, 2).unwrap(),
+            user_2.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 1000).unwrap()
+        )
+        .is_err());
+
+    assert!(token
+        .approve(
+            &user,
+            BigInt::from_u64(&test.host, 2).unwrap(),
+            user_2.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 1000).unwrap()
+        )
+        .is_err());
+    assert!(token
+        .xfer_from(
+            &user_2,
+            BigInt::from_u64(&test.host, 1).unwrap(),
+            user.get_identifier(&test.host),
+            user_2.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 100).unwrap()
+        )
+        .is_err());
+    assert!(token
+        .mint(
+            &admin,
+            BigInt::from_u64(&test.host, 2).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 10_000_000).unwrap(),
+        )
+        .is_err());
+    assert!(token
+        .burn(
+            &admin,
+            BigInt::from_u64(&test.host, 2).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 10_000_000).unwrap(),
+        )
+        .is_err());
+    assert!(token
+        .set_admin(
+            &admin,
+            BigInt::from_u64(&test.host, 2).unwrap(),
+            user.get_identifier(&test.host)
+        )
+        .is_err());
+}
+
+#[test]
+fn test_auth_rejected_with_incorrect_signer() {
+    let test = TokenTest::setup();
+    let admin = TestSigner::Ed25519(&test.admin_key);
+    let token = test.default_smart_token(&admin);
+    let user = TestSigner::Ed25519(&test.user_key);
+
+    let nonce = BigInt::from_u64(&test.host, 0).unwrap();
+    let amount = BigInt::from_u64(&test.host, 1000).unwrap();
+    let user_signature = sign_args(
+        &test.host,
+        &user,
+        "mint",
+        &token.id,
+        host_vec![
+            &test.host,
+            admin.get_identifier(&test.host),
+            nonce.clone(),
+            user.get_identifier(&test.host),
+            amount.clone(),
+        ],
+    );
+    // Replace public key in the user signature to imitate admin signature.
+    let signature = Signature::Ed25519(Ed25519Signature {
+        public_key: match admin.get_identifier(&test.host) {
+            Identifier::Ed25519(id) => id,
+            _ => unreachable!(),
+        },
+        signature: match user_signature {
+            Signature::Ed25519(signature) => signature.signature,
+            _ => unreachable!(),
+        },
+    });
+
+    let res: Status = test
+        .host
+        .try_call(
+            token.id.clone().into(),
+            Symbol::from_str("mint").into(),
+            host_vec![
+                &test.host,
+                signature,
+                nonce,
+                user.get_identifier(&test.host),
+                amount
+            ]
+            .into(),
+        )
+        .unwrap()
+        .try_into_val(&test.host)
+        .unwrap();
+    assert_ne!(res, Status::OK);
+}
+
+#[test]
+fn test_auth_rejected_for_incorrect_function_name() {
+    let test = TokenTest::setup();
+    let admin = TestSigner::Ed25519(&test.admin_key);
+    let token = test.default_smart_token(&admin);
+    let user = TestSigner::Ed25519(&test.user_key);
+
+    let nonce = BigInt::from_u64(&test.host, 0).unwrap();
+    let amount = BigInt::from_u64(&test.host, 1000).unwrap();
+    let signature = sign_args(
+        &test.host,
+        &admin,
+        "burn",
+        &token.id,
+        host_vec![
+            &test.host,
+            admin.get_identifier(&test.host),
+            nonce.clone(),
+            user.get_identifier(&test.host),
+            amount.clone(),
+        ],
+    );
+
+    let res: Status = test
+        .host
+        .try_call(
+            token.id.clone().into(),
+            Symbol::from_str("mint").into(),
+            host_vec![
+                &test.host,
+                signature,
+                nonce,
+                user.get_identifier(&test.host),
+                amount
+            ]
+            .into(),
+        )
+        .unwrap()
+        .try_into_val(&test.host)
+        .unwrap();
+    assert_ne!(res, Status::OK);
+}
+
+#[test]
+fn test_auth_rejected_for_incorrect_function_args() {
+    let test = TokenTest::setup();
+    let admin = TestSigner::Ed25519(&test.admin_key);
+    let token = test.default_smart_token(&admin);
+    let user = TestSigner::Ed25519(&test.user_key);
+
+    let nonce = BigInt::from_u64(&test.host, 0).unwrap();
+    let signature = sign_args(
+        &test.host,
+        &admin,
+        "mint",
+        &token.id,
+        host_vec![
+            &test.host,
+            admin.get_identifier(&test.host),
+            nonce.clone(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 1000).unwrap(),
+        ],
+    );
+
+    let res: Status = test
+        .host
+        .try_call(
+            token.id.clone().into(),
+            Symbol::from_str("mint").into(),
+            host_vec![
+                &test.host,
+                signature,
+                nonce,
+                user.get_identifier(&test.host),
+                // call with 1000000 amount instead of 1000 that was signed.
+                BigInt::from_u64(&test.host, 1_000_000).unwrap(),
+            ]
+            .into(),
+        )
+        .unwrap()
+        .try_into_val(&test.host)
+        .unwrap();
+    assert_ne!(res, Status::OK);
+}

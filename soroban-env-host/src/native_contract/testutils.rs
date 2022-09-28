@@ -27,10 +27,10 @@ impl HostVec {
 #[macro_export]
 macro_rules! host_vec {
     ($host:expr $(,)?) => {
-        HostVec::new($host)?
+        HostVec::new($host).unwrap()
     };
     ($host:expr, $($x:expr),+ $(,)?) => {
-        HostVec::from_array($host, &[$($x.try_into_val($host)?),+])?
+        HostVec::from_array($host, &[$($x.try_into_val($host).unwrap()),+]).unwrap()
     };
 }
 
