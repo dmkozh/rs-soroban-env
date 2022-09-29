@@ -1525,3 +1525,24 @@ fn test_negative_amounts_are_not_allowed() {
         )
         .is_err());
 }
+
+#[test]
+fn test_native_token_wrapper_respects_classic_invariants() {
+    let test = TokenTest::setup();
+
+    let token = TestToken::new_wrapped(&test.host, Asset::Native);
+
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        10_000_000,
+        1,
+        [100, 100, 100, 100],
+        None,
+        None,
+    );
+    
+
+
+}
