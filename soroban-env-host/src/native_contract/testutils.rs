@@ -61,12 +61,13 @@ pub(crate) enum TestSigner<'a> {
 }
 
 pub(crate) struct AccountSigner<'a> {
-    account_id: BytesN<32>,
-    signers: Vec<&'a Keypair>,
+    pub(crate) account_id: BytesN<32>,
+    pub(crate) signers: Vec<&'a Keypair>,
 }
 
 impl<'a> TestSigner<'a> {
-    pub(crate) fn account(account_id: &BytesN<32>, signers: Vec<&'a Keypair>) -> Self {
+    pub(crate) fn account(account_id: &BytesN<32>, mut signers: Vec<&'a Keypair>) -> Self {
+        signers.sort_by_key(|k| k.public.as_bytes());
         TestSigner::Account(AccountSigner {
             account_id: account_id.clone(),
             signers,

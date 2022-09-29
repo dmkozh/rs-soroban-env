@@ -6,7 +6,8 @@ use crate::{
     native_contract::{
         base_types::BigInt,
         testutils::{
-            generate_bytes, generate_keypair, sign_args, signer_to_id_bytes, HostVec, TestSigner,
+            generate_bytes, generate_keypair, sign_args, signer_to_id_bytes, AccountSigner,
+            HostVec, TestSigner,
         },
         token::{
             public_types::{Ed25519Signature, Identifier, Signature, TokenMetadata},
@@ -1412,8 +1413,8 @@ fn test_classic_account_multisig_auth() {
         )
         .is_err());
 
-    // Success: 60 + 59 > 100, duplicate signatures
-    token
+    // Failure: 60 + 59 > 100, duplicate signatures
+    assert!(token
         .to_smart(
             &TestSigner::account(
                 &account_id,
@@ -1422,7 +1423,7 @@ fn test_classic_account_multisig_auth() {
             token.nonce(account_ident.clone()).unwrap(),
             100,
         )
-        .unwrap();
+        .is_err());
 
     // Failure: too many signatures (even though weight would be enough after
     // deduplication).
@@ -1433,6 +1434,18 @@ fn test_classic_account_multisig_auth() {
     assert!(token
         .to_smart(
             &TestSigner::account(&account_id, too_many_sigs,),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .is_err());
+
+    // Failure: out of order signers
+    assert!(token
+        .to_smart(
+            &TestSigner::Account(AccountSigner {
+                account_id: account_id.clone(),
+                signers: vec![&test.user_key_3, &test.user_key,],
+            }),
             token.nonce(account_ident.clone()).unwrap(),
             100,
         )
