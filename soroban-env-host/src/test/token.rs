@@ -1,4 +1,4 @@
-use std::{convert::TryInto, rc::Rc};
+use std::{convert::TryInto, io::Read, rc::Rc};
 
 use crate::{
     budget::Budget,
@@ -413,6 +413,38 @@ fn test_native_token_smart_roundtrip() {
             .to_i64(),
         2
     );
+
+    // Make sure negative amounts are not allowed in smart/classic conversions.
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            i64::MIN,
+        )
+        .is_err());
+    assert!(token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            -1,
+        )
+        .is_err());
+
+    // Also cover potential overflows
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            i64::MAX,
+        )
+        .is_err());
+    assert!(token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            i64::MAX,
+        )
+        .is_err());
 }
 
 fn test_classic_asset_roundtrip(asset_code: &[u8]) {
@@ -558,6 +590,38 @@ fn test_classic_asset_roundtrip(asset_code: &[u8]) {
             .to_i64(),
         2
     );
+
+    // Make sure negative amounts are not allowed in smart/classic conversions.
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            -1,
+        )
+        .is_err());
+    assert!(token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            i64::MIN,
+        )
+        .is_err());
+
+    // Also cover potential overflows
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            i64::MAX,
+        )
+        .is_err());
+    assert!(token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            i64::MAX,
+        )
+        .is_err());
 }
 
 #[test]
@@ -1363,7 +1427,7 @@ fn test_classic_account_multisig_auth() {
     // Failure: too many signatures (even though weight would be enough after
     // deduplication).
     let mut too_many_sigs = vec![];
-    for _ in 0..22 {
+    for _ in 0..21 {
         too_many_sigs.push(&test.user_key_2);
     }
     assert!(token
@@ -1371,6 +1435,80 @@ fn test_classic_account_multisig_auth() {
             &TestSigner::account(&account_id, too_many_sigs,),
             token.nonce(account_ident.clone()).unwrap(),
             100,
+        )
+        .is_err());
+}
+
+#[test]
+fn test_negative_amounts_are_not_allowed() {
+    let test = TokenTest::setup();
+    let admin = TestSigner::Ed25519(&test.admin_key);
+    let token = test.default_smart_token(&admin);
+
+    let user = TestSigner::Ed25519(&test.user_key);
+    let user_2 = TestSigner::Ed25519(&test.user_key_2);
+    token
+        .mint(
+            &admin,
+            token.nonce(admin.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 100_000_000).unwrap(),
+        )
+        .unwrap();
+
+    assert!(token
+        .mint(
+            &admin,
+            token.nonce(admin.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_i64(&test.host, -1).unwrap(),
+        )
+        .is_err());
+
+    assert!(token
+        .burn(
+            &admin,
+            token.nonce(admin.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_i64(&test.host, -1).unwrap(),
+        )
+        .is_err());
+
+    assert!(token
+        .xfer(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            user_2.get_identifier(&test.host),
+            BigInt::from_i64(&test.host, -1).unwrap(),
+        )
+        .is_err());
+
+    assert!(token
+        .approve(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            user_2.get_identifier(&test.host),
+            BigInt::from_i64(&test.host, -1).unwrap(),
+        )
+        .is_err());
+
+    // Approve some balance before doing the negative xfer_from.
+    token
+        .approve(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            user_2.get_identifier(&test.host),
+            BigInt::from_i64(&test.host, 10_000).unwrap(),
+        )
+        .unwrap();
+
+    assert!(token
+        .xfer_from(
+            &user_2,
+            token.nonce(user_2.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            user_2.get_identifier(&test.host),
+            BigInt::from_i64(&test.host, -1).unwrap(),
         )
         .is_err());
 }
