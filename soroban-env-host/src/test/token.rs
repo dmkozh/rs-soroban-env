@@ -666,6 +666,7 @@ fn test_direct_transfer() {
         0
     );
 
+    // Transfer some balance from user 1 to user 2.
     token
         .xfer(
             &user,
@@ -689,6 +690,17 @@ fn test_direct_transfer() {
         9_999_999
     );
 
+    // Can't transfer more than the balance from user 2.
+    assert!(token
+        .xfer(
+            &user_2,
+            token.nonce(user_2.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 10_000_000).unwrap(),
+        )
+        .is_err());
+
+    // Transfer some balance back from user 2 to user 1.
     token
         .xfer(
             &user_2,
@@ -755,6 +767,7 @@ fn test_transfer_with_allowance() {
         0
     );
 
+    // Allow 10_000_000 units of token to be transferred from user by user 3.
     token
         .approve(
             &user,
@@ -775,13 +788,14 @@ fn test_transfer_with_allowance() {
         10_000_000
     );
 
+    // Transfer 5_000_000 of allowance to user 2.
     token
         .xfer_from(
             &user_3,
             token.nonce(user_3.get_identifier(&test.host)).unwrap(),
             user.get_identifier(&test.host),
             user_2.get_identifier(&test.host),
-            BigInt::from_u64(&test.host, 5_000_000).unwrap(),
+            BigInt::from_u64(&test.host, 6_000_000).unwrap(),
         )
         .unwrap();
     assert_eq!(
@@ -789,14 +803,14 @@ fn test_transfer_with_allowance() {
             .balance(user.get_identifier(&test.host))
             .unwrap()
             .to_i64(),
-        95_000_000
+        94_000_000
     );
     assert_eq!(
         token
             .balance(user_2.get_identifier(&test.host))
             .unwrap()
             .to_i64(),
-        5_000_000
+        6_000_000
     );
     assert_eq!(
         token
@@ -805,14 +819,36 @@ fn test_transfer_with_allowance() {
             .to_i64(),
         0
     );
+    assert_eq!(
+        token
+            .allowance(
+                user.get_identifier(&test.host),
+                user_3.get_identifier(&test.host)
+            )
+            .unwrap()
+            .to_i64(),
+        4_000_000
+    );
 
+    // Can't transfer more than remaining allowance.
+    assert!(token
+        .xfer_from(
+            &user_3,
+            token.nonce(user_3.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            user_3.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 4_000_001).unwrap(),
+        )
+        .is_err());
+
+    // Transfer the remaining allowance to user 3.
     token
         .xfer_from(
             &user_3,
             token.nonce(user_3.get_identifier(&test.host)).unwrap(),
             user.get_identifier(&test.host),
             user_3.get_identifier(&test.host),
-            BigInt::from_u64(&test.host, 3_000_000).unwrap(),
+            BigInt::from_u64(&test.host, 4_000_000).unwrap(),
         )
         .unwrap();
 
@@ -821,22 +857,43 @@ fn test_transfer_with_allowance() {
             .balance(user.get_identifier(&test.host))
             .unwrap()
             .to_i64(),
-        92_000_000
+        90_000_000
     );
     assert_eq!(
         token
             .balance(user_2.get_identifier(&test.host))
             .unwrap()
             .to_i64(),
-        5_000_000
+        6_000_000
     );
     assert_eq!(
         token
             .balance(user_3.get_identifier(&test.host))
             .unwrap()
             .to_i64(),
-        3_000_000
+        4_000_000
     );
+    assert_eq!(
+        token
+            .allowance(
+                user.get_identifier(&test.host),
+                user_3.get_identifier(&test.host)
+            )
+            .unwrap()
+            .to_i64(),
+        0
+    );
+
+    // Can't transfer anything at all now.
+    assert!(token
+        .xfer_from(
+            &user_3,
+            token.nonce(user_3.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            user_3.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 1).unwrap(),
+        )
+        .is_err());
 }
 
 #[test]
@@ -963,6 +1020,33 @@ fn test_burn() {
             .unwrap()
             .to_i64(),
         60_000_000
+    );
+
+    // Can't burn more than the balance
+    assert!(token
+        .burn(
+            &admin,
+            token.nonce(admin.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 60_000_001).unwrap(),
+        )
+        .is_err());
+
+    // Burn everything else
+    token
+        .burn(
+            &admin,
+            token.nonce(admin.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 60_000_000).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        token
+            .balance(user.get_identifier(&test.host))
+            .unwrap()
+            .to_i64(),
+        0
     );
 }
 
@@ -1911,4 +1995,46 @@ fn test_asset_token_classic_balance_boundaries_large_values() {
         i64::MAX - i64::MAX / 5,
         Some((i64::MAX / 5, i64::MAX / 4)),
     );
+}
+
+#[test]
+fn test_smart_tokens_dont_support_classic_ops() {
+    let test = TokenTest::setup();
+    let admin = TestSigner::Ed25519(&test.admin_key);
+    let token = test.default_smart_token(&admin);
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        10_000_000,
+        0,
+        [1, 0, 0, 0],
+        None,
+        None,
+    );
+
+    token
+        .mint(
+            &admin,
+            token.nonce(admin.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 100_000).unwrap(),
+        )
+        .unwrap();
+
+    assert!(token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            1
+        )
+        .is_err());
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            1
+        )
+        .is_err());
 }
