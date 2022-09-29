@@ -11,7 +11,7 @@ use soroban_env_common::{CheckedEnv, Symbol, TryFromVal, TryIntoVal};
 use std::cmp::min;
 
 const MAX_ACCOUNT_SIGNATURE_WEIGHT: u32 = u8::MAX as u32;
-const MAX_ACCOUNT_SIGNATURES: u32 = 21;
+const MAX_ACCOUNT_SIGNATURES: u32 = 20;
 
 fn check_ed25519_auth(
     e: &Host,
