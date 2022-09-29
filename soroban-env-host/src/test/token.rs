@@ -1,4 +1,4 @@
-use std::{convert::TryInto, io::Read, rc::Rc};
+use std::{convert::TryInto, rc::Rc};
 
 use crate::{
     budget::Budget,
@@ -51,7 +51,7 @@ impl TokenTest {
             sequence_number: 123,
             timestamp: 123456,
             network_passphrase: vec![1, 2, 3, 4],
-            base_reserve: 500_000,
+            base_reserve: 5_000_000,
         });
         Self {
             host,
@@ -318,9 +318,9 @@ fn test_native_token_smart_roundtrip() {
     test.create_classic_account(
         &account_id,
         vec![(&test.user_key, 100)],
-        10_000_000,
+        100_000_000,
         1,
-        [100, 100, 100, 100],
+        [1, 0, 0, 0],
         None,
         None,
     );
@@ -359,7 +359,7 @@ fn test_native_token_smart_roundtrip() {
         )
         .is_err());
 
-    assert_eq!(test.get_native_balance(&account_id), 10_000_000);
+    assert_eq!(test.get_native_balance(&account_id), 100_000_000);
     assert_eq!(
         token
             .balance(user.get_identifier(&test.host))
@@ -376,16 +376,16 @@ fn test_native_token_smart_roundtrip() {
     );
 
     token
-        .to_smart(&user, BigInt::from_u64(&test.host, 0).unwrap(), 1_000_000)
+        .to_smart(&user, BigInt::from_u64(&test.host, 0).unwrap(), 10_000_000)
         .unwrap();
 
-    assert_eq!(test.get_native_balance(&account_id), 9_000_000);
+    assert_eq!(test.get_native_balance(&account_id), 90_000_000);
     assert_eq!(
         token
             .balance(user.get_identifier(&test.host))
             .unwrap()
             .to_i64(),
-        1_000_000
+        10_000_000
     );
     assert_eq!(
         token
@@ -396,16 +396,16 @@ fn test_native_token_smart_roundtrip() {
     );
 
     token
-        .to_classic(&user, BigInt::from_u64(&test.host, 1).unwrap(), 500_000)
+        .to_classic(&user, BigInt::from_u64(&test.host, 1).unwrap(), 5_000_000)
         .unwrap();
 
-    assert_eq!(test.get_native_balance(&account_id), 9_500_000);
+    assert_eq!(test.get_native_balance(&account_id), 95_000_000);
     assert_eq!(
         token
             .balance(user.get_identifier(&test.host))
             .unwrap()
             .to_i64(),
-        500_000
+        5_000_000
     );
     assert_eq!(
         token
@@ -459,7 +459,7 @@ fn test_classic_asset_roundtrip(asset_code: &[u8]) {
         vec![(&test.user_key, 100)],
         10_000_000,
         1,
-        [100, 100, 100, 100],
+        [1, 0, 0, 0],
         None,
         None,
     );
@@ -1320,7 +1320,7 @@ fn test_classic_account_multisig_auth() {
             (&test.user_key_3, 60),
             (&test.user_key_4, 59),
         ],
-        10_000_000,
+        100_000_000,
         1,
         // NB: first threshold is in fact weight of account_id signature.
         [40, 10, 100, 150],
@@ -1440,11 +1440,19 @@ fn test_classic_account_multisig_auth() {
         .is_err());
 
     // Failure: out of order signers
+    let mut out_of_order_signers = vec![
+        &test.user_key,
+        &test.user_key_2,
+        &test.user_key_3,
+        &test.user_key_4,
+    ];
+    out_of_order_signers.sort_by_key(|k| k.public.as_bytes());
+    out_of_order_signers.swap(1, 2);
     assert!(token
         .to_smart(
             &TestSigner::Account(AccountSigner {
                 account_id: account_id.clone(),
-                signers: vec![&test.user_key_3, &test.user_key,],
+                signers: out_of_order_signers,
             }),
             token.nonce(account_ident.clone()).unwrap(),
             100,
@@ -1526,23 +1534,238 @@ fn test_negative_amounts_are_not_allowed() {
         .is_err());
 }
 
-#[test]
-fn test_native_token_wrapper_respects_classic_invariants() {
-    let test = TokenTest::setup();
-
+fn test_native_token_classic_balance_boundaries(
+    test: &TokenTest,
+    user: &TestSigner,
+    account_id: &BytesN<32>,
+    init_balance: i64,
+    expected_min_balance: i64,
+    expected_max_balance: i64,
+) {
     let token = TestToken::new_wrapped(&test.host, Asset::Native);
+    // Try to do smart conversion that would leave balance lower than min.
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            init_balance - expected_min_balance + 1,
+        )
+        .is_err());
 
-    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    // Now everything but min balance to smart.
+    token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            init_balance - expected_min_balance,
+        )
+        .unwrap();
+    assert_eq!(test.get_native_balance(account_id), expected_min_balance);
+
+    // Converting to smart is no longer possible.
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            1,
+        )
+        .is_err());
+
+    // Create an account with smart balance close to i64::MAX and transfer it
+    // to the account being tested. That's not a realistic scenario
+    // given limited XLM supply, but that's the only way to
+    // cover max_balance.
+    let large_balance_key = generate_keypair();
+    let large_balance_acc = signer_to_id_bytes(&test.host, &large_balance_key);
+    let large_balance_signer = TestSigner::account(&large_balance_acc, vec![&large_balance_key]);
     test.create_classic_account(
-        &account_id,
-        vec![(&test.user_key, 100)],
-        10_000_000,
-        1,
-        [100, 100, 100, 100],
+        &large_balance_acc,
+        vec![(&large_balance_key, 100)],
+        i64::MAX,
+        0,
+        [1, 0, 0, 0],
         None,
         None,
     );
-    
+    token
+        .to_smart(
+            &large_balance_signer,
+            token
+                .nonce(large_balance_signer.get_identifier(&test.host))
+                .unwrap(),
+            i64::MAX - 10_000_000,
+        )
+        .unwrap();
+    token
+        .xfer(
+            &large_balance_signer,
+            token
+                .nonce(large_balance_signer.get_identifier(&test.host))
+                .unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, i64::MAX as u64 - 10_000_000).unwrap(),
+        )
+        .unwrap();
 
+    // User balance should be now i64::MAX - 10_000_000 +
+    // init_balance - expected_min_balance, which we expect to exceed
+    // i64::MAX and hence exceed expected_max_balance.
+    // Transferring the balance to classic that would exceed
+    // expected_max_balance shouldn't be possible.
+    assert!(token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            expected_max_balance - expected_min_balance + 1
+        )
+        .is_err());
+    // ...but transferring exactly up to expected_max_balance should be
+    // possible.
+    token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            expected_max_balance - expected_min_balance,
+        )
+        .unwrap();
 
+    assert_eq!(test.get_native_balance(account_id), expected_max_balance);
+}
+
+#[test]
+fn test_native_token_classic_balance_boundaries_simple() {
+    let test = TokenTest::setup();
+
+    // Account with no liabilities/sponsorships.
+
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        100_000_000,
+        5,
+        [1, 0, 0, 0],
+        None,
+        None,
+    );
+    // Min balance should be
+    // (2 (account) + 5 (subentries)) * base_reserve = 35_000_000.
+    test_native_token_classic_balance_boundaries(
+        &test,
+        &user,
+        &account_id,
+        100_000_000,
+        35_000_000,
+        i64::MAX,
+    );
+}
+
+#[test]
+fn test_native_token_classic_balance_boundaries_with_liabilities() {
+    let test = TokenTest::setup();
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        1_000_000_000,
+        8,
+        [1, 0, 0, 0],
+        Some((300_000_000, 500_000_000)),
+        None,
+    );
+    // Min balance should be
+    // (2 (account) + 8 (subentries)) * base_reserve + 500_000_000 (selling
+    // liabilities) = 550_000_000.
+    // Max balance should be i64::MAX - 300_000_000 (buying liabilities).
+    test_native_token_classic_balance_boundaries(
+        &test,
+        &user,
+        &account_id,
+        1_000_000_000,
+        550_000_000,
+        i64::MAX - 300_000_000,
+    );
+}
+
+#[test]
+fn test_native_token_classic_balance_boundaries_with_sponsorships() {
+    let test = TokenTest::setup();
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        100_000_000,
+        5,
+        [1, 0, 0, 0],
+        None,
+        Some((3, 6)),
+    );
+    // Min balance should be
+    // (2 (account) + 5 (subentries) + (6 sponsoring - 3 sponsored)) * base_reserve
+    // = 50_000_000.
+    test_native_token_classic_balance_boundaries(
+        &test,
+        &user,
+        &account_id,
+        100_000_000,
+        50_000_000,
+        i64::MAX,
+    );
+}
+
+#[test]
+fn test_native_token_classic_balance_boundaries_with_sponsorships_and_liabilities() {
+    let test = TokenTest::setup();
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        1_000_000_000,
+        5,
+        [1, 0, 0, 0],
+        Some((300_000_000, 500_000_000)),
+        Some((3, 6)),
+    );
+    // Min balance should be
+    // (2 (account) + 5 (subentries) + (6 sponsoring - 3 sponsored)) * base_reserve
+    // + 500_000_000 = 550_000_000.
+    // Max balance should be i64::MAX - 300_000_000 (buying liabilities).
+    test_native_token_classic_balance_boundaries(
+        &test,
+        &user,
+        &account_id,
+        1_000_000_000,
+        550_000_000,
+        i64::MAX - 300_000_000,
+    );
+}
+
+#[test]
+fn test_native_token_classic_balance_boundaries_with_large_values() {
+    let test = TokenTest::setup();
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        i64::MAX,
+        u32::MAX,
+        [1, 0, 0, 0],
+        Some((i64::MAX / 4, i64::MAX / 5)),
+        Some((0, u32::MAX)),
+    );
+    test_native_token_classic_balance_boundaries(
+        &test,
+        &user,
+        &account_id,
+        i64::MAX,
+        (2 /* account */ + u32::MAX as i64 /* sub-entries */ + u32::MAX as i64/* sponsoring - sponsored */)
+            * 5_000_000
+            + i64::MAX / 5, /* Selling liabilities */
+        i64::MAX - i64::MAX / 4, /* Buying liabilities */
+    );
 }
