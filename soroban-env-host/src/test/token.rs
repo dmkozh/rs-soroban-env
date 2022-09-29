@@ -1552,7 +1552,7 @@ fn test_native_token_classic_balance_boundaries(
         )
         .is_err());
 
-    // Now everything but min balance to smart.
+    // Now convert everything but min balance to smart.
     token
         .to_smart(
             &user,
@@ -1636,10 +1636,9 @@ fn test_native_token_classic_balance_boundaries(
 fn test_native_token_classic_balance_boundaries_simple() {
     let test = TokenTest::setup();
 
-    // Account with no liabilities/sponsorships.
-
     let account_id = signer_to_id_bytes(&test.host, &test.user_key);
     let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    // Account with no liabilities/sponsorships.
     test.create_classic_account(
         &account_id,
         vec![(&test.user_key, 100)],
@@ -1767,5 +1766,149 @@ fn test_native_token_classic_balance_boundaries_with_large_values() {
             * 5_000_000
             + i64::MAX / 5, /* Selling liabilities */
         i64::MAX - i64::MAX / 4, /* Buying liabilities */
+    );
+}
+
+fn test_wrapped_asset_classic_balance_boundaries(
+    init_balance: i64,
+    expected_min_balance: i64,
+    expected_max_balance: i64,
+    // (buying, selling) liabilities
+    liabilities: Option<(i64, i64)>,
+) {
+    let test = TokenTest::setup();
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        10_000_000,
+        0,
+        [1, 0, 0, 0],
+        None,
+        None,
+    );
+
+    let issuer_id = signer_to_id_bytes(&test.host, &test.admin_key);
+    let issuer = TestSigner::account(&issuer_id, vec![&test.admin_key]);
+    test.create_classic_account(
+        &issuer_id,
+        vec![(&test.admin_key, 100)],
+        10_000_000,
+        0,
+        [1, 0, 0, 0],
+        None,
+        None,
+    );
+
+    let trustline_key = test.create_classic_trustline(
+        &account_id,
+        &issuer_id,
+        &[255; 12],
+        init_balance,
+        i64::MAX,
+        true,
+        liabilities,
+    );
+    let token = TestToken::new_wrapped(
+        &test.host,
+        Asset::CreditAlphanum12(AlphaNum12 {
+            asset_code: AssetCode12([255; 12]),
+            issuer: AccountId(PublicKey::PublicKeyTypeEd25519(
+                test.host.to_u256(issuer_id.clone().into()).unwrap(),
+            )),
+        }),
+    );
+    // Try to do smart conversion that would leave balance lower than min.
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            init_balance - expected_min_balance + 1,
+        )
+        .is_err());
+
+    // Now convert everything but min balance to smart.
+    token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            init_balance - expected_min_balance,
+        )
+        .unwrap();
+    assert_eq!(
+        test.get_classic_trustline_balance(&trustline_key),
+        expected_min_balance
+    );
+
+    // Converting to smart is no longer possible.
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            1,
+        )
+        .is_err());
+
+    // Mint a large amount of token in smart.
+    token
+        .mint(
+            &issuer,
+            token.nonce(issuer.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, u64::MAX).unwrap(),
+        )
+        .unwrap();
+
+    // Transferring the balance to classic that would exceed
+    // expected_max_balance shouldn't be possible.
+    if expected_max_balance - expected_min_balance < i64::MAX {
+        assert!(token
+            .to_classic(
+                &user,
+                token.nonce(user.get_identifier(&test.host)).unwrap(),
+                expected_max_balance - expected_min_balance + 1
+            )
+            .is_err());
+    }
+
+    // ...but transferring exactly up to expected_max_balance should be
+    // possible.
+    token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            expected_max_balance - expected_min_balance,
+        )
+        .unwrap();
+
+    assert_eq!(
+        test.get_classic_trustline_balance(&trustline_key),
+        expected_max_balance
+    );
+}
+
+#[test]
+fn test_asset_token_classic_balance_boundaries_simple() {
+    test_wrapped_asset_classic_balance_boundaries(100_000_000, 0, i64::MAX, None);
+}
+
+#[test]
+fn test_asset_token_classic_balance_boundaries_with_liabilities() {
+    test_wrapped_asset_classic_balance_boundaries(
+        100_000_000,
+        300_000,
+        i64::MAX - 500_000,
+        Some((500_000, 300_000)),
+    );
+}
+
+#[test]
+fn test_asset_token_classic_balance_boundaries_large_values() {
+    test_wrapped_asset_classic_balance_boundaries(
+        i64::MAX,
+        i64::MAX / 4,
+        i64::MAX - i64::MAX / 5,
+        Some((i64::MAX / 5, i64::MAX / 4)),
     );
 }
