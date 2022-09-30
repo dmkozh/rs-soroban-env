@@ -1509,6 +1509,27 @@ fn test_classic_account_multisig_auth() {
         )
         .is_err());
 
+    // Failure: 60 < 100 and incorrect signer
+    assert!(token
+        .to_smart(
+            &TestSigner::account(&account_id, vec![&test.user_key_3, &test.admin_key],),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .is_err());
+
+    // Failure: 60 + 59 > 100, but have incorrect signer
+    assert!(token
+        .to_smart(
+            &TestSigner::account(
+                &account_id,
+                vec![&test.user_key_3, &test.user_key_4, &test.admin_key],
+            ),
+            token.nonce(account_ident.clone()).unwrap(),
+            100,
+        )
+        .is_err());
+
     // Failure: too many signatures (even though weight would be enough after
     // deduplication).
     let mut too_many_sigs = vec![];
