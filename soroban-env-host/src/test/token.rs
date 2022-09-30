@@ -311,6 +311,48 @@ fn test_smart_token_init_and_balance() {
 }
 
 #[test]
+fn test_smart_tokens_dont_support_classic_ops() {
+    let test = TokenTest::setup();
+    let admin = TestSigner::Ed25519(&test.admin_key);
+    let token = test.default_smart_token(&admin);
+    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let user = TestSigner::account(&account_id, vec![&test.user_key]);
+    test.create_classic_account(
+        &account_id,
+        vec![(&test.user_key, 100)],
+        10_000_000,
+        0,
+        [1, 0, 0, 0],
+        None,
+        None,
+    );
+
+    token
+        .mint(
+            &admin,
+            token.nonce(admin.get_identifier(&test.host)).unwrap(),
+            user.get_identifier(&test.host),
+            BigInt::from_u64(&test.host, 100_000).unwrap(),
+        )
+        .unwrap();
+
+    assert!(token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            1
+        )
+        .is_err());
+    assert!(token
+        .to_smart(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            1
+        )
+        .is_err());
+}
+
+#[test]
 fn test_native_token_smart_roundtrip() {
     let test = TokenTest::setup();
 
@@ -2049,10 +2091,8 @@ fn test_asset_token_classic_balance_boundaries_large_values() {
 }
 
 #[test]
-fn test_smart_tokens_dont_support_classic_ops() {
+fn test_classic_transfers_not_possible_for_unauthorized_asset() {
     let test = TokenTest::setup();
-    let admin = TestSigner::Ed25519(&test.admin_key);
-    let token = test.default_smart_token(&admin);
     let account_id = signer_to_id_bytes(&test.host, &test.user_key);
     let user = TestSigner::account(&account_id, vec![&test.user_key]);
     test.create_classic_account(
@@ -2065,27 +2105,69 @@ fn test_smart_tokens_dont_support_classic_ops() {
         None,
     );
 
-    token
-        .mint(
-            &admin,
-            token.nonce(admin.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
-            BigInt::from_u64(&test.host, 100_000).unwrap(),
-        )
-        .unwrap();
+    let issuer_id = signer_to_id_bytes(&test.host, &test.admin_key);
 
-    assert!(token
-        .to_classic(
+    let trustline_key = test.create_classic_trustline(
+        &account_id,
+        &issuer_id,
+        &[255; 4],
+        100_000_000,
+        i64::MAX,
+        true,
+        None,
+    );
+    let token = TestToken::new_wrapped(
+        &test.host,
+        Asset::CreditAlphanum4(AlphaNum4 {
+            asset_code: AssetCode4([255; 4]),
+            issuer: AccountId(PublicKey::PublicKeyTypeEd25519(
+                test.host.to_u256(issuer_id.clone().into()).unwrap(),
+            )),
+        }),
+    );
+
+    // Transfer some balance to smart.
+    token
+        .to_smart(
             &user,
             token.nonce(user.get_identifier(&test.host)).unwrap(),
-            1
+            40_000_000,
         )
-        .is_err());
+        .unwrap();
+    assert_eq!(
+        test.get_classic_trustline_balance(&trustline_key),
+        60_000_000
+    );
+
+    // Override the trustline authorization flag.
+    let trustline_key = test.create_classic_trustline(
+        &account_id,
+        &issuer_id,
+        &[255; 4],
+        60_000_000,
+        i64::MAX,
+        false,
+        None,
+    );
+    // Trustline balance stays the same.
+    assert_eq!(
+        test.get_classic_trustline_balance(&trustline_key),
+        60_000_000
+    );
+    // Smart/classic conversion are no longer possible as classic balance is no
+    // longer authorized.
     assert!(token
         .to_smart(
             &user,
             token.nonce(user.get_identifier(&test.host)).unwrap(),
-            1
+            10_000_000,
+        )
+        .is_err());
+    assert!(token
+        .to_classic(
+            &user,
+            token.nonce(user.get_identifier(&test.host)).unwrap(),
+            10_000_000,
         )
         .is_err());
 }
