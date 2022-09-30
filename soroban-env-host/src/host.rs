@@ -4,6 +4,7 @@
 use core::cell::RefCell;
 use core::cmp::Ordering;
 use core::fmt::Debug;
+use std::cmp::min;
 
 use im_rc::{OrdMap, Vector};
 use num_bigint::Sign;
@@ -979,6 +980,7 @@ impl Host {
                 let max_balance = i64::MAX;
                 (min_balance, max_balance)
             };
+            let max_balance = min(max_balance, tl.limit);
 
             let new_balance = if amount <= 0 {
                 tl.balance + amount
