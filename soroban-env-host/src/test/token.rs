@@ -1859,6 +1859,7 @@ fn test_wrapped_asset_classic_balance_boundaries(
     expected_max_balance: i64,
     // (buying, selling) liabilities
     liabilities: Option<(i64, i64)>,
+    limit: i64,
 ) {
     let test = TokenTest::setup();
     let account_id = signer_to_id_bytes(&test.host, &test.user_key);
@@ -1890,7 +1891,7 @@ fn test_wrapped_asset_classic_balance_boundaries(
         &issuer_id,
         &[255; 12],
         init_balance,
-        i64::MAX,
+        limit,
         true,
         liabilities,
     );
@@ -1974,7 +1975,12 @@ fn test_wrapped_asset_classic_balance_boundaries(
 
 #[test]
 fn test_asset_token_classic_balance_boundaries_simple() {
-    test_wrapped_asset_classic_balance_boundaries(100_000_000, 0, i64::MAX, None);
+    test_wrapped_asset_classic_balance_boundaries(100_000_000, 0, i64::MAX, None, i64::MAX);
+}
+
+#[test]
+fn test_asset_token_classic_balance_boundaries_with_trustline_limit() {
+    test_wrapped_asset_classic_balance_boundaries(100_000_000, 0, 200_000_000, None, 200_000_000);
 }
 
 #[test]
@@ -1984,6 +1990,29 @@ fn test_asset_token_classic_balance_boundaries_with_liabilities() {
         300_000,
         i64::MAX - 500_000,
         Some((500_000, 300_000)),
+        i64::MAX,
+    );
+}
+
+#[test]
+fn test_asset_token_classic_balance_boundaries_with_limit_lower_than_liabilities() {
+    test_wrapped_asset_classic_balance_boundaries(
+        100_000_000,
+        300_000,
+        200_000_000,
+        Some((500_000, 300_000)),
+        200_000_000,
+    );
+}
+
+#[test]
+fn test_asset_token_classic_balance_boundaries_with_limit_higher_than_liabilities() {
+    test_wrapped_asset_classic_balance_boundaries(
+        100_000_000,
+        300_000,
+        i64::MAX - 500_000,
+        Some((500_000, 300_000)),
+        i64::MAX - 200_000,
     );
 }
 
@@ -1994,6 +2023,7 @@ fn test_asset_token_classic_balance_boundaries_large_values() {
         i64::MAX / 4,
         i64::MAX - i64::MAX / 5,
         Some((i64::MAX / 5, i64::MAX / 4)),
+        i64::MAX,
     );
 }
 
