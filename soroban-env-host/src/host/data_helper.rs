@@ -150,11 +150,11 @@ impl Host {
         self.with_mut_storage(|storage| storage.has(&acc))
     }
 
-    pub fn to_trustline_key(
+    pub(crate) fn to_trustline_key(
         &self,
-        account: Object,
+        account_id: AccountId,
         asset_code: Object,
-        issuer: Object,
+        issuer: AccountId,
     ) -> Result<LedgerKey, HostError> {
         use crate::xdr::{AlphaNum12, AlphaNum4, AssetCode12, AssetCode4, TrustLineAsset};
         let asset = self.visit_obj(asset_code, |b: &Vec<u8>| {
@@ -165,7 +165,7 @@ impl Host {
                             .try_into()
                             .map_err(|_| self.err_general("invalid AssetCode4"))?,
                     ),
-                    issuer: self.to_account_id(issuer)?,
+                    issuer,
                 }))
             } else if b.len() > 0 && b.len() <= 12 {
                 Ok(TrustLineAsset::CreditAlphanum12(AlphaNum12 {
@@ -174,14 +174,14 @@ impl Host {
                             .try_into()
                             .map_err(|_| self.err_general("invalid AssetCode12"))?,
                     ),
-                    issuer: self.to_account_id(issuer)?,
+                    issuer,
                 }))
             } else {
                 Err(self.err_general("invalid asset code"))
             }
         })?;
         Ok(LedgerKey::Trustline(LedgerKeyTrustLine {
-            account_id: self.to_account_id(account)?,
+            account_id,
             asset,
         }))
     }

@@ -2,7 +2,8 @@ use crate::host::{Host, HostError};
 use core::cmp::Ordering;
 use soroban_env_common::xdr::ScObjectType;
 use soroban_env_common::{
-    CheckedEnv, ConversionError, EnvBase, EnvVal, IntoVal, RawValConvertible, Object, RawVal, TryFromVal, TryIntoVal,
+    CheckedEnv, ConversionError, EnvBase, EnvVal, IntoVal, Object, RawVal, RawValConvertible,
+    TryFromVal, TryIntoVal,
 };
 
 #[derive(Clone)]
@@ -511,5 +512,13 @@ impl AccountId {
 
     pub fn to_object(&self) -> Object {
         self.0.to_object()
+    }
+
+    pub fn to_xdr(&self, env: &Host) -> Result<soroban_env_common::xdr::AccountId, HostError> {
+        Ok(soroban_env_common::xdr::AccountId(
+            soroban_env_common::xdr::PublicKey::PublicKeyTypeEd25519(
+                env.to_u256_from_account(self.to_object())?,
+            ),
+        ))
     }
 }

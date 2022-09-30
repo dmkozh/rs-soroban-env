@@ -5,6 +5,7 @@ use crate::{
     Host, HostError,
 };
 use ed25519_dalek::{Keypair, Signer};
+use public_types::AccountId;
 use rand::{thread_rng, RngCore};
 use soroban_env_common::CheckedEnv;
 use soroban_env_common::{EnvBase, RawVal, Symbol, TryFromVal, TryIntoVal};
@@ -52,6 +53,14 @@ pub(crate) fn signer_to_id_bytes(host: &Host, key: &Keypair) -> BytesN<32> {
     .unwrap()
 }
 
+pub(crate) fn signer_to_account_id(host: &Host, key: &Keypair) -> AccountId {
+    BytesN::<32>::try_from_val(
+        host,
+        host.bytes_new_from_slice(&key.public.to_bytes()).unwrap(),
+    )
+    .unwrap()
+}
+
 pub(crate) enum TestSigner<'a> {
     // TODO: This is yet to be covered.
     #[allow(dead_code)]
@@ -61,12 +70,12 @@ pub(crate) enum TestSigner<'a> {
 }
 
 pub(crate) struct AccountSigner<'a> {
-    account_id: BytesN<32>,
+    account_id: AccountId,
     signers: Vec<&'a Keypair>,
 }
 
 impl<'a> TestSigner<'a> {
-    pub(crate) fn account(account_id: &BytesN<32>, signers: Vec<&'a Keypair>) -> Self {
+    pub(crate) fn account(account_id: &AccountId, signers: Vec<&'a Keypair>) -> Self {
         TestSigner::Account(AccountSigner {
             account_id: account_id.clone(),
             signers,
@@ -90,7 +99,7 @@ pub(crate) fn sign_args(
     args: HostVec,
 ) -> Signature {
     let msg = SignaturePayload::V0(SignaturePayloadV0 {
-        function: Symbol::from_str(fn_name),
+        name: Symbol::from_str(fn_name),
         contract: contract_id.clone(),
         network: Bytes::try_from_val(host, host.get_ledger_network_passphrase().unwrap()).unwrap(),
         args,

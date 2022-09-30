@@ -69,17 +69,17 @@ pub fn write_state(e: &Host, id: Identifier, is_frozen: bool) -> Result<(), Erro
 pub fn transfer_classic_balance(e: &Host, to_key: &AccountId, amount: i64) -> Result<(), Error> {
     match read_metadata(e)? {
         Metadata::Token(_) => return Err(Error::ContractError),
-        Metadata::Native => e.transfer_account_balance(to_key.clone().into_val(&e), amount)?,
+        Metadata::Native => e.transfer_account_balance(to_key.to_xdr(&e)?.into(), amount)?,
         Metadata::AlphaNum4(asset) => e.transfer_trustline_balance(
-            to_key.clone().into_val(&e),
+            to_key.to_xdr(&e)?,
             asset.asset_code.into(),
-            asset.issuer.into_val(&e),
+            asset.issuer.to_xdr(&e)?,
             amount,
         )?,
         Metadata::AlphaNum12(asset) => e.transfer_trustline_balance(
-            to_key.clone().into_val(&e),
+            to_key.to_xdr(&e)?,
             asset.asset_code.into(),
-            asset.issuer.into_val(&e),
+            asset.issuer.to_xdr(&e)?,
             amount,
         )?,
     };

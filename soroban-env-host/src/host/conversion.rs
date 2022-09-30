@@ -58,12 +58,6 @@ impl Host {
         }
     }
 
-    pub(crate) fn to_account_id(&self, a: Object) -> Result<AccountId, HostError> {
-        self.visit_obj(a, |account_id: &AccountId| {
-            Ok(account_id.metered_clone(&self.0.budget)?)
-        })
-    }
-
     pub(crate) fn to_u256_from_account(&self, a: Object) -> Result<Uint256, HostError> {
         self.visit_obj(a, |account_id: &AccountId| {
             let crate::xdr::PublicKey::PublicKeyTypeEd25519(ed25519) = &account_id.0;

@@ -895,7 +895,7 @@ impl Host {
     // "testutils" is not covered by budget metering.
     #[cfg(any(test, feature = "testutils"))]
     pub fn add_ledger_entry(&self, key: LedgerKey, val: LedgerEntry) -> Result<(), HostError> {
-        self.visit_storage(|storage| storage.put(&key, &val))
+        self.with_mut_storage(|storage| storage.put(&key, &val))
     }
 
     /// Records a `System` contract event. `topics` is expected to be a `SCVec`
@@ -908,10 +908,10 @@ impl Host {
         Ok(Status::OK.into())
     }
 
-    // Metering: *mostly* covered by components. The arithmatics are free.
+    // Metering: *mostly* covered by components. The arithmetics are free.
     pub(crate) fn transfer_account_balance(
         &self,
-        account: Object,
+        account_id: AccountId,
         amount: i64,
     ) -> Result<(), HostError> {
         use xdr::{AccountEntryExt, AccountEntryExtensionV1Ext, LedgerKeyAccount};
@@ -921,9 +921,7 @@ impl Host {
             _ => Err(self.err_general("only native token can transfer classic balance")),
         })?;
 
-        let lk = LedgerKey::Account(LedgerKeyAccount {
-            account_id: self.to_account_id(account)?,
-        });
+        let lk = LedgerKey::Account(LedgerKeyAccount { account_id });
 
         self.with_mut_storage(|storage| {
             let mut le = storage.get(&lk)?;
@@ -972,9 +970,9 @@ impl Host {
     // Metering: *mostly* covered by components. The arithmatics are free.
     pub(crate) fn transfer_trustline_balance(
         &self,
-        account: Object,
+        account_id: AccountId,
         asset_code: Object,
-        issuer: Object,
+        issuer: AccountId,
         amount: i64,
     ) -> Result<(), HostError> {
         use xdr::{TrustLineEntryExt, TrustLineFlags};
@@ -984,7 +982,7 @@ impl Host {
             _ => Err(self.err_general("only native token can transfer classic balance")),
         })?;
 
-        let lk = self.to_trustline_key(account, asset_code, issuer)?;
+        let lk = self.to_trustline_key(account_id, asset_code, issuer)?;
         self.with_mut_storage(|storage| {
             let mut le = storage.get(&lk)?;
             let tl = match &mut le.data {
