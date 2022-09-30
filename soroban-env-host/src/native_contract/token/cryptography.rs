@@ -74,6 +74,9 @@ fn check_account_auth(
         // Clamp signature weight to be at most 255. This is consistent with
         // classic tx signature weight computations in Core.
         let signer_weight: u32 = min(signer_weight_rv.try_into()?, MAX_ACCOUNT_SIGNATURE_WEIGHT);
+        if signer_weight == 0 {
+            return Err(Error::ContractError);
+        }
         weight += signer_weight;
         prev_pk = Some(sig.public_key);
     }
