@@ -895,6 +895,13 @@ impl Host {
         self.create_contract_with_id(ScContractCode::Token, contract_id)
     }
 
+    // Writes an arbitrary ledger entry to storage.
+    // "testutils" is not covered by budget metering.
+    #[cfg(any(test, feature = "testutils"))]
+    pub fn add_ledger_entry(&self, key: LedgerKey, val: LedgerEntry) -> Result<(), HostError> {
+        self.with_mut_storage(|storage| storage.put(&key, &val))
+    }
+
     /// Records a `System` contract event. `topics` is expected to be a `SCVec`
     /// length <= 4 that cannot contain `Vec`, `Map`, or `Bytes` with length > 32
     /// On success, returns an `SCStatus::Ok`.
@@ -2566,6 +2573,7 @@ impl VmCallerCheckedEnv for Host {
                 .verify(bytes, &sig)
                 .map_err(|_| self.err_general("Failed ED25519 verification"))
         });
+
         Ok(res?.into())
     }
 
