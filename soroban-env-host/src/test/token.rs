@@ -4,7 +4,7 @@ use crate::{
     budget::Budget,
     native_contract::{
         base_types::BigInt,
-        testutils::{generate_keypair, signer_to_id_bytes, TestSigner},
+        testutils::{generate_keypair, signer_to_account_id, signer_to_id_bytes, TestSigner},
         token::{public_types::TokenMetadata, test_token::TestToken},
     },
     storage::{test_storage::MockSnapshotSource, Storage},
@@ -15,8 +15,8 @@ use soroban_env_common::xdr::{
     AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext,
     AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountId, AlphaNum12, AlphaNum4, Asset,
     AssetCode12, AssetCode4, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, Liabilities,
-    PublicKey, SequenceNumber, SignerKey, Thresholds, TrustLineEntry, TrustLineEntryExt,
-    TrustLineEntryV1, TrustLineEntryV1Ext, TrustLineFlags,
+    SequenceNumber, SignerKey, Thresholds, TrustLineEntry, TrustLineEntryExt, TrustLineEntryV1,
+    TrustLineEntryV1Ext, TrustLineFlags,
 };
 use soroban_env_common::{EnvBase, TryFromVal};
 
@@ -66,14 +66,14 @@ impl TokenTest {
         token
     }
 
-    fn get_native_balance(&self, account_id: &BytesN<32>) -> i64 {
-        let account = self.host.load_account(account_id.clone().into()).unwrap();
+    fn get_native_balance(&self, account_id: &AccountId) -> i64 {
+        let account = self.host.load_account(account_id.clone()).unwrap();
         account.balance
     }
 
     fn get_classic_trustline_balance(&self, key: &LedgerKey) -> i64 {
         self.host
-            .visit_storage(|s| match s.get(key).unwrap().data {
+            .with_mut_storage(|s| match s.get(key).unwrap().data {
                 LedgerEntryData::Trustline(trustline) => Ok(trustline.balance),
                 _ => unreachable!(),
             })
@@ -82,7 +82,7 @@ impl TokenTest {
 
     fn create_classic_account(
         &self,
-        account_id_bytes: &BytesN<32>,
+        account_id: &AccountId,
         signers: Vec<(&Keypair, u32)>,
         balance: i64,
         num_sub_entries: u32,
@@ -92,10 +92,7 @@ impl TokenTest {
         // (num_sponsored, num_sponsoring) counts
         sponsorships: Option<(u32, u32)>,
     ) {
-        let key = self
-            .host
-            .to_account_key(account_id_bytes.clone().into())
-            .unwrap();
+        let key = self.host.to_account_key(account_id.clone().into());
         let account_id = match &key {
             LedgerKey::Account(acc) => acc.account_id.clone(),
             _ => unreachable!(),
@@ -162,8 +159,8 @@ impl TokenTest {
 
     fn create_classic_trustline(
         &self,
-        account_id_bytes: &BytesN<32>,
-        issuer_id_bytes: &BytesN<32>,
+        account_id: &AccountId,
+        issuer: &AccountId,
         asset_code: &[u8],
         balance: i64,
         limit: i64,
@@ -171,26 +168,22 @@ impl TokenTest {
         // (buying, selling) liabilities
         liabilities: Option<(i64, i64)>,
     ) -> LedgerKey {
-        let asset_code_bytes = Bytes::try_from_val(
-            &self.host,
-            self.host.bytes_new_from_slice(asset_code).unwrap(),
-        )
-        .unwrap();
-        let key = self
-            .host
-            .to_trustline_key(
-                account_id_bytes.clone().into(),
-                asset_code_bytes.into(),
-                issuer_id_bytes.clone().into(),
-            )
-            .unwrap();
-        let (account_id, asset) = match &key {
-            LedgerKey::Trustline(trustline_key) => (
-                trustline_key.account_id.clone(),
-                trustline_key.asset.clone(),
-            ),
+        let asset = match asset_code.len() {
+            4 => {
+                let mut code = [0_u8; 4];
+                code.copy_from_slice(asset_code);
+                self.host.create_asset_4(code, issuer.clone())
+            }
+            12 => {
+                let mut code = [0_u8; 12];
+                code.copy_from_slice(asset_code);
+                self.host.create_asset_12(code, issuer.clone())
+            }
             _ => unreachable!(),
         };
+        let key = self
+            .host
+            .to_trustline_key(account_id.clone(), asset.clone());
         let ext = if let Some((buying, selling)) = liabilities {
             TrustLineEntryExt::V1({
                 TrustLineEntryV1 {
@@ -202,7 +195,7 @@ impl TokenTest {
             TrustLineEntryExt::V0
         };
         let trustline_entry = TrustLineEntry {
-            account_id,
+            account_id: account_id.clone(),
             asset,
             balance,
             limit, // TODO: Check if we need to enforce this
@@ -299,7 +292,7 @@ fn test_smart_token_init_and_balance() {
 fn test_native_token_smart_roundtrip() {
     let test = TokenTest::setup();
 
-    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
+    let account_id = signer_to_account_id(&test.host, &test.user_key);
     test.create_classic_account(
         &account_id,
         vec![(&test.user_key, 100)],
@@ -384,8 +377,8 @@ fn test_native_token_smart_roundtrip() {
 fn test_classic_asset_roundtrip(asset_code: &[u8]) {
     let test = TokenTest::setup();
 
-    let account_id = signer_to_id_bytes(&test.host, &test.user_key);
-    let issuer_id = signer_to_id_bytes(&test.host, &test.admin_key);
+    let account_id = signer_to_account_id(&test.host, &test.user_key);
+    let issuer_id = signer_to_account_id(&test.host, &test.admin_key);
 
     test.create_classic_account(
         &account_id,
@@ -411,18 +404,14 @@ fn test_classic_asset_roundtrip(asset_code: &[u8]) {
         code.clone_from_slice(asset_code);
         Asset::CreditAlphanum4(AlphaNum4 {
             asset_code: AssetCode4(code),
-            issuer: AccountId(PublicKey::PublicKeyTypeEd25519(
-                test.host.to_u256(issuer_id.clone().into()).unwrap(),
-            )),
+            issuer: issuer_id.clone(),
         })
     } else {
         let mut code = [0_u8; 12];
         code.clone_from_slice(asset_code);
         Asset::CreditAlphanum12(AlphaNum12 {
             asset_code: AssetCode12(code),
-            issuer: AccountId(PublicKey::PublicKeyTypeEd25519(
-                test.host.to_u256(issuer_id.clone().into()).unwrap(),
-            )),
+            issuer: issuer_id.clone(),
         })
     };
     let token = TestToken::new_wrapped(&test.host, asset.clone());
