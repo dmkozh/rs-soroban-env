@@ -5,9 +5,11 @@ use crate::{
     Host, HostError,
 };
 use ed25519_dalek::{Keypair, Signer};
-use public_types::AccountId;
 use rand::{thread_rng, RngCore};
-use soroban_env_common::CheckedEnv;
+use soroban_env_common::{
+    xdr::{AccountId, PublicKey},
+    CheckedEnv,
+};
 use soroban_env_common::{EnvBase, RawVal, Symbol, TryFromVal, TryIntoVal};
 
 use crate::native_contract::base_types::{Bytes, BytesN};
@@ -54,17 +56,16 @@ pub(crate) fn signer_to_id_bytes(host: &Host, key: &Keypair) -> BytesN<32> {
 }
 
 pub(crate) fn signer_to_account_id(host: &Host, key: &Keypair) -> AccountId {
-    BytesN::<32>::try_from_val(
-        host,
-        host.bytes_new_from_slice(&key.public.to_bytes()).unwrap(),
-    )
-    .unwrap()
+    let account_id_bytes = signer_to_id_bytes(host, key);
+    AccountId(PublicKey::PublicKeyTypeEd25519(
+        host.to_u256(account_id_bytes.into()).unwrap(),
+    ))
 }
 
 pub(crate) enum TestSigner<'a> {
     // TODO: This is yet to be covered.
-    #[allow(dead_code)]
-    Contract(BytesN<32>),
+    // #[allow(dead_code)]
+    // Contract(BytesN<32>),
     Ed25519(&'a Keypair),
     Account(AccountSigner<'a>),
 }
@@ -84,7 +85,7 @@ impl<'a> TestSigner<'a> {
 
     pub(crate) fn get_identifier(&self, host: &Host) -> Identifier {
         match self {
-            TestSigner::Contract(id) => Identifier::Contract(id.clone()),
+            // TestSigner::Contract(id) => Identifier::Contract(id.clone()),
             TestSigner::Ed25519(key) => Identifier::Ed25519(signer_to_id_bytes(host, key)),
             TestSigner::Account(acc_signer) => Identifier::Account(acc_signer.account_id.clone()),
         }
@@ -111,7 +112,7 @@ pub(crate) fn sign_args(
     let payload = &msg_bytes[..];
 
     match signer {
-        TestSigner::Contract(_) => Signature::Contract,
+        // TestSigner::Contract(_) => Signature::,
         TestSigner::Ed25519(key) => Signature::Ed25519(sign_payload(host, key, payload)),
         TestSigner::Account(account_signer) => Signature::Account(AccountSignatures {
             account_id: account_signer.account_id.clone(),

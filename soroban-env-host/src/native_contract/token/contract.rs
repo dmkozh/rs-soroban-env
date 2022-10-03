@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::budget::CostType;
+use crate::host::metered_clone::MeteredClone;
 use crate::host::Host;
 use crate::native_contract::base_types::{BigInt, Bytes, BytesN, Vec};
 use crate::native_contract::token::admin::{check_admin, write_administrator};
@@ -14,12 +14,10 @@ use crate::native_contract::token::metadata::{
     has_metadata, read_decimal, read_name, read_symbol, write_metadata,
 };
 use crate::native_contract::token::nonce::read_nonce;
-use crate::native_contract::token::public_types::{
-    ClassicMetadata, Identifier, Metadata, Signature, TokenMetadata,
-};
+use crate::native_contract::token::public_types::{Identifier, Metadata, Signature, TokenMetadata};
 
-use soroban_env_common::xdr::{AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4};
-use soroban_env_common::{CheckedEnv, Symbol, TryFromVal, TryIntoVal};
+use soroban_env_common::xdr::Asset;
+use soroban_env_common::{CheckedEnv, EnvBase, Symbol, TryFromVal, TryIntoVal};
 use soroban_native_sdk_macros::contractimpl;
 
 use super::public_types::{AlphaNum12Metadata, AlphaNum4Metadata};
@@ -33,7 +31,7 @@ pub trait TokenTrait {
     ///
     /// No admin will be set for the Native token, so any function that checks the admin
     /// (burn, freeze, unfreeze, mint, set_admin) will always fail
-    fn init_wrap(e: &Host, metadata: ClassicMetadata) -> Result<(), Error>;
+    fn init_wrap(e: &Host, asset_bytes: Bytes) -> Result<(), Error>;
 
     /// init_token creates a token contract that does not wrap an asset on the classic side.
     /// No checks are done on the contractID.
@@ -115,77 +113,53 @@ pub struct Token;
 #[contractimpl]
 // Metering: *mostly* covered by components.
 impl TokenTrait for Token {
-    fn init_wrap(e: &Host, metadata: ClassicMetadata) -> Result<(), Error> {
+    fn init_wrap(e: &Host, asset_bytes: Bytes) -> Result<(), Error> {
         if has_metadata(&e)? {
             return Err(Error::ContractError);
         }
 
-        let contract_id = BytesN::<32>::try_from_val(e, e.get_current_contract()?)?;
+        let asset = e.deserialize_asset(asset_bytes.into())?;
 
-        match metadata.clone() {
-            ClassicMetadata::Native => {
-                let xlm_contract_id =
-                    BytesN::<32>::try_from_val(e, e.get_contract_id_from_asset(Asset::Native)?)?;
-                if contract_id != xlm_contract_id {
-                    return Err(Error::ContractError);
-                }
-
+        let curr_contract_id = BytesN::<32>::try_from_val(e, e.get_current_contract()?)?;
+        let expected_contract_id =
+            BytesN::<32>::try_from_val(e, e.get_contract_id_from_asset(asset.clone())?)?;
+        if curr_contract_id != expected_contract_id {
+            return Err(Error::ContractError);
+        }
+        match asset {
+            Asset::Native => {
                 write_metadata(&e, Metadata::Native)?;
                 //No admin for the Native token
             }
-            ClassicMetadata::AlphaNum4(asset) => {
-                //TODO: Better way to do this?
-                let mut code4 = [0u8; 4];
-                e.charge_budget(CostType::BytesClone, 4)?;
-                asset.asset_code.copy_into_slice(&mut code4)?;
-
-                let issuer_id = e.to_account_id(asset.issuer.to_object())?;
-                let asset4 = Asset::CreditAlphanum4(AlphaNum4 {
-                    asset_code: AssetCode4(code4),
-                    issuer: issuer_id,
-                });
-
-                let asset_contract_id =
-                    BytesN::<32>::try_from_val(e, e.get_contract_id_from_asset(asset4)?)?;
-
-                if contract_id != asset_contract_id {
-                    return Err(Error::ContractError);
-                }
-
-                write_administrator(&e, Identifier::Account(asset.issuer.clone()))?;
+            Asset::CreditAlphanum4(asset4) => {
+                write_administrator(
+                    &e,
+                    Identifier::Account(asset4.issuer.metered_clone(e.get_budget_ref())?),
+                )?;
                 write_metadata(
                     &e,
                     Metadata::AlphaNum4(AlphaNum4Metadata {
-                        asset_code: asset.asset_code,
-                        issuer: asset.issuer,
+                        asset_code: BytesN::<4>::try_from_val(
+                            e,
+                            e.bytes_new_from_slice(&asset4.asset_code.0)?,
+                        )?,
+                        issuer: asset4.issuer,
                     }),
                 )?;
             }
-            ClassicMetadata::AlphaNum12(asset) => {
-                //TODO: Better way to do this?
-                let mut code12 = [0u8; 12];
-                e.charge_budget(CostType::BytesClone, 12)?;
-                asset.asset_code.copy_into_slice(&mut code12)?;
-
-                let issuer_id = e.to_account_id(asset.issuer.to_object())?;
-                let asset12 = Asset::CreditAlphanum12(AlphaNum12 {
-                    asset_code: AssetCode12(code12),
-                    issuer: issuer_id,
-                });
-
-                let asset_contract_id =
-                    BytesN::<32>::try_from_val(e, e.get_contract_id_from_asset(asset12)?)?;
-
-                if contract_id != asset_contract_id {
-                    return Err(Error::ContractError);
-                }
-
-                write_administrator(&e, Identifier::Account(asset.issuer.clone()))?;
+            Asset::CreditAlphanum12(asset12) => {
+                write_administrator(
+                    &e,
+                    Identifier::Account(asset12.issuer.metered_clone(e.get_budget_ref())?),
+                )?;
                 write_metadata(
                     &e,
                     Metadata::AlphaNum12(AlphaNum12Metadata {
-                        asset_code: asset.asset_code,
-                        issuer: asset.issuer,
+                        asset_code: BytesN::<12>::try_from_val(
+                            e,
+                            e.bytes_new_from_slice(&asset12.asset_code.0)?,
+                        )?,
+                        issuer: asset12.issuer,
                     }),
                 )?;
             }
@@ -403,7 +377,7 @@ impl TokenTrait for Token {
         args.push(amount.clone())?;
         check_auth(&e, id, nonce, Symbol::from_str("to_smart"), args)?;
 
-        transfer_classic_balance(e, &account_id, -amount)?;
+        transfer_classic_balance(e, account_id.metered_clone(e.get_budget_ref())?, -amount)?;
         receive_balance(
             &e,
             Identifier::Account(account_id),
@@ -426,7 +400,7 @@ impl TokenTrait for Token {
         args.push(amount.clone())?;
         check_auth(&e, id, nonce, Symbol::from_str("to_classic"), args)?;
 
-        transfer_classic_balance(e, &account_id, amount)?;
+        transfer_classic_balance(e, account_id.metered_clone(e.get_budget_ref())?, amount)?;
         spend_balance(
             &e,
             Identifier::Account(account_id),
