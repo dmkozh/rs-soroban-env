@@ -1,5 +1,5 @@
 use crate::{
-    budget::{Budget, CostType},
+    budget::CostType,
     xdr::{ScMap, ScMapEntry, ScObject, ScVal, ScVmErrorCode},
     CheckedEnv, Host, HostError, RawVal, Symbol,
 };
@@ -36,22 +36,52 @@ fn xdr_object_conversion() -> Result<(), HostError> {
 
 #[test]
 fn vm_hostfn_invocation() -> Result<(), HostError> {
-    let dummy_id = [0; 32];
-    let budget = Budget::default();
-    let storage =
-        Host::test_storage_with_contracts(vec![dummy_id.into()], vec![VEC], budget.clone());
-    let host = Host::with_storage_and_budget(storage, budget)
+    // let dummy_id = [0; 32];
+    // let budget = Budget::default();
+    // let it = ids.iter().zip(codes.iter());
+    // let mut footprint = Footprint::default();
+    // let mut map = OrdMap::default();
+    // for (id, contract) in it {
+    //     let key = ScVal::Static(ScStatic::LedgerKeyContractCode);
+    //     let storage_key = LedgerKey::ContractData(LedgerKeyContractData {
+    //         contract_id: id.clone(),
+    //         key: key.clone(),
+    //     });
+    //     // We unwrap here rather than host.map_err because the host doesn't exist yet.
+    //     let val = ScVal::Object(Some(ScObject::ContractCode(ScContractCode::WasmRef(
+    //         (*contract).try_into().unwrap(),
+    //     ))));
+    //     let le = LedgerEntry {
+    //         last_modified_ledger_seq: 0,
+    //         data: LedgerEntryData::ContractData(ContractDataEntry {
+    //             contract_id: id.clone(),
+    //             key,
+    //             val,
+    //         }),
+    //         ext: LedgerEntryExt::V0,
+    //     };
+    //     map.insert(storage_key.clone(), Some(le));
+    //     footprint
+    //         .record_access(&storage_key, AccessType::ReadOnly)
+    //         .unwrap();
+    // }
+    // Storage::with_enforcing_footprint_and_map(footprint, MeteredOrdMap { budget, map })
+
+    // let storage =
+    //     Host::test_storage_with_contracts(vec![dummy_id.into()], vec![VEC], budget.clone());
+    let host = Host::test_host_with_recording_footprint();
+    let id_obj = host.register_test_contract_wasm(VEC)?;
+    let host = host
         .test_budget(100_000, 100_000)
         .enable_model(CostType::HostFunction);
 
-    let obj = host.test_bin_obj(&dummy_id)?;
     // `vec_err` is a test contract function which calls `vec_new` (1 call)
     // and `vec_put` (1 call) so total input of 2 to the budget from `CostType::HostFunction`.
     let sym = Symbol::from_str("vec_err");
     let args = host.test_vec_obj::<u32>(&[1])?;
 
     // try_call
-    host.try_call(obj.to_object(), sym.into(), args.clone().into())?;
+    host.try_call(id_obj, sym.into(), args.clone().into())?;
     host.with_budget(|budget| {
         assert_eq!(budget.get_input(CostType::HostFunction), 2);
         assert_eq!(budget.get_cpu_insns_count(), 20);
