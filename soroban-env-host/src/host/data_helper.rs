@@ -1,19 +1,15 @@
 use std::cmp::min;
 
-use soroban_env_common::{
-    xdr::{
-        Asset, HashIdPreimageSourceAccountContractId, LedgerKeyContractCode, PublicKey, Signer,
-        SignerKey, ThresholdIndexes, TrustLineAsset,
-    },
-    CheckedEnv, InvokerType,
-};
+use soroban_env_common::{CheckedEnv, InvokerType};
 
 use crate::xdr::{
-    AccountEntry, AccountId, ContractCodeEntry, ContractDataEntry, Hash, HashIdPreimage,
-    HashIdPreimageContractId, HashIdPreimageEd25519ContractId, HashIdPreimageFromAsset,
-    LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, LedgerKeyAccount,
-    LedgerKeyContractData, LedgerKeyTrustLine, ScContractCode, ScHostStorageErrorCode,
-    ScHostValErrorCode, ScObject, ScStatic, ScVal, Uint256,
+    AccountEntry, AccountId, Asset, ContractCodeEntry, ContractDataEntry, CreateContractSource,
+    Hash, HashIdPreimage, HashIdPreimageContractId, HashIdPreimageCreateContractArgs,
+    HashIdPreimageEd25519ContractId, HashIdPreimageFromAsset,
+    HashIdPreimageSourceAccountContractId, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
+    LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine, PublicKey,
+    ScContractCode, ScHostStorageErrorCode, ScHostValErrorCode, ScObject, ScStatic, ScVal, Signer,
+    SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
 };
 use crate::{Host, HostError};
 
@@ -142,6 +138,22 @@ impl Host {
                 network_id: self
                     .hash_from_obj_input("network_id", self.get_ledger_network_id()?)?,
                 source_account,
+                salt,
+            },
+        ))
+    }
+
+    // metering: covered by components
+    pub fn create_contract_hash_preimage(
+        &self,
+        source: CreateContractSource,
+        salt: Uint256,
+    ) -> Result<HashIdPreimage, HostError> {
+        Ok(HashIdPreimage::CreateContractArgs(
+            HashIdPreimageCreateContractArgs {
+                network_id: self
+                    .hash_from_obj_input("network_id", self.get_ledger_network_id()?)?,
+                source,
                 salt,
             },
         ))

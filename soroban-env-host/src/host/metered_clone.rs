@@ -23,6 +23,13 @@ impl MeteredClone for Vec<u8> {
     }
 }
 
+impl<const N: usize> MeteredClone for [u8; N] {
+    fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
+        budget.charge(CostType::BytesClone, self.len() as u64)?;
+        Ok(self.clone())
+    }
+}
+
 impl MeteredClone for Uint256 {
     fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
         budget.charge(CostType::BytesClone, self.0.len() as u64)?;

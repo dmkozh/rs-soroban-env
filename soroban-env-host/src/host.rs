@@ -18,13 +18,13 @@ use crate::storage::Storage;
 use crate::weak_host::WeakHost;
 
 use crate::xdr::{
-    AccountId, Asset, ContractCodeEntry, ContractDataEntry, ContractEvent, ContractEventBody,
-    ContractEventType, ContractEventV0, ContractId, ContractIdPublicKey, CreateContractArgs,
-    CreateContractSource, ExtensionPoint, Hash, HashIdPreimage, HashIdPreimageCreateContractArgs,
-    HostFunction, HostFunctionType, InstallContractCodeArgs, LedgerEntry, LedgerEntryData,
-    LedgerEntryExt, LedgerKey, ScBigInt, ScContractCode, ScHostContextErrorCode, ScHostFnErrorCode,
-    ScHostObjErrorCode, ScHostStorageErrorCode, ScHostValErrorCode, ScMap, ScMapEntry, ScObject,
-    ScStatusType, ScVal, ScVec, ThresholdIndexes, TrustLineAsset, Uint256,
+    AccountId, Asset, ContractCodeEntry, ContractCodeEntryExt, ContractDataEntry, ContractEvent,
+    ContractEventBody, ContractEventType, ContractEventV0, ContractId, ContractIdPublicKey,
+    CreateContractArgs, CreateContractSource, ExtensionPoint, Hash, HashIdPreimage, HostFunction,
+    HostFunctionType, InstallContractCodeArgs, LedgerEntry, LedgerEntryData, LedgerEntryExt,
+    LedgerKey, LedgerKeyContractCode, ScBigInt, ScContractCode, ScHostContextErrorCode,
+    ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode, ScHostValErrorCode, ScMap,
+    ScMapEntry, ScObject, ScStatusType, ScUnknownErrorCode, ScVal, ScVec, ThresholdIndexes,
 };
 use std::rc::Rc;
 
@@ -729,10 +729,10 @@ impl Host {
     // Notes on metering: this is covered by the called components.
     fn create_contract_with_id(
         &self,
+        contract_id: Object,
         contract_code: ScContractCode,
-        id_obj: Object,
     ) -> Result<(), HostError> {
-        let new_contract_id = self.hash_from_obj_input("id_obj", id_obj)?;
+        let new_contract_id = self.hash_from_obj_input("id_obj", contract_id)?;
         let storage_key =
             self.contract_code_handle_ledger_key(new_contract_id.metered_clone(&self.0.budget)?);
         if self.0.storage.borrow_mut().has(&storage_key)? {
@@ -767,26 +767,19 @@ impl Host {
         contract_code: ScContractCode,
         id_preimage: HashIdPreimage,
     ) -> Result<Object, HostError> {
-        let mut id_preimage_bytes = Vec::new();
-        self.metered_write_xdr(&id_preimage, &mut id_preimage_bytes)?;
-        let id_obj = self.compute_hash_sha256(
-            &mut VmCaller::none(),
-            self.add_host_object(id_preimage_bytes)?.into(),
-        )?;
-        self.create_contract_with_id(contract_code.metered_clone(self.budget_ref())?, id_obj)?;
+        let id_obj = self
+            .add_host_object(self.metered_hash_xdr(&id_preimage)?.to_vec())?
+            .to_object();
+        self.create_contract_with_id(id_obj, contract_code.metered_clone(self.budget_ref())?)?;
         self.maybe_initialize_asset_token(id_obj, id_preimage)?;
         Ok(id_obj)
     }
 
     pub fn get_contract_id_from_asset(&self, asset: Asset) -> Result<Object, HostError> {
         let id_preimage = self.id_preimage_from_asset(asset)?;
-        let mut id_preimage_bytes = Vec::new();
-        self.metered_write_xdr(&id_preimage, &mut id_preimage_bytes)?;
-        let id_obj = self.compute_hash_sha256(
-            &mut VmCaller::none(),
-            self.add_host_object(id_preimage_bytes)?.into(),
-        )?;
-        Ok(id_obj)
+        Ok(self
+            .add_host_object(self.metered_hash_xdr(&id_preimage)?.to_vec())?
+            .to_object())
     }
 
     // Notes on metering: this is covered by the called components.
@@ -967,7 +960,7 @@ impl Host {
                 }),
             HostFunction::InstallContractCode(args) => self
                 .with_frame(Frame::HostFunction(hf_type), || {
-                    self.install_contract(&args).map(|obj| <RawVal>::from(obj))
+                    self.install_contract(args).map(|obj| <RawVal>::from(obj))
                 }),
         }
     }
@@ -1010,6 +1003,67 @@ impl Host {
         let data = self.from_host_val(data)?;
         self.record_contract_event(ContractEventType::System, topics, data)?;
         Ok(Status::OK.into())
+    }
+
+    fn create_contract(&self, args: CreateContractArgs) -> Result<Object, HostError> {
+        let id_preimage = match args.contract_id {
+            ContractId::PublicKey(pk) => match pk.key_source {
+                ContractIdPublicKey::SourceAccount => {
+                    self.id_preimage_from_source_account(pk.salt)?
+                }
+                ContractIdPublicKey::Ed25519(key_with_signature) => {
+                    let signature_payload_preimage = self.create_contract_hash_preimage(
+                        args.source.metered_clone(&self.budget_ref())?,
+                        pk.salt.metered_clone(self.budget_ref())?,
+                    )?;
+                    let signature_payload = self.metered_hash_xdr(&signature_payload_preimage)?;
+                    self.verify_sig_ed25519(
+                        &mut VmCaller::none(),
+                        self.add_host_object(signature_payload.to_vec())?
+                            .to_object(),
+                        self.add_host_object(key_with_signature.key.0.to_vec())?
+                            .to_object(),
+                        self.add_host_object(key_with_signature.signature.0.to_vec())?
+                            .to_object(),
+                    )?;
+                    self.id_preimage_from_ed25519(key_with_signature.key, pk.salt)?
+                }
+            },
+            ContractId::Asset(asset) => self.id_preimage_from_asset(asset)?,
+        };
+        let contract_code = match args.source {
+            CreateContractSource::Ref(code) => code,
+            CreateContractSource::Installed(install_args) => ScContractCode::WasmRef(
+                self.hash_from_obj_input("installed_wasm", self.install_contract(install_args)?)?,
+            ),
+        };
+        self.create_contract_with_id_preimage(contract_code, id_preimage)
+    }
+
+    fn install_contract(&self, args: InstallContractCodeArgs) -> Result<Object, HostError> {
+        let hash_bytes = self.metered_hash_xdr(&args)?;
+        let hash_obj = self.add_host_object(hash_bytes.to_vec())?.to_object();
+        let code_key = LedgerKey::ContractCode(LedgerKeyContractCode {
+            hash: Hash(hash_bytes.metered_clone(self.budget_ref())?),
+        });
+        if !self.0.storage.borrow_mut().has(&code_key)? {
+            self.with_mut_storage(|storage| {
+                let data = LedgerEntryData::ContractCode(ContractCodeEntry {
+                    hash: Hash(hash_bytes),
+                    code: args.code,
+                    ext: ContractCodeEntryExt::V0,
+                });
+                storage.put(
+                    &code_key,
+                    &LedgerEntry {
+                        last_modified_ledger_seq: 0,
+                        data,
+                        ext: LedgerEntryExt::V0,
+                    },
+                )
+            })?;
+        }
+        Ok(hash_obj)
     }
 }
 
