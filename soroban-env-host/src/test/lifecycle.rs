@@ -4,13 +4,13 @@ use crate::{
     storage::{AccessType, Footprint, Storage},
     xdr::{
         self, ContractId, ContractIdFromPublicKey, ContractIdPublicKey, CreateContractArgs,
-        CreateContractSource, Hash, HashIdPreimage, HashIdPreimageSourceAccountContractId,
-        HostFunction, LedgerEntryData, LedgerKey, LedgerKeyContractCode, LedgerKeyContractData,
-        ScContractCode, ScObject, ScStatic, ScVal, ScVec, Uint256,
+        CreateContractSource, Hash, HashIdPreimage, HashIdPreimageContractId,
+        HashIdPreimageSourceAccountContractId, HostFunction, InstallContractCodeArgs,
+        LedgerEntryData, LedgerKey, LedgerKeyContractCode, LedgerKeyContractData, ScContractCode,
+        ScObject, ScStatic, ScVal, ScVec, Uint256,
     },
     CheckedEnv, Host, LedgerInfo, Symbol,
 };
-use hex::FromHex;
 use soroban_test_wasms::CREATE_CONTRACT;
 
 use im_rc::OrdMap;
@@ -149,72 +149,94 @@ fn test_create_contract_from_source_account(host: &Host, code: &[u8]) -> Hash {
 }
 
 // VM tests
-// #[test]
-// fn create_contract_using_parent_id_test() {
-//     let host = test_host();
-//     let parent_contract_id = test_create_contract_from_source_account(&host, CREATE_CONTRACT);
-//     let salt = generate_bytes_array();
-//     //Put child contract that will be created into the footprint
-//     //Use the same salt
-//     let child_pre_image = HashIdPreimage::ContractIdFromContract(HashIdPreimageContractId {
-//         contract_id: parent_contract_id.clone(),
-//         salt: Uint256(salt.clone()),
-//         network_id: host
-//             .hash_from_obj_input("network_id", host.get_ledger_network_id().unwrap())
-//             .unwrap(),
-//     });
+#[test]
+fn create_contract_using_parent_id_test() {
+    let host = test_host();
+    let parent_contract_id = test_create_contract_from_source_account(&host, CREATE_CONTRACT);
+    let salt = generate_bytes_array();
+    let child_pre_image = HashIdPreimage::ContractIdFromContract(HashIdPreimageContractId {
+        contract_id: parent_contract_id.clone(),
+        salt: Uint256(salt.clone()),
+        network_id: host
+            .hash_from_obj_input("network_id", host.get_ledger_network_id().unwrap())
+            .unwrap(),
+    });
 
-//     let child_id = sha256_hash_id_preimage(child_pre_image);
-//     let child_wasm: &[u8] = b"70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4";
-//     let install_args = xdr::InstallContractCodeArgs {
-//         code: child_wasm.to_vec().try_into().unwrap(),
-//         initializer_name: Default::default(),
-//     };
+    let child_id = sha256_hash_id_preimage(child_pre_image);
+    let child_wasm: &[u8] = b"70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4";
+    let install_args = xdr::InstallContractCodeArgs {
+        code: child_wasm.to_vec().try_into().unwrap(),
+    };
 
-//     let wasm_hash = sha256_hash_id_preimage(install_args.clone());
+    // Install the code for the child contract.
+    let wasm_hash = sha256_hash_id_preimage(install_args.clone());
+    // Add the contract code and code reference access to the footprint.
+    host.with_mut_storage(|s: &mut Storage| {
+        s.footprint
+            .record_access(
+                &contract_code_ref_key(child_id.clone()),
+                AccessType::ReadWrite,
+            )
+            .unwrap();
+        s.footprint
+            .record_access(
+                &contract_code_wasm_key(wasm_hash.clone()),
+                AccessType::ReadWrite,
+            )
+            .unwrap();
+        Ok(())
+    })
+    .unwrap();
 
-//     host.with_mut_storage(|s: &mut Storage| {
-//         s.footprint
-//             .record_access(
-//                 &contract_code_ref_key(child_id.clone()),
-//                 AccessType::ReadWrite,
-//             )
-//             .unwrap();
-//         s.footprint
-//             .record_access(
-//                 &contract_code_wasm_key(wasm_hash.clone()),
-//                 AccessType::ReadWrite,
-//             )
-//             .unwrap();
-//         Ok(())
-//     })
-//     .unwrap();
+    // Prepare arguments for the factory contract call.
+    let args_scvec: ScVec = vec![
+        ScVal::Object(Some(ScObject::Bytes(wasm_hash.0.try_into().unwrap()))),
+        ScVal::Object(Some(ScObject::Bytes(salt.try_into().unwrap()))),
+    ]
+    .try_into()
+    .unwrap();
+    let args = host.to_host_obj(&ScObject::Vec(args_scvec)).unwrap();
+    // Can't create the contract yet, as the code hasn't been installed yet.
+    assert!(host
+        .call(
+            host.test_bin_obj(&parent_contract_id.0)
+                .unwrap()
+                .try_into()
+                .unwrap(),
+            Symbol::from_str("create").into(),
+            args.clone().into(),
+        )
+        .is_err());
 
-//     // prepare arguments
-//     let args_scvec: ScVec = vec![
-//         ScVal::Object(Some(ScObject::Bytes(wasm_hash.try_into().unwrap()))),
-//         ScVal::Object(Some(ScObject::Bytes(salt.try_into().unwrap()))),
-//     ]
-//     .try_into()
-//     .unwrap();
-//     let args = host.to_host_obj(&ScObject::Vec(args_scvec)).unwrap();
+    // Install the code of the child contract.
+    let wasm_hash_sc_val = host
+        .invoke_function(HostFunction::InstallContractCode(InstallContractCodeArgs {
+            code: child_wasm.try_into().unwrap(),
+        }))
+        .unwrap();
+    assert_eq!(
+        wasm_hash.as_slice(),
+        get_bytes_from_sc_val(wasm_hash_sc_val).as_slice()
+    );
+    assert_eq!(child_wasm, get_contract_wasm(&host, wasm_hash.clone()));
 
-//     host.call(
-//         host.test_bin_obj(&parent_contract_id.0)
-//             .unwrap()
-//             .try_into()
-//             .unwrap(),
-//         Symbol::from_str("create").into(),
-//         args.into(),
-//     )
-//     .unwrap();
+    // Now successfully create the child contract itself.
+    host.call(
+        host.test_bin_obj(&parent_contract_id.0)
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        Symbol::from_str("create").into(),
+        args.into(),
+    )
+    .unwrap();
 
-//     assert_eq!(
-//         wasm_hash.as_slice(),
-//         get_contract_wasm_ref(&host, child_id).as_slice()
-//     );
-//     assert_eq!(child_wasm, get_contract_wasm(&host, wasm_hash));
-// }
+    assert_eq!(
+        wasm_hash.as_slice(),
+        get_contract_wasm_ref(&host, child_id).as_slice()
+    );
+}
+
 #[test]
 fn create_contract_from_source_account() {
     let code: &[u8] = b"70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4";

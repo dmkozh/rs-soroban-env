@@ -24,7 +24,7 @@ use crate::xdr::{
     HostFunctionType, InstallContractCodeArgs, LedgerEntry, LedgerEntryData, LedgerEntryExt,
     LedgerKey, LedgerKeyContractCode, ScBigInt, ScContractCode, ScHostContextErrorCode,
     ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode, ScHostValErrorCode, ScMap,
-    ScMapEntry, ScObject, ScStatusType, ScUnknownErrorCode, ScVal, ScVec, ThresholdIndexes,
+    ScMapEntry, ScObject, ScStatusType, ScVal, ScVec, ThresholdIndexes,
 };
 use std::rc::Rc;
 
@@ -738,6 +738,17 @@ impl Host {
         if self.0.storage.borrow_mut().has(&storage_key)? {
             return Err(self.err_general("Contract already exists"));
         }
+        // Make sure the contract code exists. With immutable contracts and 
+        // without this check it would be possible to accidentally create a 
+        // contract that never may be invoked (just by providing a bad hash).
+        if let ScContractCode::WasmRef(wasm_hash) = &contract_code {
+            let wasm_storage_key =
+                self.contract_code_ledger_key(wasm_hash.metered_clone(&self.0.budget)?);
+            if !self.0.storage.borrow_mut().has(&wasm_storage_key)? {
+                return Err(self.err_general("Contract code was not installed"));
+            }
+        }
+        // if !self.0.storage.borrow_mut().has(&storage_key)?
         self.store_contract_code(contract_code, new_contract_id, &storage_key)?;
         Ok(())
     }
@@ -860,6 +871,7 @@ impl Host {
                 return self.with_frame(Frame::TestContract(frame), || {
                     use std::any::Any;
                     use std::panic::{catch_unwind, set_hook, take_hook, AssertUnwindSafe};
+                    use crate::xdr::ScUnknownErrorCode;
                     type PanicVal = Box<dyn Any + Send>;
 
                     // We're directly invoking a native rust contract here,
