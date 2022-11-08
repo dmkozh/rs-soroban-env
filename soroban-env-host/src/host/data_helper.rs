@@ -84,7 +84,7 @@ impl Host {
         )?;
         Ok(())
     }
-
+    
     // notes on metering: covers the key and salt. Rest are free.
     pub fn id_preimage_from_ed25519(
         &self,

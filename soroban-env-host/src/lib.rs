@@ -37,6 +37,7 @@ mod native_contract;
 
 #[cfg(feature = "vm")]
 pub mod vm;
+pub mod auth;
 #[cfg(feature = "vm")]
 pub use vm::Vm;
 pub mod storage;
