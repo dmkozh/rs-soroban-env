@@ -1,13 +1,13 @@
 use crate::host::Host;
 use crate::native_contract::base_types::Vec;
-use crate::native_contract::token::public_types::Identifier;
 use crate::HostError;
+use soroban_env_common::xdr::ScAddress;
 use soroban_env_common::{CheckedEnv, Symbol, TryIntoVal};
 
 pub(crate) fn incr_allow(
     e: &Host,
-    from: Identifier,
-    to: Identifier,
+    from: ScAddress,
+    to: ScAddress,
     amount: i128,
 ) -> Result<(), HostError> {
     let mut topics = Vec::new(e)?;
@@ -34,8 +34,8 @@ pub(crate) fn decr_allow(
 
 pub(crate) fn transfer(
     e: &Host,
-    from: Identifier,
-    to: Identifier,
+    from: ScAddress,
+    to: ScAddress,
     amount: i128,
 ) -> Result<(), HostError> {
     let mut topics = Vec::new(e)?;
@@ -48,8 +48,8 @@ pub(crate) fn transfer(
 
 pub(crate) fn mint(
     e: &Host,
-    admin: Identifier,
-    to: Identifier,
+    admin: ScAddress,
+    to: ScAddress,
     amount: i128,
 ) -> Result<(), HostError> {
     let mut topics = Vec::new(e)?;
@@ -62,8 +62,8 @@ pub(crate) fn mint(
 
 pub(crate) fn clawback(
     e: &Host,
-    admin: Identifier,
-    from: Identifier,
+    admin: ScAddress,
+    from: ScAddress,
     amount: i128,
 ) -> Result<(), HostError> {
     let mut topics = Vec::new(e)?;
@@ -76,8 +76,8 @@ pub(crate) fn clawback(
 
 pub(crate) fn set_auth(
     e: &Host,
-    admin: Identifier,
-    id: Identifier,
+    admin: ScAddress,
+    id: ScAddress,
     authorize: bool,
 ) -> Result<(), HostError> {
     let mut topics = Vec::new(e)?;
@@ -90,8 +90,8 @@ pub(crate) fn set_auth(
 
 pub(crate) fn set_admin(
     e: &Host,
-    admin: Identifier,
-    new_admin: Identifier,
+    admin: ScAddress,
+    new_admin: ScAddress,
 ) -> Result<(), HostError> {
     let mut topics = Vec::new(e)?;
     topics.push(Symbol::from_str("set_admin"))?;
@@ -100,7 +100,7 @@ pub(crate) fn set_admin(
     Ok(())
 }
 
-pub(crate) fn burn(e: &Host, from: Identifier, amount: i128) -> Result<(), HostError> {
+pub(crate) fn burn(e: &Host, from: ScAddress, amount: i128) -> Result<(), HostError> {
     let mut topics = Vec::new(e)?;
     topics.push(Symbol::from_str("burn"))?;
     topics.push(from)?;

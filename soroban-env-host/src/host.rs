@@ -12,16 +12,26 @@ use soroban_env_common::{
         AccountId, Asset, ContractCodeEntry, ContractDataEntry, ContractEvent, ContractEventBody,
         ContractEventType, ContractEventV0, ContractId, CreateContractArgs, ExtensionPoint, Hash,
         HashIdPreimage, HostFunction, HostFunctionType, InstallContractCodeArgs, Int128Parts,
-        LedgerEntryData, LedgerKey, LedgerKeyContractCode, ScContractCode, ScHostContextErrorCode,
-        ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode, ScHostValErrorCode, ScMap,
-        ScMapEntry, ScObject, ScStatusType, ScVal, ScVec, ThresholdIndexes,
+        LedgerEntry, LedgerEntryData, LedgerKey, LedgerKeyContractCode, ScAddress, ScContractCode,
+        ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode,
+        ScHostValErrorCode, ScMap, ScMapEntry, ScObject, ScStatusType, ScVal, ScVec,
+        ThresholdIndexes,
     },
     Convert, InvokerType, Status, TryFromVal, TryIntoVal, VmCaller, VmCallerCheckedEnv,
 };
 
 use crate::budget::{AsBudget, Budget, CostType};
 use crate::events::{DebugError, DebugEvent, Events};
-use crate::storage::{Storage, StorageMap};
+use crate::storage::Storage;
+use crate::weak_host::WeakHost;
+use crate::{
+    auth::RecordedSignaturePayload,
+    budget::{Budget, CostType},
+};
+use crate::{
+    auth::{AbstractAccountHandle, AuthorizationManager, HostAccount},
+    storage::TempStorage,
+};
 
 use crate::host_object::{HostMap, HostObject, HostObjectType, HostVec};
 #[cfg(feature = "vm")]
@@ -53,7 +63,8 @@ use crate::Compare;
 // Notes on metering: `RollbackPoint` are metered under Frame operations
 #[derive(Clone)]
 pub(crate) struct RollbackPoint {
-    storage: StorageMap,
+    storage: MeteredOrdMap<Box<LedgerKey>, Option<Box<LedgerEntry>>>,
+    temp_storage: MeteredOrdMap<([u8; 32], ScVal), RawVal>,
     objects: usize,
 }
 
@@ -126,6 +137,7 @@ pub(crate) struct HostImpl {
     ledger: RefCell<Option<LedgerInfo>>,
     objects: RefCell<Vec<HostObject>>,
     storage: RefCell<Storage>,
+    temp_storage: RefCell<TempStorage>,
     pub(crate) context: RefCell<Vec<Frame>>,
     // Note: budget is refcounted and is _not_ deep-cloned when you call HostImpl::deep_clone,
     // mainly because it's not really possible to achieve (the same budget is connected to many
@@ -133,6 +145,7 @@ pub(crate) struct HostImpl {
     // actually wants their clones to be metered by "the same" total budget
     pub(crate) budget: Budget,
     events: RefCell<Events>,
+    authorization_manager: RefCell<AuthorizationManager>,
     // Note: we're not going to charge metering for testutils because it's out of the scope
     // of what users will be charged for in production -- it's scaffolding for testing a contract,
     // but shouldn't be charged to the contract itself (and will never be compiled-in to
@@ -188,17 +201,23 @@ impl Host {
     /// Constructs a new [`Host`] that will use the provided [`Storage`] for
     /// contract-data access functions such as
     /// [`CheckedEnv::get_contract_data`].
-    pub fn with_storage_and_budget(storage: Storage, budget: Budget) -> Self {
+    pub fn with_storage_and_budget(
+        storage: Storage,
+        budget: Budget,
+        authorization_manager: AuthorizationManager,
+    ) -> Self {
         Self(Rc::new(HostImpl {
             source_account: RefCell::new(None),
             ledger: RefCell::new(None),
             objects: Default::default(),
             storage: RefCell::new(storage),
+            temp_storage: Default::default(),
             context: Default::default(),
             budget,
             events: Default::default(),
             #[cfg(any(test, feature = "testutils"))]
             contracts: Default::default(),
+            authorization_manager: RefCell::new(authorization_manager),
         }))
     }
 
@@ -304,7 +323,7 @@ impl Host {
     ) -> Result<(), HostError> {
         let ce = ContractEvent {
             ext: ExtensionPoint::V0,
-            contract_id: self.get_current_contract_id().ok(),
+            contract_id: self.get_current_contract_id_internal().ok(),
             type_,
             body: ContractEventBody::V0(ContractEventV0 { topics, data }),
         };
@@ -342,10 +361,19 @@ impl Host {
     /// operation fails, it can be used to roll the [`Host`] back to the state
     /// it had before its associated [`Frame`] was pushed.
     fn push_frame(&self, frame: Frame) -> Result<RollbackPoint, HostError> {
+        // This is a bit hacky, as it relies on re-borrow to occur only doing
+        // the account contract invocations. Instead we should probably call it
+        // in more explicitly different fashion and check if we're calling it
+        // instead of a borrow check.
+        if let Ok(mut auth_manager) = self.0.authorization_manager.try_borrow_mut() {
+            auth_manager.push_frame(&frame)?;
+        }
+
         self.0.context.borrow_mut().push(frame);
         Ok(RollbackPoint {
             objects: self.0.objects.borrow().len(),
             storage: self.0.storage.borrow().map.clone(),
+            temp_storage: self.0.temp_storage.borrow().map.clone(),
         })
     }
 
@@ -358,9 +386,31 @@ impl Host {
             .borrow_mut()
             .pop()
             .expect("unmatched host frame push/pop");
+        // This is a bit hacky, as it relies on re-borrow to occur only doing
+        // the account contract invocations. Instead we should probably call it
+        // in more explicitly different fashion and check if we're calling it
+        // instead of a borrow check.
+        if let Ok(mut auth_manager) = self.0.authorization_manager.try_borrow_mut() {
+            auth_manager.pop_frame();
+        }
+        #[cfg(feature = "testutils")]
+        {
+            // Empty call stack in tests means that some contract function call
+            // has been finished and hence the authorization manager can be reset.
+            // In non-test scenarios, there should be no need to ever reset
+            // the authorization manager as the host instance shouldn't be
+            // shared between the contract invocations.
+            if self.0.context.borrow().is_empty() {
+                if self.0.context.borrow().is_empty() {
+                    self.0.authorization_manager.borrow_mut().reset(self)?;
+                }
+            }
+        }
+
         if let Some(rp) = orp {
             self.0.objects.borrow_mut().truncate(rp.objects);
             self.0.storage.borrow_mut().map = rp.storage;
+            self.0.temp_storage.borrow_mut().map = rp.temp_storage;
         }
         Ok(())
     }
@@ -448,10 +498,15 @@ impl Host {
         self.with_frame(Frame::TestContract(TestContractFrame::new(id, func)), f)
     }
 
+    #[cfg(any(test, feature = "testutils"))]
+    pub fn reset_temp_storage(&self) {
+        *self.0.temp_storage.borrow_mut() = Default::default();
+    }
+
     /// Returns [`Hash`] contract ID from the VM frame at the top of the context
     /// stack, or a [`HostError`] if the context stack is empty or has a non-VM
     /// frame at its top.
-    fn get_current_contract_id(&self) -> Result<Hash, HostError> {
+    pub(crate) fn get_current_contract_id_internal(&self) -> Result<Hash, HostError> {
         self.with_current_frame(|frame| match frame {
             #[cfg(feature = "vm")]
             Frame::ContractVM(vm, _) => vm.contract_id.metered_clone(&self.0.budget),
@@ -552,7 +607,8 @@ impl Host {
                 self.charge_budget(CostType::ValXdrConv, 1)?;
                 match ob {
                     None => Err(self.err_status(ScHostObjErrorCode::UnknownReference)),
-                    Some(ho) => match ho {
+                    Some(ho) => {
+                        match ho {
                         HostObject::Vec(vv) => {
                             // Here covers the cost of space allocating and maneuvering needed to go
                             // from one structure to the other. The actual conversion work (heavy lifting)
@@ -563,44 +619,50 @@ impl Host {
                                 HostError,
                             >>(
                             )?;
-                            Ok(ScObject::Vec(ScVec(self.map_err(sv.try_into())?)))
-                        }
-                        HostObject::Map(mm) => {
-                            // Here covers the cost of space allocating and maneuvering needed to go
-                            // from one structure to the other. The actual conversion work (heavy lifting)
-                            // is covered by `from_host_val`, which is recursive.
-                            self.charge_budget(CostType::ScMapFromHostMap, mm.len() as u64)?;
-                            let mut mv = Vec::new();
-                            for (k, v) in mm.iter(self)? {
-                                let key = self.from_host_val(*k)?;
-                                let val = self.from_host_val(*v)?;
-                                mv.push(ScMapEntry { key, val });
+                                Ok(ScObject::Vec(ScVec(self.map_err(sv.try_into())?)))
                             }
-                            Ok(ScObject::Map(ScMap(self.map_err(mv.try_into())?)))
+                            HostObject::Map(mm) => {
+                                // Here covers the cost of space allocating and maneuvering needed to go
+                                // from one structure to the other. The actual conversion work (heavy lifting)
+                                // is covered by `from_host_val`, which is recursive.
+                                self.charge_budget(CostType::ScMapFromHostMap, mm.len() as u64)?;
+                                let mut mv = Vec::new();
+                                for (k, v) in mm.iter() {
+                                    let key = self.from_host_val(k.val)?;
+                                    let val = self.from_host_val(v.val)?;
+                                    mv.push(ScMapEntry { key, val });
+                                }
+                                Ok(ScObject::Map(ScMap(self.map_err(mv.try_into())?)))
+                            }
+                            HostObject::U64(u) => Ok(ScObject::U64(*u)),
+                            HostObject::I64(i) => Ok(ScObject::I64(*i)),
+                            HostObject::U128(u) => Ok(ScObject::U128(Int128Parts {
+                                lo: *u as u64,
+                                hi: (*u >> 64) as u64,
+                            })),
+                            HostObject::I128(u) => {
+                                let u = *u as u128;
+                                Ok(ScObject::I128(Int128Parts {
+                                    lo: u as u64,
+                                    hi: (u >> 64) as u64,
+                                }))
+                            }
+                            HostObject::Bytes(b) => Ok(ScObject::Bytes(
+                                self.map_err(b.metered_clone(&self.0.budget)?.try_into())?,
+                            )),
+                            HostObject::ContractCode(cc) => {
+                                Ok(ScObject::ContractCode(cc.metered_clone(&self.0.budget)?))
+                            }
+                            HostObject::AccountId(aid) => {
+                                Ok(ScObject::AccountId(aid.metered_clone(&self.0.budget)?))
+                            }
+                            HostObject::Account(acc) => Err(self
+                                .err_general("accounts are not allowed to be converted to ScVal")),
+                            HostObject::Address(addr) => {
+                                Ok(ScObject::Address(addr.metered_clone(&self.0.budget)?))
+                            }
                         }
-                        HostObject::U64(u) => Ok(ScObject::U64(*u)),
-                        HostObject::I64(i) => Ok(ScObject::I64(*i)),
-                        HostObject::U128(u) => Ok(ScObject::U128(Int128Parts {
-                            lo: *u as u64,
-                            hi: (*u >> 64) as u64,
-                        })),
-                        HostObject::I128(u) => {
-                            let u = *u as u128;
-                            Ok(ScObject::I128(Int128Parts {
-                                lo: u as u64,
-                                hi: (u >> 64) as u64,
-                            }))
-                        }
-                        HostObject::Bytes(b) => Ok(ScObject::Bytes(
-                            self.map_err(b.metered_clone(&self.0.budget)?.try_into())?,
-                        )),
-                        HostObject::ContractCode(cc) => {
-                            Ok(ScObject::ContractCode(cc.metered_clone(&self.0.budget)?))
-                        }
-                        HostObject::AccountId(aid) => {
-                            Ok(ScObject::AccountId(aid.metered_clone(&self.0.budget)?))
-                        }
-                    },
+                    }
                 }
             })
         }
@@ -640,6 +702,16 @@ impl Host {
             ScObject::AccountId(account_id) => {
                 self.add_host_object(account_id.metered_clone(&self.0.budget)?)
             }
+            ScObject::NonceKey(_) => {
+                Err(self.err_general("nonce keys aren't allowed to be used directly"))
+            }
+            ScObject::Account(acc) => self.add_host_object(
+                self.0
+                    .authorization_manager
+                    .borrow_mut()
+                    .add_account(self, acc.metered_clone(&self.0.budget)?)?,
+            ),
+            ScObject::Address(addr) => self.add_host_object(addr.metered_clone(&self.0.budget)?),
         }
     }
 
@@ -778,17 +850,25 @@ impl Host {
         }
     }
 
-    // Notes on metering: this is covered by the called components.
     fn call_n(
         &self,
-        contract: Object,
+        id: Object,
         func: Symbol,
         args: &[RawVal],
         allow_reentry: bool,
     ) -> Result<RawVal, HostError> {
-        // Get contract ID
-        let id = self.hash_from_obj_input("contract", contract)?;
+        let id = self.hash_from_obj_input("contract", id)?;
+        self.call_n_internal(&id, func, args, allow_reentry)
+    }
 
+    // Notes on metering: this is covered by the called components.
+    pub(crate) fn call_n_internal(
+        &self,
+        id: &Hash,
+        func: Symbol,
+        args: &[RawVal],
+        allow_reentry: bool,
+    ) -> Result<RawVal, HostError> {
         if !allow_reentry {
             for f in self.0.context.borrow().iter() {
                 let exist_id = match f {
@@ -799,7 +879,7 @@ impl Host {
                     Frame::TestContract(tc) => &tc.id,
                     Frame::HostFunction(_) => continue,
                 };
-                if id == *exist_id {
+                if id == exist_id {
                     return Err(self.err_status_msg(
                         // TODO: proper error code
                         ScHostContextErrorCode::UnknownError,
@@ -967,6 +1047,33 @@ impl Host {
         self.with_mut_storage(|storage| storage.put(&key, &val, self.as_budget()))
     }
 
+    #[cfg(any(test, feature = "testutils"))]
+    pub fn verify_account_authorization(
+        &self,
+        account: Object,
+        call_stack: Vec<(Hash, Symbol)>,
+        args: Object,
+    ) -> Result<bool, HostError> {
+        use crate::auth::ContractInvocation;
+        let host_account = self.visit_obj(account, |acc: &HostAccount| Ok(acc.clone()))?;
+        let call_stack = call_stack
+            .into_iter()
+            .map(|(contract_id, function_name)| ContractInvocation {
+                contract_id,
+                function_name,
+            })
+            .collect();
+        self.0
+            .authorization_manager
+            .borrow_mut()
+            .verify_last_authorization(
+                self,
+                &host_account,
+                call_stack,
+                self.call_args_to_scvec(args)?,
+            )
+    }
+
     /// Records a `System` contract event. `topics` is expected to be a `SCVec`
     /// length <= 4 that cannot contain `Vec`, `Map`, or `Bytes` with length > 32
     /// On success, returns an `SCStatus::Ok`.
@@ -1040,6 +1147,32 @@ impl Host {
         public_key
             .verify(payload, &sig)
             .map_err(|_| self.err_general("Failed ED25519 verification"))
+    }
+
+    pub(crate) fn get_invoking_contract_internal(&self) -> Result<Hash, HostError> {
+        let frames = self.0.context.borrow();
+        // the previous frame must exist and must be a contract
+        let hash = match frames.as_slice() {
+            [.., f2, _] => match f2 {
+                #[cfg(feature = "vm")]
+                Frame::ContractVM(vm, _) => Ok(vm.contract_id.metered_clone(&self.0.budget)?),
+                Frame::HostFunction(_) => Err(self.err_general("invoker is not a contract")),
+                Frame::Token(id, _) => Ok(id.clone()),
+                #[cfg(any(test, feature = "testutils"))]
+                Frame::TestContract(tc) => Ok(tc.id.clone()), // no metering
+            },
+            _ => Err(self.err_general("no frames to derive the invoker from")),
+        }?;
+        Ok(hash)
+    }
+
+    pub fn get_recorded_account_signature_payloads(
+        &self,
+    ) -> Result<Vec<RecordedSignaturePayload>, HostError> {
+        self.0
+            .authorization_manager
+            .borrow()
+            .get_recorded_signature_payloads()
     }
 }
 
@@ -1249,20 +1382,10 @@ impl VmCallerCheckedEnv for Host {
 
     // Notes on metering: covered by the components
     fn get_invoking_contract(&self, _vmcaller: &mut VmCaller<Host>) -> Result<Object, HostError> {
-        let frames = self.0.context.borrow();
-        // the previous frame must exist and must be a contract
-        let hash = match frames.as_slice() {
-            [.., f2, _] => match f2 {
-                #[cfg(feature = "vm")]
-                Frame::ContractVM(vm, _) => Ok(vm.contract_id.metered_clone(&self.0.budget)?),
-                Frame::HostFunction(_) => Err(self.err_general("invoker is not a contract")),
-                Frame::Token(id, _) => Ok(id.clone()),
-                #[cfg(any(test, feature = "testutils"))]
-                Frame::TestContract(tc) => Ok(tc.id.clone()), // no metering
-            },
-            _ => Err(self.err_general("no frames to derive the invoker from")),
-        }?;
-        self.add_host_object(<Vec<u8>>::from(hash.0))
+        let invoking_contract_hash = self.get_invoking_contract_internal()?;
+        Ok(self
+            .add_host_object(<Vec<u8>>::from(invoking_contract_hash.0))?
+            .into())
     }
 
     // Metered: covered by `visit` and `metered_cmp`.
@@ -1297,9 +1420,15 @@ impl VmCallerCheckedEnv for Host {
     }
 
     // Notes on metering: covered by the components.
-    fn get_current_contract(&self, _vmcaller: &mut VmCaller<Host>) -> Result<Object, HostError> {
-        let hash: Hash = self.get_current_contract_id()?;
-        self.add_host_object(<Vec<u8>>::from(hash.0))
+    fn get_current_contract_account(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+    ) -> Result<Object, HostError> {
+        Ok(self
+            .add_host_object(HostAccount::InvokerContract(
+                self.get_current_contract_id_internal()?,
+            ))?
+            .into())
     }
 
     // Notes on metering: covered by `add_host_object`.
@@ -1696,7 +1825,7 @@ impl VmCallerCheckedEnv for Host {
     ) -> Result<RawVal, HostError> {
         let key = self.contract_data_key_from_rawval(k)?;
         let data = LedgerEntryData::ContractData(ContractDataEntry {
-            contract_id: self.get_current_contract_id()?,
+            contract_id: self.get_current_contract_id_internal()?,
             key: self.from_host_val(k)?,
             val: self.from_host_val(v)?,
         });
@@ -1763,12 +1892,69 @@ impl VmCallerCheckedEnv for Host {
         wasm_hash: Object,
         salt: Object,
     ) -> Result<Object, HostError> {
-        let contract_id = self.get_current_contract_id()?;
+        let contract_id = self.get_current_contract_id_internal()?;
         let salt = self.uint256_from_obj_input("salt", salt)?;
 
         let code = ScContractCode::WasmRef(self.hash_from_obj_input("wasm_hash", wasm_hash)?);
         let id_preimage = self.id_preimage_from_contract(contract_id, salt)?;
         self.create_contract_with_id_preimage(code, id_preimage)
+    }
+
+    // Notes on metering: covered by components
+    fn put_tmp_contract_data(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+        k: RawVal,
+        v: RawVal,
+    ) -> Result<RawVal, HostError> {
+        let key = self.from_host_val(k)?;
+        self.0
+            .temp_storage
+            .borrow_mut()
+            .put(self.get_current_contract_id_internal()?.0, key, v)?;
+        Ok(().into())
+    }
+
+    // Notes on metering: covered by components
+    fn has_tmp_contract_data(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+        k: RawVal,
+    ) -> Result<RawVal, HostError> {
+        let key = self.from_host_val(k)?;
+        let res = self
+            .0
+            .temp_storage
+            .borrow_mut()
+            .has(self.get_current_contract_id_internal()?.0, key)?;
+        Ok(RawVal::from_bool(res))
+    }
+
+    // Notes on metering: covered by components
+    fn get_tmp_contract_data(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+        k: RawVal,
+    ) -> Result<RawVal, HostError> {
+        let key = self.from_host_val(k)?;
+        self.0
+            .temp_storage
+            .borrow_mut()
+            .get(self.get_current_contract_id_internal()?.0, key)
+    }
+
+    // Notes on metering: covered by components
+    fn del_tmp_contract_data(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+        k: RawVal,
+    ) -> Result<RawVal, HostError> {
+        let key = self.from_host_val(k)?;
+        self.0
+            .temp_storage
+            .borrow_mut()
+            .del(self.get_current_contract_id_internal()?.0, key)?;
+        Ok(().into())
     }
 
     // Notes on metering: here covers the args unpacking. The actual VM work is changed at lower layers.
@@ -2270,5 +2456,45 @@ impl VmCallerCheckedEnv for Host {
 
     fn dummy0(&self, vmcaller: &mut VmCaller<Self::VmUserState>) -> Result<RawVal, Self::Error> {
         Ok(().into())
+    }
+    // TODO: we also need a 'simple' version of this function that takes only
+    // account as argument and uses all the non-account args of the current call
+    // (or provide a way to get the current call non-account args in order to
+    // do this on the SDK side).
+    fn authorize_account(
+        &self,
+        vmcaller: &mut VmCaller<Self::VmUserState>,
+        account: Object,
+        args: Object,
+    ) -> Result<RawVal, Self::Error> {
+        let host_account = self.visit_obj(account, |acc: &HostAccount| Ok(acc.clone()))?;
+        Ok(self
+            .0
+            .authorization_manager
+            .borrow_mut()
+            .authorize(self, &host_account, self.call_args_to_scvec(args)?)?
+            .into())
+    }
+
+    fn get_account_address(
+        &self,
+        vmcaller: &mut VmCaller<Self::VmUserState>,
+        account: Object,
+    ) -> Result<Object, Self::Error> {
+        let address = self.visit_obj(account, |acc: &HostAccount| match acc {
+            HostAccount::AbstractAccount(acc) => acc.address.metered_clone(self.budget_ref()),
+            HostAccount::InvokerContract(id) => {
+                Ok(ScAddress::Contract(id.metered_clone(self.budget_ref())?))
+            }
+        })?;
+        Ok(self.add_host_object(address)?.to_object())
+    }
+
+    fn get_current_contract_id(
+        &self,
+        vmcaller: &mut VmCaller<Self::VmUserState>,
+    ) -> Result<Object, Self::Error> {
+        let id = self.get_current_contract_id_internal()?;
+        Ok(self.add_host_object(id.0.to_vec())?.into())
     }
 }

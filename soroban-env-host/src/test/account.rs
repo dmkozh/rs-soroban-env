@@ -1,12 +1,10 @@
-use std::rc::Rc;
-
 use soroban_env_common::CheckedEnv;
 
 use crate::{
     budget::Budget,
     host::metered_map::MeteredOrdMap,
     storage::{AccessType, Footprint, Storage},
-    xdr, Host, HostError, RawVal,
+    xdr, Host, HostError, RawVal, auth::AuthorizationManager,
 };
 
 #[test]
@@ -30,7 +28,11 @@ fn check_account_exists() -> Result<(), HostError> {
         MeteredOrdMap::from_map(map, &budget)?,
     );
 
-    let host = Host::with_storage_and_budget(storage, budget.clone());
+    let host = Host::with_storage_and_budget(
+        storage,
+        budget.clone(),
+        AuthorizationManager::new_enforcing(budget.clone()),
+    );
     let obj0 = host.add_host_object(acc_id0)?;
     let obj1 = host.add_host_object(acc_id1)?;
     let obj2 = host.add_host_object(acc_id2)?;

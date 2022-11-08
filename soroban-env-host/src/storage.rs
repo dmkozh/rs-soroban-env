@@ -7,9 +7,12 @@
 //!   - [Env::put_contract_data](crate::Env::put_contract_data)
 //!   - [Env::del_contract_data](crate::Env::del_contract_data)
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use soroban_env_common::Compare;
+use soroban_env_common::xdr::ScVal;
+use soroban_env_common::RawVal;
 
 use crate::budget::Budget;
 use crate::host::metered_clone::MeteredClone;
@@ -297,6 +300,34 @@ impl Storage {
             }
         }
     }
+}
+
+#[derive(Default, Clone)]
+pub struct TempStorage {
+    pub map: MeteredOrdMap<([u8; 32], ScVal), RawVal>,
+}
+
+impl TempStorage {
+    pub fn get(&self, contract_id: [u8; 32], key: ScVal) -> Result<RawVal, HostError> {
+        match self.map.get(&(contract_id, key))? {
+            None => Err(ScHostStorageErrorCode::MissingKeyInGet.into()),
+            Some(val) => Ok(*val),
+        }
+    }
+
+    pub fn put(&mut self, contract_id: [u8; 32], key: ScVal, val: RawVal) -> Result<(), HostError> {
+        self.map.insert((contract_id, key), val)?;
+        Ok(())
+    }
+
+    pub fn del(&mut self, contract_id: [u8; 32], key: ScVal) -> Result<(), HostError> {
+        self.map.remove(&(contract_id, key))?;
+        Ok(())
+    }
+
+    pub fn has(&mut self, contract_id: [u8; 32], key: ScVal) -> Result<bool, HostError> {
+        self.map.contains_key(&(contract_id, key))
+    }    
 }
 
 #[cfg(test)]
