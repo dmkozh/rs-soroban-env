@@ -3,13 +3,12 @@ use std::cmp::min;
 use soroban_env_common::{CheckedEnv, InvokerType};
 
 use crate::xdr::{
-    AccountEntry, AccountId, Asset, ContractCodeEntry, ContractDataEntry, CreateContractSource,
-    Hash, HashIdPreimage, HashIdPreimageContractId, HashIdPreimageCreateContractArgs,
-    HashIdPreimageEd25519ContractId, HashIdPreimageFromAsset,
-    HashIdPreimageSourceAccountContractId, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
-    LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine, PublicKey,
-    ScContractCode, ScHostStorageErrorCode, ScHostValErrorCode, ScObject, ScStatic, ScVal, Signer,
-    SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
+    AccountEntry, AccountId, Asset, ContractCodeEntry, ContractDataEntry, Hash, HashIdPreimage,
+    HashIdPreimageContractId, HashIdPreimageCreateContractArgs, HashIdPreimageEd25519ContractId,
+    HashIdPreimageFromAsset, HashIdPreimageSourceAccountContractId, LedgerEntry, LedgerEntryData,
+    LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData,
+    LedgerKeyTrustLine, PublicKey, ScContractCode, ScHostStorageErrorCode, ScHostValErrorCode,
+    ScObject, ScStatic, ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
 };
 use crate::{Host, HostError};
 
@@ -146,7 +145,7 @@ impl Host {
     // metering: covered by components
     pub fn create_contract_hash_preimage(
         &self,
-        source: CreateContractSource,
+        source: ScContractCode,
         salt: Uint256,
     ) -> Result<HashIdPreimage, HostError> {
         Ok(HashIdPreimage::CreateContractArgs(

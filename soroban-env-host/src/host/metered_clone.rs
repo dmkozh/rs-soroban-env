@@ -1,7 +1,7 @@
 use crate::{
     budget::{Budget, CostType},
     host::Events,
-    xdr::{AccountId, CreateContractSource, Hash, PublicKey, ScContractCode, ScVec, Uint256},
+    xdr::{AccountId, Hash, PublicKey, ScContractCode, ScVec, Uint256},
     HostError,
 };
 
@@ -57,23 +57,6 @@ impl MeteredClone for ScContractCode {
 impl MeteredClone for ScVec {
     fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
         budget.charge(CostType::BytesClone, self.0.len() as u64)?;
-        Ok(self.clone())
-    }
-}
-
-impl MeteredClone for CreateContractSource {
-    fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
-        match self {
-            CreateContractSource::Installed(installed) => {
-                budget.charge(CostType::BytesClone, installed.code.len() as u64)?
-            }
-            CreateContractSource::Ref(r) => match r {
-                ScContractCode::WasmRef(h) => {
-                    budget.charge(CostType::BytesClone, h.0.len() as u64)?
-                }
-                ScContractCode::Token => (),
-            },
-        };
         Ok(self.clone())
     }
 }
