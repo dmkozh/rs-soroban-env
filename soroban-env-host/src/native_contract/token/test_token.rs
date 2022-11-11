@@ -9,10 +9,7 @@ use crate::{
     Host, HostError,
 };
 use soroban_env_common::{
-    xdr::{
-        Asset, ContractId, ContractIdFromPublicKey, ContractIdPublicKey, CreateContractArgs,
-        CreateContractSource, HostFunction, ScContractCode, Uint256,
-    },
+    xdr::{Asset, ContractId, CreateContractArgs, HostFunction, ScContractCode, Uint256},
     CheckedEnv, RawVal,
 };
 use soroban_env_common::{Symbol, TryFromVal, TryIntoVal};
@@ -31,11 +28,8 @@ impl<'a> TestToken<'a> {
         host.set_source_account(generate_account_id());
         let id_obj: RawVal = host
             .invoke_function(HostFunction::CreateContract(CreateContractArgs {
-                contract_id: ContractId::PublicKey(ContractIdFromPublicKey {
-                    key_source: ContractIdPublicKey::SourceAccount,
-                    salt: Uint256(generate_bytes_array()),
-                }),
-                source: CreateContractSource::Ref(ScContractCode::Token),
+                contract_id: ContractId::SourceAccount(Uint256(generate_bytes_array())),
+                source: ScContractCode::Token,
             }))
             .unwrap()
             .try_into_val(host)
@@ -51,7 +45,7 @@ impl<'a> TestToken<'a> {
         let id_obj: RawVal = host
             .invoke_function(HostFunction::CreateContract(CreateContractArgs {
                 contract_id: ContractId::Asset(asset),
-                source: CreateContractSource::Ref(ScContractCode::Token),
+                source: ScContractCode::Token,
             }))
             .unwrap()
             .try_into_val(host)
