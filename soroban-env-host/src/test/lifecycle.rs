@@ -3,14 +3,14 @@ use crate::{
     host::metered_map::MeteredOrdMap,
     storage::{AccessType, Footprint, Storage},
     xdr::{
-        self, ContractId, ContractIdFromPublicKey, ContractIdPublicKey, CreateContractArgs,
-        CreateContractSource, Hash, HashIdPreimage, HashIdPreimageContractId,
+        self, ContractId, CreateContractArgs, Hash, HashIdPreimage, HashIdPreimageContractId,
         HashIdPreimageSourceAccountContractId, HostFunction, InstallContractCodeArgs,
         LedgerEntryData, LedgerKey, LedgerKeyContractCode, LedgerKeyContractData, ScContractCode,
         ScObject, ScStatic, ScVal, ScVec, Uint256,
     },
     CheckedEnv, Host, LedgerInfo, Symbol,
 };
+use soroban_env_common::{RawVal, TryIntoVal};
 use soroban_test_wasms::CREATE_CONTRACT;
 
 use im_rc::OrdMap;
@@ -125,13 +125,18 @@ fn test_create_contract_from_source_account(host: &Host, code: &[u8]) -> Hash {
     .unwrap();
 
     // Create contract
+    let wasm_id: RawVal = host
+        .invoke_function(HostFunction::InstallContractCode(install_args.clone()))
+        .unwrap()
+        .try_into_val(host)
+        .unwrap();
+    let wasm_id = host
+        .hash_from_obj_input("wasm_hash", wasm_id.try_into().unwrap())
+        .unwrap();
     let created_id_sc_val = host
         .invoke_function(HostFunction::CreateContract(CreateContractArgs {
-            contract_id: ContractId::PublicKey(ContractIdFromPublicKey {
-                key_source: ContractIdPublicKey::SourceAccount,
-                salt: Uint256(salt.to_vec().try_into().unwrap()),
-            }),
-            source: CreateContractSource::Installed(install_args),
+            contract_id: ContractId::SourceAccount(Uint256(salt.to_vec().try_into().unwrap())),
+            source: ScContractCode::WasmRef(wasm_id),
         }))
         .unwrap();
 

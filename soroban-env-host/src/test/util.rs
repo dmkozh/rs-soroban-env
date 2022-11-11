@@ -1,19 +1,20 @@
 use std::rc::Rc;
 
 use rand::{thread_rng, RngCore};
-use soroban_env_common::{xdr::InstallContractCodeArgs, Object, RawVal, TryIntoVal};
+use soroban_env_common::{
+    xdr::{
+        AccountEntry, AccountId, ContractId, CreateContractArgs, HostFunction,
+        InstallContractCodeArgs, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
+        PublicKey, ScContractCode, ScObject, ScVal, ScVec, Uint256,
+    },
+    Object, RawVal, TryIntoVal,
+};
 
 use crate::{
     budget::{Budget, CostType},
     host_object::{HostObj, HostVal},
     storage::{test_storage::MockSnapshotSource, Storage},
-    xdr,
-    xdr::{
-        AccountEntry, AccountId, ContractId, ContractIdFromPublicKey, ContractIdPublicKey,
-        CreateContractArgs, CreateContractSource, HostFunction, LedgerEntry, LedgerEntryData,
-        LedgerEntryExt, LedgerKey, PublicKey, ScObject, ScVal, ScVec, Uint256,
-    },
-    Host, HostError,
+    xdr, Host, HostError,
 };
 
 // Test utilities for the host, used in various tests in sub-modules.
@@ -150,18 +151,19 @@ impl Host {
         contract_wasm: &[u8],
     ) -> Result<Object, HostError> {
         self.set_source_account(generate_account_id());
+        let wasm_id: RawVal = self
+            .invoke_function(HostFunction::InstallContractCode(InstallContractCodeArgs {
+                code: contract_wasm
+                    .to_vec()
+                    .try_into()
+                    .map_err(|_| self.err_general("too large wasm"))?,
+            }))?
+            .try_into_val(self)?;
+        let wasm_id = self.hash_from_obj_input("wasm_hash", wasm_id.try_into()?)?;
         let id_obj: RawVal = self
             .invoke_function(HostFunction::CreateContract(CreateContractArgs {
-                contract_id: ContractId::PublicKey(ContractIdFromPublicKey {
-                    key_source: ContractIdPublicKey::SourceAccount,
-                    salt: Uint256(generate_bytes_array()),
-                }),
-                source: CreateContractSource::Installed(InstallContractCodeArgs {
-                    code: contract_wasm
-                        .to_vec()
-                        .try_into()
-                        .map_err(|_| self.err_general("too large wasm"))?,
-                }),
+                contract_id: ContractId::SourceAccount(Uint256(generate_bytes_array())),
+                source: ScContractCode::WasmRef(wasm_id),
             }))?
             .try_into_val(self)?;
         self.remove_source_account();
