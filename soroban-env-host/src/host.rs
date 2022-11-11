@@ -9,6 +9,15 @@ use im_rc::{OrdMap, Vector};
 use num_bigint::Sign;
 use sha2::{Digest, Sha256};
 use soroban_env_common::{
+    xdr::{
+        AccountId, Asset, ContractCodeEntry, ContractDataEntry, ContractEvent, ContractEventBody,
+        ContractEventType, ContractEventV0, ContractId, CreateContractArgs, ExtensionPoint, Hash,
+        HashIdPreimage, HostFunction, HostFunctionType, InstallContractCodeArgs, LedgerEntry,
+        LedgerEntryData, LedgerEntryExt, LedgerKey, LedgerKeyContractCode, ScBigInt,
+        ScContractCode, ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode,
+        ScHostStorageErrorCode, ScHostValErrorCode, ScMap, ScMapEntry, ScObject, ScStatusType,
+        ScVal, ScVec, ThresholdIndexes,
+    },
     EnvVal, InvokerType, Status, TryConvert, TryFromVal, TryIntoVal, VmCaller, VmCallerCheckedEnv,
 };
 
@@ -17,15 +26,6 @@ use crate::events::{DebugError, DebugEvent, Events};
 use crate::storage::Storage;
 use crate::weak_host::WeakHost;
 
-use crate::xdr::{
-    AccountId, Asset, ContractCodeEntry, ContractCodeEntryExt, ContractDataEntry, ContractEvent,
-    ContractEventBody, ContractEventType, ContractEventV0, ContractId, ContractIdPublicKey,
-    CreateContractArgs, CreateContractSource, ExtensionPoint, Hash, HashIdPreimage, HostFunction,
-    HostFunctionType, InstallContractCodeArgs, LedgerEntry, LedgerEntryData, LedgerEntryExt,
-    LedgerKey, LedgerKeyContractCode, ScBigInt, ScContractCode, ScHostContextErrorCode,
-    ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode, ScHostValErrorCode, ScMap,
-    ScMapEntry, ScObject, ScStatusType, ScVal, ScVec, ThresholdIndexes,
-};
 use std::rc::Rc;
 
 use crate::host_object::{HostMap, HostObj, HostObject, HostObjectType, HostVal, HostVec};
@@ -738,8 +738,8 @@ impl Host {
         if self.0.storage.borrow_mut().has(&storage_key)? {
             return Err(self.err_general("Contract already exists"));
         }
-        // Make sure the contract code exists. With immutable contracts and 
-        // without this check it would be possible to accidentally create a 
+        // Make sure the contract code exists. With immutable contracts and
+        // without this check it would be possible to accidentally create a
         // contract that never may be invoked (just by providing a bad hash).
         if let ScContractCode::WasmRef(wasm_hash) = &contract_code {
             let wasm_storage_key =
@@ -1018,37 +1018,27 @@ impl Host {
 
     fn create_contract(&self, args: CreateContractArgs) -> Result<Object, HostError> {
         let id_preimage = match args.contract_id {
-            ContractId::PublicKey(pk) => match pk.key_source {
-                ContractIdPublicKey::SourceAccount => {
-                    self.id_preimage_from_source_account(pk.salt)?
-                }
-                ContractIdPublicKey::Ed25519(key_with_signature) => {
-                    let signature_payload_preimage = self.create_contract_hash_preimage(
-                        args.source.metered_clone(&self.budget_ref())?,
-                        pk.salt.metered_clone(self.budget_ref())?,
-                    )?;
-                    let signature_payload = self.metered_hash_xdr(&signature_payload_preimage)?;
-                    self.verify_sig_ed25519(
-                        &mut VmCaller::none(),
-                        self.add_host_object(signature_payload.to_vec())?
-                            .to_object(),
-                        self.add_host_object(key_with_signature.key.0.to_vec())?
-                            .to_object(),
-                        self.add_host_object(key_with_signature.signature.0.to_vec())?
-                            .to_object(),
-                    )?;
-                    self.id_preimage_from_ed25519(key_with_signature.key, pk.salt)?
-                }
-            },
             ContractId::Asset(asset) => self.id_preimage_from_asset(asset)?,
+            ContractId::SourceAccount(salt) => self.id_preimage_from_source_account(salt)?,
+            ContractId::Ed25519PublicKey(key_with_signature) => {
+                let signature_payload_preimage = self.create_contract_hash_preimage(
+                    args.source.metered_clone(&self.budget_ref())?,
+                    key_with_signature.salt.metered_clone(self.budget_ref())?,
+                )?;
+                let signature_payload = self.metered_hash_xdr(&signature_payload_preimage)?;
+                self.verify_sig_ed25519(
+                    &mut VmCaller::none(),
+                    self.add_host_object(signature_payload.to_vec())?
+                        .to_object(),
+                    self.add_host_object(key_with_signature.key.0.to_vec())?
+                        .to_object(),
+                    self.add_host_object(key_with_signature.signature.0.to_vec())?
+                        .to_object(),
+                )?;
+                self.id_preimage_from_ed25519(key_with_signature.key, key_with_signature.salt)?
+            }
         };
-        let contract_code = match args.source {
-            CreateContractSource::Ref(code) => code,
-            CreateContractSource::Installed(install_args) => ScContractCode::WasmRef(
-                self.hash_from_obj_input("installed_wasm", self.install_contract(install_args)?)?,
-            ),
-        };
-        self.create_contract_with_id_preimage(contract_code, id_preimage)
+        self.create_contract_with_id_preimage(args.source, id_preimage)
     }
 
     fn install_contract(&self, args: InstallContractCodeArgs) -> Result<Object, HostError> {
@@ -1062,7 +1052,7 @@ impl Host {
                 let data = LedgerEntryData::ContractCode(ContractCodeEntry {
                     hash: Hash(hash_bytes),
                     code: args.code,
-                    ext: ContractCodeEntryExt::V0,
+                    ext: ExtensionPoint::V0,
                 });
                 storage.put(
                     &code_key,
