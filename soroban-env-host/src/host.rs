@@ -984,6 +984,38 @@ impl Host {
         }
     }
 
+    // Replace the source code WASM reference for an already deployed contract.
+    // This is test-only for now, but probably should be eventually promoted to
+    // a common env function in order to allow mutating the contract source.
+    #[cfg(any(test, feature = "testutils"))]
+    pub fn replace_contract_wasm_ref(
+        &self,
+        contract_id: Object,
+        wasm_hash: Object,
+    ) -> Result<(), HostError> {
+        let contract_id = self.hash_from_obj_input("contract_id", contract_id)?;
+        let wasm_hash = self.hash_from_obj_input("wasm_hash", wasm_hash)?;
+
+        let storage_key =
+            self.contract_source_ledger_key(contract_id.metered_clone(&self.0.budget)?);
+        if !self.0.storage.borrow_mut().has(&storage_key)? {
+            return Err(self.err_general("Contract does not exist"));
+        }
+
+        // Make sure the contract code exists.
+        let wasm_storage_key =
+            self.contract_code_ledger_key(wasm_hash.metered_clone(&self.0.budget)?);
+        if !self.0.storage.borrow_mut().has(&wasm_storage_key)? {
+            return Err(self.err_general("Contract code was not installed"));
+        }
+
+        self.store_contract_source(
+            ScContractCode::WasmRef(wasm_hash),
+            contract_id,
+            &storage_key,
+        )
+    }
+
     // Writes an arbitrary ledger entry to storage.
     // "testutils" is not covered by budget metering.
     #[cfg(any(test, feature = "testutils"))]

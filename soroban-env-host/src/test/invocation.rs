@@ -240,3 +240,19 @@ fn invoke_contract_with_reentry() -> Result<(), HostError> {
 
     Ok(())
 }
+
+#[test]
+fn invoke_contract_with_replaced_source() -> Result<(), HostError> {
+    let host = Host::test_host_with_recording_footprint();
+    let contract_id = host.register_test_contract_wasm(INVOKE_CONTRACT)?;
+    let wasm_hash = host.install_test_contract_wasm(ADD_I32)?;
+    host.replace_contract_wasm_ref(contract_id, wasm_hash).unwrap();
+    // prepare arguments
+    let sym = Symbol::from_str("add");
+    let args = host.test_vec_obj::<i32>(&[5, 6])?;
+    // try call
+    let val = host.call(contract_id, sym.into(), args.clone().into())?;
+    let exp: RawVal = 11i32.into();
+    assert_eq!(val.get_payload(), exp.get_payload());
+    Ok(())
+}

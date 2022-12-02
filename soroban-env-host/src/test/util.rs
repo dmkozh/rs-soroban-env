@@ -141,6 +141,21 @@ impl Host {
         res.try_into().unwrap()
     }
 
+    // Installs the provided WASM source and returns the installed wasm hash.
+    // This relies on the host to have no footprint enforcement.
+    pub(crate) fn install_test_contract_wasm(
+        &self,
+        contract_wasm: &[u8],
+    ) -> Result<Object, HostError> {
+        self.invoke_function(HostFunction::InstallContractCode(InstallContractCodeArgs {
+            code: contract_wasm
+                .to_vec()
+                .try_into()
+                .map_err(|_| self.err_general("too large wasm"))?,
+        }))?
+        .try_into_val(self)
+    }
+
     // Registers a contract with provided WASM source and returns the registered
     // contract ID.
     // This relies on the host to have no footprint enforcement.
@@ -149,14 +164,7 @@ impl Host {
         contract_wasm: &[u8],
     ) -> Result<Object, HostError> {
         self.set_source_account(generate_account_id());
-        let wasm_id: RawVal = self
-            .invoke_function(HostFunction::InstallContractCode(InstallContractCodeArgs {
-                code: contract_wasm
-                    .to_vec()
-                    .try_into()
-                    .map_err(|_| self.err_general("too large wasm"))?,
-            }))?
-            .try_into_val(self)?;
+        let wasm_id = self.install_test_contract_wasm(contract_wasm)?;
         let wasm_id = self.hash_from_obj_input("wasm_hash", wasm_id.try_into()?)?;
         let id_obj: RawVal = self
             .invoke_function(HostFunction::CreateContract(CreateContractArgs {
