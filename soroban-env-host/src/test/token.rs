@@ -693,6 +693,29 @@ fn test_transfer_with_allowance() {
         ),
         ContractError::AllowanceError
     );
+
+    // Allow 1_000_000 units of token to be transferred from user by user 3.
+    token.approve(&user, user_3.address(), 1_000_000).unwrap();
+
+    assert_eq!(
+        token.allowance(user.address(), user_3.address()).unwrap(),
+        1_000_000
+    );
+    // Reset temp storage, now allowance is gone and transfer is impossible.
+    test.host.reset_temp_storage();
+    assert_eq!(
+        token.allowance(user.address(), user_3.address()).unwrap(),
+        0
+    );
+    assert_eq!(
+        to_contract_err(
+            token
+                .xfer_from(&user_3, user.address(), user_3.address(), 1,)
+                .err()
+                .unwrap()
+        ),
+        ContractError::AllowanceError
+    );
 }
 
 #[test]

@@ -496,6 +496,11 @@ impl Host {
         self.with_frame(Frame::TestContract(TestContractFrame::new(id, func)), f)
     }
 
+    #[cfg(any(test, feature = "testutils"))]
+    pub fn reset_temp_storage(&self) {
+        *self.0.temp_storage.borrow_mut() = Default::default();
+    }
+
     /// Returns [`Hash`] contract ID from the VM frame at the top of the context
     /// stack, or a [`HostError`] if the context stack is empty or has a non-VM
     /// frame at its top.
