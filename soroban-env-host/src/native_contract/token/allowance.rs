@@ -8,7 +8,7 @@ use soroban_env_common::{CheckedEnv, TryIntoVal};
 // Metering: covered by components
 pub fn read_allowance(e: &Host, from: ScAddress, spender: ScAddress) -> Result<i128, HostError> {
     let key = DataKey::Allowance(AllowanceDataKey { from, spender });
-    if let Ok(allowance) = e.get_contract_data(key.try_into_val(e)?) {
+    if let Ok(allowance) = e.get_tmp_contract_data(key.try_into_val(e)?) {
         Ok(allowance.try_into_val(e)?)
     } else {
         Ok(0)
@@ -23,7 +23,7 @@ pub fn write_allowance(
     amount: i128,
 ) -> Result<(), HostError> {
     let key = DataKey::Allowance(AllowanceDataKey { from, spender });
-    e.put_contract_data(key.try_into_val(e)?, amount.try_into_val(e)?)?;
+    e.put_tmp_contract_data(key.try_into_val(e)?, amount.try_into_val(e)?)?;
     Ok(())
 }
 

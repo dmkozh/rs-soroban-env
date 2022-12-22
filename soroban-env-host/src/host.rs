@@ -21,11 +21,14 @@ use soroban_env_common::{
     EnvVal, InvokerType, Status, TryConvert, TryFromVal, TryIntoVal, VmCaller, VmCallerCheckedEnv,
 };
 
-use crate::auth::{AbstractAccountHandle, AuthorizationManager, HostAccount};
 use crate::budget::{Budget, CostType};
 use crate::events::{DebugError, DebugEvent, Events};
 use crate::storage::Storage;
 use crate::weak_host::WeakHost;
+use crate::{
+    auth::{AbstractAccountHandle, AuthorizationManager, HostAccount},
+    storage::TempStorage,
+};
 
 use crate::host_object::{HostMap, HostObj, HostObject, HostObjectType, HostVal, HostVec};
 #[cfg(feature = "vm")]
@@ -59,6 +62,7 @@ use self::metered_vector::MeteredVector;
 #[derive(Clone)]
 pub(crate) struct RollbackPoint {
     storage: MeteredOrdMap<Box<LedgerKey>, Option<Box<LedgerEntry>>>,
+    temp_storage: MeteredOrdMap<([u8; 32], ScVal), RawVal>,
     objects: usize,
 }
 
@@ -131,6 +135,7 @@ pub(crate) struct HostImpl {
     ledger: RefCell<Option<LedgerInfo>>,
     objects: RefCell<Vec<HostObject>>,
     storage: RefCell<Storage>,
+    temp_storage: RefCell<TempStorage>,
     pub(crate) context: RefCell<Vec<Frame>>,
     // Note: budget is refcounted and is _not_ deep-cloned when you call HostImpl::deep_clone,
     // mainly because it's not really possible to achieve (the same budget is connected to many
@@ -204,6 +209,7 @@ impl Host {
             ledger: RefCell::new(None),
             objects: Default::default(),
             storage: RefCell::new(storage),
+            temp_storage: Default::default(),
             context: Default::default(),
             budget,
             events: Default::default(),
@@ -365,6 +371,7 @@ impl Host {
         Ok(RollbackPoint {
             objects: self.0.objects.borrow().len(),
             storage: self.0.storage.borrow().map.clone(),
+            temp_storage: self.0.temp_storage.borrow().map.clone(),
         })
     }
 
@@ -401,6 +408,7 @@ impl Host {
         if let Some(rp) = orp {
             self.0.objects.borrow_mut().truncate(rp.objects);
             self.0.storage.borrow_mut().map = rp.storage;
+            self.0.temp_storage.borrow_mut().map = rp.temp_storage;
         }
         Ok(())
     }
@@ -2001,6 +2009,63 @@ impl VmCallerCheckedEnv for Host {
         let salt = self.uint256_from_obj_input("salt", salt)?;
         let id_preimage = self.id_preimage_from_contract(contract_id, salt)?;
         self.create_contract_with_id_preimage(ScContractCode::Token, id_preimage)
+    }
+
+    // Notes on metering: covered by components
+    fn put_tmp_contract_data(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+        k: RawVal,
+        v: RawVal,
+    ) -> Result<RawVal, HostError> {
+        let key = self.from_host_val(k)?;
+        self.0
+            .temp_storage
+            .borrow_mut()
+            .put(self.get_current_contract_id_internal()?.0, key, v)?;
+        Ok(().into())
+    }
+
+    // Notes on metering: covered by components
+    fn has_tmp_contract_data(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+        k: RawVal,
+    ) -> Result<RawVal, HostError> {
+        let key = self.from_host_val(k)?;
+        let res = self
+            .0
+            .temp_storage
+            .borrow_mut()
+            .has(self.get_current_contract_id_internal()?.0, key)?;
+        Ok(RawVal::from_bool(res))
+    }
+
+    // Notes on metering: covered by components
+    fn get_tmp_contract_data(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+        k: RawVal,
+    ) -> Result<RawVal, HostError> {
+        let key = self.from_host_val(k)?;
+        self.0
+            .temp_storage
+            .borrow_mut()
+            .get(self.get_current_contract_id_internal()?.0, key)
+    }
+
+    // Notes on metering: covered by components
+    fn del_tmp_contract_data(
+        &self,
+        _vmcaller: &mut VmCaller<Host>,
+        k: RawVal,
+    ) -> Result<RawVal, HostError> {
+        let key = self.from_host_val(k)?;
+        self.0
+            .temp_storage
+            .borrow_mut()
+            .del(self.get_current_contract_id_internal()?.0, key)?;
+        Ok(().into())
     }
 
     // Notes on metering: here covers the args unpacking. The actual VM work is changed at lower layers.

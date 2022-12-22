@@ -331,6 +331,11 @@ macro_rules! call_macro_with_all_host_functions {
                 /// Deploys a built-in token contract from the current contract.
                 /// `salt` is used to create a unique contract id for the token.
                 {"4", fn create_token_from_contract(salt: Object) -> Object}
+
+                {"5", fn put_tmp_contract_data(k:RawVal, v: RawVal) -> RawVal}
+                {"6", fn has_tmp_contract_data(k:RawVal) -> RawVal}
+                {"7", fn get_tmp_contract_data(k:RawVal) -> RawVal}
+                {"8", fn del_tmp_contract_data(k:RawVal) -> RawVal}
             }
 
             mod call "d" {
