@@ -1,6 +1,7 @@
 use std::{convert::TryInto, rc::Rc};
 
 use crate::{
+    auth::{AuthorizationManager, RecordedSignaturePayload},
     budget::Budget,
     host::{Frame, TestContractFrame},
     host_vec,
@@ -20,6 +21,7 @@ use crate::{
 use ed25519_dalek::Keypair;
 use sha2::digest::crypto_common::Key;
 use soroban_env_common::{
+    xdr::{self, ScAccount, ScAccountId, ScVec},
     xdr::{
         AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext,
         AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountId, AlphaNum12, AlphaNum4,
@@ -27,12 +29,16 @@ use soroban_env_common::{
         Liabilities, PublicKey, ScAddress, ScStatusType, SequenceNumber, SignerKey, Thresholds,
         TrustLineEntry, TrustLineEntryExt, TrustLineEntryV1, TrustLineEntryV1Ext, TrustLineFlags,
     },
-    RawVal,
+    IntoVal, RawVal,
 };
 use soroban_env_common::{CheckedEnv, EnvBase, Symbol, TryFromVal, TryIntoVal};
 use soroban_test_wasms::SIMPLE_ACCOUNT_CONTRACT;
 
 use crate::native_contract::base_types::{Bytes, BytesN};
+
+fn convert_bytes(host: &Host, bytes: &[u8]) -> Bytes {
+    Bytes::try_from_val(host, host.bytes_new_from_slice(bytes).unwrap()).unwrap()
+}
 
 struct TokenTest {
     host: Host,
@@ -69,8 +75,8 @@ impl TokenTest {
             .init(
                 admin.clone(),
                 TokenMetadata {
-                    name: self.convert_bytes(b"abcd"),
-                    symbol: self.convert_bytes(b"123xyz"),
+                    name: convert_bytes(&self.host, b"abcd"),
+                    symbol: convert_bytes(&self.host, b"123xyz"),
                     decimals: 8,
                 },
             )
@@ -229,10 +235,6 @@ impl TokenTest {
         key
     }
 
-    fn convert_bytes(&self, bytes: &[u8]) -> Bytes {
-        Bytes::try_from_val(&self.host, self.host.bytes_new_from_slice(bytes).unwrap()).unwrap()
-    }
-
     fn run_from_contract<T, F>(
         &self,
         contract_id_bytes: &BytesN<32>,
@@ -287,8 +289,8 @@ fn test_smart_token_init_and_balance() {
     let token = TestToken::new(&test.host);
     let admin = TestSigner::Ed25519(&test.admin_key);
     let token_metadata = TokenMetadata {
-        name: test.convert_bytes(&[0, 0, b'a']),
-        symbol: test.convert_bytes(&[255, 123, 0, b'a']),
+        name: convert_bytes(&test.host, &[0, 0, b'a']),
+        symbol: convert_bytes(&test.host, &[255, 123, 0, b'a']),
         decimals: 0xffffffff,
     };
     token.init(admin.address(), token_metadata.clone()).unwrap();
@@ -387,8 +389,8 @@ fn test_native_token_smart_roundtrip() {
                 .init(
                     user.address(),
                     TokenMetadata {
-                        name: test.convert_bytes(b"native"),
-                        symbol: test.convert_bytes(b"native"),
+                        name: convert_bytes(&test.host, b"native"),
+                        symbol: convert_bytes(&test.host, b"native"),
                         decimals: 7,
                     },
                 )
@@ -512,8 +514,8 @@ fn test_classic_asset_roundtrip(asset_code: &[u8]) {
                 .init(
                     user.address(),
                     TokenMetadata {
-                        name: test.convert_bytes(b"native"),
-                        symbol: test.convert_bytes(b"native"),
+                        name: convert_bytes(&test.host, b"native"),
+                        symbol: convert_bytes(&test.host, b"native"),
                         decimals: 7,
                     },
                 )
@@ -1993,4 +1995,78 @@ fn test_custom_account_auth() {
 
     // And they shouldn't work with the old owner signatures.
     assert!(token.mint(&admin, user_address.clone(), 100).is_err());
+}
+
+#[test]
+fn test_recording_auth_for_token() {
+    let snapshot_source = Rc::<MockSnapshotSource>::new(MockSnapshotSource::new());
+    let storage = Storage::with_recording_footprint(snapshot_source);
+    let budget = Budget::default();
+    let host = Host::with_storage_and_budget(
+        storage,
+        budget.clone(),
+        AuthorizationManager::new_recording(budget),
+    );
+    host.set_ledger_info(Default::default());
+
+    let admin_hash = Hash(generate_bytes_array());
+    let admin_address = ScAddress::Contract(admin_hash.clone());
+    let admin_account = ScAccount {
+        account_id: ScAccountId::GenericAccount(admin_hash.clone()),
+        invocations: vec![].try_into().unwrap(),
+        signature_args: ScVec(vec![].try_into().unwrap()),
+    };
+    let token = TestToken::new(&host);
+    token
+        .init(
+            admin_address.clone(),
+            TokenMetadata {
+                name: convert_bytes(&host, b"abcd"),
+                symbol: convert_bytes(&host, b"123xyz"),
+                decimals: 8,
+            },
+        )
+        .unwrap();
+
+    let user = ScAddress::Contract(Hash(generate_bytes_array()));
+    let args_vec = host_vec![&host, admin_account, user.clone(), 100_i128];
+
+    host.call(
+        token.id.clone().into(),
+        Symbol::from_str("mint"),
+        args_vec.clone().into(),
+    )
+    .unwrap();
+    let recorded_payloads = host.get_recorded_account_signature_payloads().unwrap();
+
+    assert_eq!(
+        recorded_payloads,
+        vec![RecordedSignaturePayload {
+            account_address: admin_address.clone(),
+            invocations: vec![xdr::AuthorizedInvocation {
+                call_stack: vec![xdr::ContractInvocation {
+                    contract_id: Hash(token.id.to_array().unwrap()),
+                    function_name: "mint".try_into().unwrap(),
+                }]
+                .try_into()
+                .unwrap(),
+                top_args: ScVec(
+                    vec![
+                        user.try_into_val(&host)
+                            .unwrap()
+                            .try_into_val(&host)
+                            .unwrap(),
+                        <i128 as soroban_env_common::IntoVal<Host, RawVal>>::into_val(
+                            100_i128, &host
+                        )
+                        .try_into_val(&host)
+                        .unwrap(),
+                    ]
+                    .try_into()
+                    .unwrap()
+                ),
+                nonce: Some(0),
+            }]
+        }]
+    );
 }

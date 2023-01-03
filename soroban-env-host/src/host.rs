@@ -21,10 +21,13 @@ use soroban_env_common::{
     EnvVal, InvokerType, Status, TryConvert, TryFromVal, TryIntoVal, VmCaller, VmCallerCheckedEnv,
 };
 
-use crate::budget::{Budget, CostType};
 use crate::events::{DebugError, DebugEvent, Events};
 use crate::storage::Storage;
 use crate::weak_host::WeakHost;
+use crate::{
+    auth::RecordedSignaturePayload,
+    budget::{Budget, CostType},
+};
 use crate::{
     auth::{AbstractAccountHandle, AuthorizationManager, HostAccount},
     storage::TempStorage,
@@ -1173,6 +1176,15 @@ impl Host {
             _ => Err(self.err_general("no frames to derive the invoker from")),
         }?;
         Ok(hash)
+    }
+
+    pub fn get_recorded_account_signature_payloads(
+        &self,
+    ) -> Result<Vec<RecordedSignaturePayload>, HostError> {
+        self.0
+            .authorization_manager
+            .borrow()
+            .get_recorded_signature_payloads()
     }
 }
 

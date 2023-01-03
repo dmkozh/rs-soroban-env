@@ -135,6 +135,15 @@ impl<'a> TestSigner<'a> {
     }
 }
 
+impl TryIntoVal<Host, RawVal> for ScAccount {
+    type Error = HostError;
+
+    fn try_into_val(self, env: &Host) -> Result<RawVal, Self::Error> {
+        let sc_obj = ScVal::Object(Some(ScObject::Account(self)));
+        Ok(env.to_host_val(&sc_obj)?.val)
+    }
+}
+
 pub(crate) struct AccountAuthBuilder<'a, 'b> {
     host: &'a Host,
     signer: &'a TestSigner<'b>,
@@ -193,7 +202,8 @@ impl<'a, 'b> AccountAuthBuilder<'a, 'b> {
                 .host
                 .add_host_object(HostAccount::InvokerContract(id.clone()))
                 .unwrap()
-                .into(),
+                .val
+                .to_raw(),
             _ => {
                 let account_id = self.signer.get_account_id();
                 let signature_payload_preimage =
@@ -216,11 +226,10 @@ impl<'a, 'b> AccountAuthBuilder<'a, 'b> {
                     invocations: self.invocations.clone().try_into().unwrap(),
                     signature_args,
                 };
-                let sc_obj = ScVal::Object(Some(ScObject::Account(account)));
-                self.host.to_host_val(&sc_obj).unwrap()
+                account.try_into_val(&self.host).unwrap()
             }
         };
-        Account::try_from_val(self.host, host_acc.val).unwrap()
+        Account::try_from_val(self.host, host_acc).unwrap()
     }
 }
 

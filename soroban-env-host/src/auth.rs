@@ -9,7 +9,9 @@ use soroban_env_common::{CheckedEnv, EnvBase, RawVal, Symbol};
 use crate::budget::Budget;
 use crate::host::metered_clone::MeteredClone;
 use crate::host::Frame;
-use crate::native_contract::account_contract::{check_account_authentication, check_generic_account_auth};
+use crate::native_contract::account_contract::{
+    check_account_authentication, check_generic_account_auth,
+};
 use crate::native_contract::base_types::BytesN;
 use crate::{Host, HostError};
 
@@ -60,6 +62,12 @@ pub(crate) struct AuthorizedInvocation {
     pub(crate) nonce: Option<u64>,
 }
 
+#[derive(Eq, PartialEq, Debug)]
+pub struct RecordedSignaturePayload {
+    pub account_address: ScAddress,
+    pub invocations: Vec<xdr::AuthorizedInvocation>,
+}
+
 #[derive(Clone)]
 pub struct AuthorizationManager {
     mode: AuthorizationMode,
@@ -87,6 +95,20 @@ impl ContractInvocation {
     fn to_xdr(&self, budget: &Budget) -> Result<xdr::ContractInvocation, HostError> {
         Ok(xdr::ContractInvocation {
             contract_id: self.contract_id.metered_clone(budget)?,
+            function_name: self
+                .function_name
+                .to_string()
+                .try_into()
+                .map_err(|_| HostError::from(ScUnknownErrorCode::General))?,
+        })
+    }
+
+    // Non-metered conversion should only be used for the recording preflight
+    // runs.
+    fn to_xdr_non_metered(&self) -> Result<xdr::ContractInvocation, HostError> {
+        Ok(xdr::ContractInvocation {
+            contract_id: self.contract_id.clone(),
+            // This ideally should be infallible
             function_name: self
                 .function_name
                 .to_string()
@@ -124,6 +146,22 @@ impl AuthorizedInvocation {
                 .try_into()
                 .map_err(|_| HostError::from(ScUnknownErrorCode::General))?,
             // TODO: should be metered?
+            top_args: self.top_args.clone(),
+            nonce: self.nonce.clone(),
+        })
+    }
+
+    // Non-metered conversion should only be used for the recording preflight
+    // runs.
+    fn to_xdr_non_metered(&self) -> Result<xdr::AuthorizedInvocation, HostError> {
+        Ok(xdr::AuthorizedInvocation {
+            call_stack: self
+                .call_stack
+                .iter()
+                .map(|c| c.to_xdr_non_metered())
+                .collect::<Result<Vec<xdr::ContractInvocation>, HostError>>()?
+                .try_into()
+                .map_err(|_| HostError::from(ScUnknownErrorCode::General))?,
             top_args: self.top_args.clone(),
             nonce: self.nonce.clone(),
         })
@@ -259,12 +297,20 @@ impl AuthorizationManager {
         }
     }
 
-    // pub(crate) fn account_to_xdr(
-    //     &self,
-    //     account_handle: &AccountHandle,
-    // ) -> Result<ScObject, HostError> {
-    //     self.get_account(account_handle)?.to_xdr(&self.budget)
-    // }
+    pub(crate) fn get_recorded_signature_payloads(
+        &self,
+    ) -> Result<Vec<RecordedSignaturePayload>, HostError> {
+        if self.mode != AuthorizationMode::Recording {
+            // This should only be called in recording mode and probably should
+            // crash instead if called outside of it.
+            return Err(ScUnknownErrorCode::General.into());
+        }
+        Ok(self
+            .accounts
+            .iter()
+            .map(|acc| acc.get_recorded_signature_payload())
+            .collect::<Result<Vec<RecordedSignaturePayload>, HostError>>()?)
+    }
 
     pub(crate) fn authorize(
         &mut self,
@@ -395,15 +441,15 @@ impl AbstractAccount {
         Ok(())
     }
 
-    fn to_xdr(&self, budget: &Budget) -> Result<ScObject, HostError> {
-        Ok(ScObject::Account(ScAccount {
-            account_id: self.account_id.metered_clone(budget)?,
-            invocations: self.invocations_to_xdr(budget)?,
-            // Return no signatures here as this is intended to only be called
-            // for the recording mode (i.e. we only need account XDR *before*
-            // signing it).
-            signature_args: Default::default(),
-        }))
+    fn get_recorded_signature_payload(&self) -> Result<RecordedSignaturePayload, HostError> {
+        Ok(RecordedSignaturePayload {
+            account_address: self.address.clone(),
+            invocations: self
+                .authorized_invocations
+                .iter()
+                .map(|ai| ai.to_xdr_non_metered())
+                .collect::<Result<Vec<xdr::AuthorizedInvocation>, HostError>>()?,
+        })
     }
 
     fn invocations_to_xdr(
