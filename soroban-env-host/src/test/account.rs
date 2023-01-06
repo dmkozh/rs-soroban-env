@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use soroban_env_common::CheckedEnv;
 
 use crate::{

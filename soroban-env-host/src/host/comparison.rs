@@ -6,13 +6,14 @@ use soroban_env_common::{
         DataEntry, Hash, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, LedgerKeyAccount,
         LedgerKeyClaimableBalance, LedgerKeyConfigSetting, LedgerKeyContractCode, LedgerKeyData,
         LedgerKeyLiquidityPool, LedgerKeyOffer, LedgerKeyTrustLine, LiquidityPoolEntry, OfferEntry,
-        PublicKey, ScContractCode, ScMap, ScObject, ScVal, ScVec, TrustLineAsset, TrustLineEntry,
-        Uint256,
+        PublicKey, ScAddress, ScContractCode, ScMap, ScObject, ScVal, ScVec, TrustLineAsset,
+        TrustLineEntry, Uint256,
     },
     Compare,
 };
 
 use crate::{
+    auth::HostAccount,
     budget::{AsBudget, Budget, CostType},
     host_object::HostObject,
     Host, HostError,
@@ -32,6 +33,8 @@ fn host_obj_discriminant(ho: &HostObject) -> usize {
         HostObject::Bytes(_) => 6,
         HostObject::ContractCode(_) => 7,
         HostObject::AccountId(_) => 8,
+        HostObject::Account(_) => 9,
+        HostObject::Address(_) => 10,
     }
 }
 
@@ -50,6 +53,8 @@ impl Compare<HostObject> for Host {
             (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
             (ContractCode(a), ContractCode(b)) => self.as_budget().compare(a, b),
             (AccountId(a), AccountId(b)) => self.as_budget().compare(a, b),
+            (Account(a), Account(b)) => self.as_budget().compare(a, b),
+            (Address(a), Address(b)) => self.as_budget().compare(a, b),
 
             // List out at least one side of all the remaining cases here so
             // we don't accidentally forget to update this when/if a new
@@ -62,7 +67,9 @@ impl Compare<HostObject> for Host {
             | (Map(_), _)
             | (Bytes(_), _)
             | (ContractCode(_), _)
-            | (AccountId(_), _) => {
+            | (AccountId(_), _)
+            | (Account(_), _)
+            | (Address(_), _) => {
                 let a = host_obj_discriminant(a);
                 let b = host_obj_discriminant(b);
                 Ok(a.cmp(&b))
@@ -75,6 +82,15 @@ impl Compare<&[u8]> for Budget {
     type Error = HostError;
 
     fn compare(&self, a: &&[u8], b: &&[u8]) -> Result<Ordering, Self::Error> {
+        self.charge(CostType::BytesCmp, min(a.len(), b.len()) as u64)?;
+        Ok(a.cmp(b))
+    }
+}
+
+impl<const N: usize> Compare<[u8; N]> for Budget {
+    type Error = HostError;
+
+    fn compare(&self, a: &[u8; N], b: &[u8; N]) -> Result<Ordering, Self::Error> {
         self.charge(CostType::BytesCmp, min(a.len(), b.len()) as u64)?;
         Ok(a.cmp(b))
     }
@@ -139,6 +155,8 @@ impl_compare_fixed_size_ord_type!(Hash);
 impl_compare_fixed_size_ord_type!(Uint256);
 impl_compare_fixed_size_ord_type!(ScContractCode);
 impl_compare_fixed_size_ord_type!(AccountId);
+impl_compare_fixed_size_ord_type!(HostAccount);
+impl_compare_fixed_size_ord_type!(ScAddress);
 impl_compare_fixed_size_ord_type!(PublicKey);
 impl_compare_fixed_size_ord_type!(TrustLineAsset);
 
@@ -211,7 +229,10 @@ impl Compare<ScVal> for Budget {
                 | (I128(_), _)
                 | (Bytes(_), _)
                 | (ContractCode(_), _)
-                | (AccountId(_), _) => Ok(a.cmp(b)),
+                | (AccountId(_), _)
+                | (Account(_), _)
+                | (Address(_), _)
+                | (NonceKey(_), _) => Ok(a.cmp(b)),
             },
             (Object(_), _)
             | (U63(_), _)

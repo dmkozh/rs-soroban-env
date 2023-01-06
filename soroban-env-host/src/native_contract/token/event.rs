@@ -20,8 +20,8 @@ pub(crate) fn incr_allow(
 
 pub(crate) fn decr_allow(
     e: &Host,
-    from: Identifier,
-    to: Identifier,
+    from: ScAddress,
+    to: ScAddress,
     amount: i128,
 ) -> Result<(), HostError> {
     let mut topics = Vec::new(e)?;

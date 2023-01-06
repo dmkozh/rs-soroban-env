@@ -1,13 +1,17 @@
+use std::rc::Rc;
+
 use soroban_env_common::{
-    xdr::{ScAccount, ScAccountId, ScAddress},
-    Symbol,
+    xdr::{
+        BytesM, LedgerEntry, LedgerKey, ScAccount, ScAccountId, ScAddress, ScMap, ScObject, ScVal,
+    },
+    RawVal,
 };
 
 use crate::{
     budget::{Budget, CostType},
     host::Events,
     storage::AccessType,
-    xdr::{AccountId, Hash, PublicKey, ScContractCode, ScVec, Uint256},
+    xdr::{AccountId, Hash, ScContractCode, ScVec, Uint256},
     HostError,
 };
 
@@ -102,7 +106,10 @@ impl MeteredClone for ScVal {
                     | ScObject::U128(_)
                     | ScObject::I128(_)
                     | ScObject::ContractCode(_)
-                    | ScObject::AccountId(_) => Ok(()),
+                    | ScObject::AccountId(_)
+                    | ScObject::Account(_)
+                    | ScObject::Address(_)
+                    | ScObject::NonceKey(_) => Ok(()),
                 }
             }
             ScVal::Object(None)
@@ -178,6 +185,25 @@ impl<C: MeteredClone> MeteredClone for Box<C> {
     }
 }
 
+impl<C: MeteredClone> MeteredClone for Option<C> {
+    const IS_SHALLOW: bool = C::IS_SHALLOW;
+
+    fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
+        match self {
+            Some(elt) => Ok(Some(elt.metered_clone(budget)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+impl<A: MeteredClone, B: MeteredClone> MeteredClone for (A, B) {
+    const IS_SHALLOW: bool = A::IS_SHALLOW && B::IS_SHALLOW;
+
+    fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
+        Ok((self.0.metered_clone(budget)?, self.1.metered_clone(budget)?))
+    }
+}
+
 impl MeteredClone for ScAccount {
     fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
         // TODO: accounting
@@ -199,29 +225,10 @@ impl MeteredClone for ScAddress {
     }
 }
 
-impl MeteredClone for AccountId {
-    fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
-        match self.0 {
-            PublicKey::PublicKeyTypeEd25519(_) => budget.charge(CostType::BytesClone, 32 as u64)?,
-        }
-        Ok(self.clone())
-    }
-}
-
 impl MeteredClone for Events {
     const IS_SHALLOW: bool = false;
     fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
         budget.charge(CostType::CloneEvents, self.0.len() as u64)?;
         Ok(self.clone())
-    }
-}
-
-impl<T: MeteredClone> MeteredClone for Option<T> {
-    fn metered_clone(&self, budget: &Budget) -> Result<Self, HostError> {
-        if let Some(v) = &self {
-            Ok(Some(v.metered_clone(budget)?))
-        } else {
-            Ok(None)
-        }
     }
 }

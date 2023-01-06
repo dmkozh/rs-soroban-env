@@ -1,10 +1,10 @@
 use std::cmp::Ordering;
 
 use soroban_env_common::xdr::{
-    ContractDataEntry, EnvelopeType, HashIdPreimage, HashIdPreimageContractAuth, LedgerEntry,
-    LedgerEntryData, LedgerEntryExt, ScAccount, ScAccountId, ScAddress, ScObject, ScVal, StringM,
+    ContractDataEntry, HashIdPreimage, HashIdPreimageContractAuth, LedgerEntry, LedgerEntryData,
+    LedgerEntryExt, ScAccount, ScAccountId, ScAddress, ScObject, ScVal,
 };
-use soroban_env_common::{CheckedEnv, EnvBase, RawVal, Symbol};
+use soroban_env_common::{RawVal, Symbol};
 
 use crate::budget::Budget;
 use crate::host::metered_clone::MeteredClone;
@@ -12,11 +12,10 @@ use crate::host::Frame;
 use crate::native_contract::account_contract::{
     check_account_authentication, check_generic_account_auth,
 };
-use crate::native_contract::base_types::BytesN;
 use crate::{Host, HostError};
 
 use super::xdr;
-use super::xdr::{Hash, ScUnknownErrorCode, ScVec, Uint256};
+use super::xdr::{Hash, ScUnknownErrorCode, ScVec};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum HostAccount {
@@ -682,20 +681,23 @@ impl Host {
             contract_id.metered_clone(self.budget_ref())?,
             nonce_key_scval,
         );
-        let curr_nonce: u64 = if self.with_mut_storage(|storage| storage.has(&nonce_key))? {
-            let sc_val = self.with_mut_storage(|storage| match storage.get(&nonce_key)?.data {
-                LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => Ok(val),
-                _ => Err(self.err_general("")),
-            })?;
-            match sc_val {
-                ScVal::Object(Some(ScObject::U64(val))) => val,
-                _ => {
-                    return Err(self.err_general(""));
+        let curr_nonce: u64 =
+            if self.with_mut_storage(|storage| storage.has(&nonce_key, self.budget_ref()))? {
+                let sc_val = self.with_mut_storage(|storage| {
+                    match storage.get(&nonce_key, self.budget_ref())?.data {
+                        LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => Ok(val),
+                        _ => Err(self.err_general("")),
+                    }
+                })?;
+                match sc_val {
+                    ScVal::Object(Some(ScObject::U64(val))) => val,
+                    _ => {
+                        return Err(self.err_general(""));
+                    }
                 }
-            }
-        } else {
-            0
-        };
+            } else {
+                0
+            };
         Ok(curr_nonce)
     }
 
@@ -711,20 +713,23 @@ impl Host {
             contract_id.metered_clone(self.budget_ref())?,
             nonce_key_scval.clone(),
         );
-        let curr_nonce: u64 = if self.with_mut_storage(|storage| storage.has(&nonce_key))? {
-            let sc_val = self.with_mut_storage(|storage| match storage.get(&nonce_key)?.data {
-                LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => Ok(val),
-                _ => Err(self.err_general("")),
-            })?;
-            match sc_val {
-                ScVal::Object(Some(ScObject::U64(val))) => val,
-                _ => {
-                    return Err(self.err_general(""));
+        let curr_nonce: u64 =
+            if self.with_mut_storage(|storage| storage.has(&nonce_key, self.budget_ref()))? {
+                let sc_val = self.with_mut_storage(|storage| {
+                    match storage.get(&nonce_key, self.budget_ref())?.data {
+                        LedgerEntryData::ContractData(ContractDataEntry { val, .. }) => Ok(val),
+                        _ => Err(self.err_general("")),
+                    }
+                })?;
+                match sc_val {
+                    ScVal::Object(Some(ScObject::U64(val))) => val,
+                    _ => {
+                        return Err(self.err_general(""));
+                    }
                 }
-            }
-        } else {
-            0
-        };
+            } else {
+                0
+            };
         let data = LedgerEntryData::ContractData(ContractDataEntry {
             contract_id: contract_id.metered_clone(self.budget_ref())?,
             key: nonce_key_scval,
@@ -735,7 +740,7 @@ impl Host {
             data,
             ext: LedgerEntryExt::V0,
         };
-        self.with_mut_storage(|storage| storage.put(&nonce_key, &entry))?;
+        self.with_mut_storage(|storage| storage.put(&nonce_key, &entry, self.budget_ref()))?;
         Ok(curr_nonce)
     }
 }

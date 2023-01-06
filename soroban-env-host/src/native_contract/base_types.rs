@@ -165,7 +165,7 @@ impl<const N: usize> TryIntoVal<Host, RawVal> for BytesN<N> {
 
 impl<const N: usize> Into<RawVal> for BytesN<N> {
     fn into(self) -> RawVal {
-        self.0.val.into()
+        self.object.into()
     }
 }
 
@@ -358,7 +358,7 @@ impl TryIntoVal<Host, RawVal> for Vec {
 
 impl Into<RawVal> for Vec {
     fn into(self) -> RawVal {
-        self.0.val.into()
+        self.object.into()
     }
 }
 
@@ -481,14 +481,20 @@ pub(crate) fn get_account_id(env: &Host, addr: &ScAddress) -> Result<AccountId, 
 }
 
 #[derive(Clone)]
-pub struct Account(EnvVal<Host, Object>);
+pub struct Account {
+    host: Host,
+    object: Object,
+}
 
 impl TryFromVal<Host, Object> for Account {
     type Error = HostError;
 
-    fn try_from_val(env: &Host, val: Object) -> Result<Self, Self::Error> {
-        if val.is_obj_type(ScObjectType::Account) {
-            Ok(Account(val.in_env(env)))
+    fn try_from_val(env: &Host, obj: Object) -> Result<Self, Self::Error> {
+        if obj.is_obj_type(ScObjectType::Account) {
+            Ok(Account {
+                host: env.clone(),
+                object: obj,
+            })
         } else {
             Err(ConversionError.into())
         }
@@ -506,7 +512,7 @@ impl TryIntoVal<Host, RawVal> for Account {
     type Error = HostError;
 
     fn try_into_val(self, _env: &Host) -> Result<RawVal, Self::Error> {
-        Ok(self.0.val.into())
+        Ok(self.object.into())
     }
 }
 
@@ -520,18 +526,17 @@ impl TryIntoVal<Host, Account> for RawVal {
 
 impl Account {
     pub(crate) fn address(&self) -> Result<ScAddress, HostError> {
-        let e = &self.0.env;
+        let host = &self.host;
         Ok(ScAddress::try_from_val(
-            e,
-            e.get_account_address(self.0.val.clone())?,
+            host,
+            host.get_account_address(self.object.clone())?,
         )?)
     }
 
     pub(crate) fn authorize(&self, args: Vec) -> Result<(), HostError> {
         Ok(self
-            .0
-            .env
-            .authorize_account(self.0.val.into(), args.into())?
+            .host
+            .authorize_account(self.object, args.into())?
             .try_into()?)
     }
 }

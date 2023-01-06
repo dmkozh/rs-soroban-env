@@ -12,25 +12,24 @@ use soroban_env_common::{
         AccountId, Asset, ContractCodeEntry, ContractDataEntry, ContractEvent, ContractEventBody,
         ContractEventType, ContractEventV0, ContractId, CreateContractArgs, ExtensionPoint, Hash,
         HashIdPreimage, HostFunction, HostFunctionType, InstallContractCodeArgs, Int128Parts,
-        LedgerEntry, LedgerEntryData, LedgerKey, LedgerKeyContractCode, ScAddress, ScContractCode,
+        LedgerEntryData, LedgerKey, LedgerKeyContractCode, ScAddress, ScContractCode,
         ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode,
         ScHostValErrorCode, ScMap, ScMapEntry, ScObject, ScStatusType, ScVal, ScVec,
         ThresholdIndexes,
     },
-    Convert, InvokerType, Status, TryFromVal, TryIntoVal, VmCaller, VmCallerCheckedEnv,
+    Convert, InvokerType, Status, TryFromVal, TryIntoVal, VmCaller,
 };
 
-use crate::budget::{AsBudget, Budget, CostType};
+use crate::auth::RecordedSignaturePayload;
 use crate::events::{DebugError, DebugEvent, Events};
 use crate::storage::Storage;
-use crate::weak_host::WeakHost;
 use crate::{
-    auth::RecordedSignaturePayload,
-    budget::{Budget, CostType},
+    auth::{AuthorizationManager, HostAccount},
+    storage::TempStorage,
 };
 use crate::{
-    auth::{AbstractAccountHandle, AuthorizationManager, HostAccount},
-    storage::TempStorage,
+    budget::{AsBudget, Budget, CostType},
+    storage::{StorageMap, TempStorageMap},
 };
 
 use crate::host_object::{HostMap, HostObject, HostObjectType, HostVec};
@@ -63,8 +62,8 @@ use crate::Compare;
 // Notes on metering: `RollbackPoint` are metered under Frame operations
 #[derive(Clone)]
 pub(crate) struct RollbackPoint {
-    storage: MeteredOrdMap<Box<LedgerKey>, Option<Box<LedgerEntry>>>,
-    temp_storage: MeteredOrdMap<([u8; 32], ScVal), RawVal>,
+    storage: StorageMap,
+    temp_storage: TempStorageMap,
     objects: usize,
 }
 
@@ -609,16 +608,15 @@ impl Host {
                     None => Err(self.err_status(ScHostObjErrorCode::UnknownReference)),
                     Some(ho) => {
                         match ho {
-                        HostObject::Vec(vv) => {
-                            // Here covers the cost of space allocating and maneuvering needed to go
-                            // from one structure to the other. The actual conversion work (heavy lifting)
-                            // is covered by `from_host_val`, which is recursive.
-                            self.charge_budget(CostType::ScVecFromHostVec, vv.len() as u64)?;
-                            let sv = vv.iter().map(|e| self.from_host_val(*e)).collect::<Result<
-                                Vec<ScVal>,
-                                HostError,
-                            >>(
-                            )?;
+                            HostObject::Vec(vv) => {
+                                // Here covers the cost of space allocating and maneuvering needed to go
+                                // from one structure to the other. The actual conversion work (heavy lifting)
+                                // is covered by `from_host_val`, which is recursive.
+                                self.charge_budget(CostType::ScVecFromHostVec, vv.len() as u64)?;
+                                let sv = vv
+                                    .iter()
+                                    .map(|e| self.from_host_val(*e))
+                                    .collect::<Result<Vec<ScVal>, HostError>>()?;
                                 Ok(ScObject::Vec(ScVec(self.map_err(sv.try_into())?)))
                             }
                             HostObject::Map(mm) => {
@@ -627,9 +625,9 @@ impl Host {
                                 // is covered by `from_host_val`, which is recursive.
                                 self.charge_budget(CostType::ScMapFromHostMap, mm.len() as u64)?;
                                 let mut mv = Vec::new();
-                                for (k, v) in mm.iter() {
-                                    let key = self.from_host_val(k.val)?;
-                                    let val = self.from_host_val(v.val)?;
+                                for (k, v) in mm.iter(self)? {
+                                    let key = self.from_host_val(*k)?;
+                                    let val = self.from_host_val(*v)?;
                                     mv.push(ScMapEntry { key, val });
                                 }
                                 Ok(ScObject::Map(ScMap(self.map_err(mv.try_into())?)))
@@ -813,10 +811,10 @@ impl Host {
         Ok(id_obj)
     }
 
-    pub fn get_contract_id_from_asset(&self, asset: Asset) -> Result<Object, HostError> {
+    pub(crate) fn get_contract_id_from_asset(&self, asset: Asset) -> Result<Hash, HostError> {
         let id_preimage = self.id_preimage_from_asset(asset)?;
         let id_arr: [u8; 32] = self.metered_hash_xdr(&id_preimage)?;
-        Ok(self.add_host_object(id_arr.to_vec())?)
+        Ok(Hash(id_arr))
     }
 
     // Notes on metering: this is covered by the called components.
@@ -1278,7 +1276,7 @@ impl EnvBase for Host {
     }
 }
 
-impl VmCallerCheckedEnv for Host {
+impl crate::VmCallerCheckedEnv for Host {
     type VmUserState = Host;
     type Error = HostError;
 
@@ -1908,10 +1906,12 @@ impl VmCallerCheckedEnv for Host {
         v: RawVal,
     ) -> Result<RawVal, HostError> {
         let key = self.from_host_val(k)?;
-        self.0
-            .temp_storage
-            .borrow_mut()
-            .put(self.get_current_contract_id_internal()?.0, key, v)?;
+        self.0.temp_storage.borrow_mut().put(
+            self.get_current_contract_id_internal()?.0,
+            key,
+            v,
+            self.budget_ref(),
+        )?;
         Ok(().into())
     }
 
@@ -1922,11 +1922,11 @@ impl VmCallerCheckedEnv for Host {
         k: RawVal,
     ) -> Result<RawVal, HostError> {
         let key = self.from_host_val(k)?;
-        let res = self
-            .0
-            .temp_storage
-            .borrow_mut()
-            .has(self.get_current_contract_id_internal()?.0, key)?;
+        let res = self.0.temp_storage.borrow_mut().has(
+            self.get_current_contract_id_internal()?.0,
+            key,
+            self.budget_ref(),
+        )?;
         Ok(RawVal::from_bool(res))
     }
 
@@ -1937,10 +1937,11 @@ impl VmCallerCheckedEnv for Host {
         k: RawVal,
     ) -> Result<RawVal, HostError> {
         let key = self.from_host_val(k)?;
-        self.0
-            .temp_storage
-            .borrow_mut()
-            .get(self.get_current_contract_id_internal()?.0, key)
+        self.0.temp_storage.borrow_mut().get(
+            self.get_current_contract_id_internal()?.0,
+            key,
+            self.budget_ref(),
+        )
     }
 
     // Notes on metering: covered by components
@@ -1950,10 +1951,11 @@ impl VmCallerCheckedEnv for Host {
         k: RawVal,
     ) -> Result<RawVal, HostError> {
         let key = self.from_host_val(k)?;
-        self.0
-            .temp_storage
-            .borrow_mut()
-            .del(self.get_current_contract_id_internal()?.0, key)?;
+        self.0.temp_storage.borrow_mut().del(
+            self.get_current_contract_id_internal()?.0,
+            key,
+            self.budget_ref(),
+        )?;
         Ok(().into())
     }
 
@@ -2487,7 +2489,7 @@ impl VmCallerCheckedEnv for Host {
                 Ok(ScAddress::Contract(id.metered_clone(self.budget_ref())?))
             }
         })?;
-        Ok(self.add_host_object(address)?.to_object())
+        Ok(self.add_host_object(address)?)
     }
 
     fn get_current_contract_id(
@@ -2495,6 +2497,6 @@ impl VmCallerCheckedEnv for Host {
         vmcaller: &mut VmCaller<Self::VmUserState>,
     ) -> Result<Object, Self::Error> {
         let id = self.get_current_contract_id_internal()?;
-        Ok(self.add_host_object(id.0.to_vec())?.into())
+        Ok(self.add_host_object(id.0.to_vec())?)
     }
 }

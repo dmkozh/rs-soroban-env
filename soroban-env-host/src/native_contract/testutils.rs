@@ -140,7 +140,7 @@ impl TryIntoVal<Host, RawVal> for ScAccount {
 
     fn try_into_val(self, env: &Host) -> Result<RawVal, Self::Error> {
         let sc_obj = ScVal::Object(Some(ScObject::Account(self)));
-        Ok(env.to_host_val(&sc_obj)?.val)
+        env.to_host_val(&sc_obj)
     }
 }
 
@@ -202,7 +202,6 @@ impl<'a, 'b> AccountAuthBuilder<'a, 'b> {
                 .host
                 .add_host_object(HostAccount::InvokerContract(id.clone()))
                 .unwrap()
-                .val
                 .to_raw(),
             _ => {
                 let account_id = self.signer.get_account_id();

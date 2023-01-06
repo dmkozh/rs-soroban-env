@@ -18,7 +18,7 @@ pub enum ContractError {
     NegativeAmountError = 8,
     AllowanceError = 9,
     BalanceError = 10,
-    BalanceFrozenError = 11,
+    BalanceDeauthorizedError = 11,
     OverflowError = 12,
     TrustlineMissingError = 13,
 }

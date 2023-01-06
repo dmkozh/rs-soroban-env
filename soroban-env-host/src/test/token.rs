@@ -2,7 +2,7 @@ use std::{convert::TryInto, rc::Rc};
 
 use crate::{
     auth::{AuthorizationManager, RecordedSignaturePayload},
-    budget::Budget,
+    budget::{AsBudget, Budget},
     host::{Frame, TestContractFrame},
     host_vec,
     native_contract::{
@@ -12,16 +12,15 @@ use crate::{
             signer_to_id_bytes, AccountAuthBuilder, AccountSigner, GenericAccountSigner, HostVec,
             TestSigner,
         },
-        token::{public_types::TokenMetadata, test_token::TestToken},
+        token::test_token::TestToken,
     },
     storage::{test_storage::MockSnapshotSource, Storage},
     test::util::generate_bytes_array,
     Host, HostError, LedgerInfo,
 };
 use ed25519_dalek::Keypair;
-use sha2::digest::crypto_common::Key;
 use soroban_env_common::{
-    xdr::{self, ScAccount, ScAccountId, ScVec},
+    xdr::{self, AccountFlags, ScAccount, ScAccountId, ScVec, Uint256},
     xdr::{
         AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext,
         AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountId, AlphaNum12, AlphaNum4,
@@ -29,7 +28,7 @@ use soroban_env_common::{
         Liabilities, PublicKey, ScAddress, ScStatusType, SequenceNumber, SignerKey, Thresholds,
         TrustLineEntry, TrustLineEntryExt, TrustLineEntryV1, TrustLineEntryV1Ext, TrustLineFlags,
     },
-    IntoVal, RawVal,
+    RawVal,
 };
 use soroban_env_common::{CheckedEnv, EnvBase, Symbol, TryFromVal, TryIntoVal};
 use soroban_test_wasms::SIMPLE_ACCOUNT_CONTRACT;
@@ -43,10 +42,12 @@ fn convert_bytes(host: &Host, bytes: &[u8]) -> Bytes {
 struct TokenTest {
     host: Host,
     admin_key: Keypair,
+    issuer_key: Keypair,
     user_key: Keypair,
     user_key_2: Keypair,
     user_key_3: Keypair,
     user_key_4: Keypair,
+    asset_code: [u8; 4],
 }
 
 impl TokenTest {
@@ -91,20 +92,14 @@ impl TokenTest {
 
         let token = TestToken::new_from_asset(&self.host, asset.clone());
 
-        if let Identifier::Account(new_admin_id) = new_admin.clone() {
+        if let ScAddress::ClassicAccount(new_admin_id) = new_admin.clone() {
             if new_admin_id == issuer_id {
                 return token;
             }
         }
 
         let issuer = TestSigner::account(&issuer_id, vec![&self.issuer_key]);
-        token
-            .set_admin(
-                &issuer,
-                token.nonce(issuer.get_identifier(&self.host)).unwrap(),
-                new_admin,
-            )
-            .unwrap();
+        token.set_admin(&issuer, new_admin.clone()).unwrap();
         token
     }
 
@@ -402,7 +397,6 @@ fn test_classic_asset_init(asset_code: &[u8]) {
         10_000_000
     );
     assert_eq!(token.balance(user.address()).unwrap(), 10_000_000);
- 
 }
 
 #[test]
@@ -467,7 +461,9 @@ fn test_transfer_with_allowance() {
     );
 
     // Allow 10_000_000 units of token to be transferred from user by user 3.
-    token.incr_allow(&user, user_3.address(), 10_000_000).unwrap();
+    token
+        .incr_allow(&user, user_3.address(), 10_000_000)
+        .unwrap();
 
     assert_eq!(
         token.allowance(user.address(), user_3.address()).unwrap(),
@@ -498,31 +494,16 @@ fn test_transfer_with_allowance() {
     );
     // Decrease allow by more than what's left. This will set the allowance to 0
     token
-        .decr_allow(
-            &user,
-            token.nonce(user.get_identifier(&test.host)).unwrap(),
-            user_3.get_identifier(&test.host),
-            10_000_000,
-        )
+        .decr_allow(&user, user_3.address(), 10_000_000)
         .unwrap();
 
     assert_eq!(
-        token
-            .allowance(
-                user.get_identifier(&test.host),
-                user_3.get_identifier(&test.host)
-            )
-            .unwrap(),
+        token.allowance(user.address(), user_3.address()).unwrap(),
         0
     );
 
     token
-        .incr_allow(
-            &user,
-            token.nonce(user.get_identifier(&test.host)).unwrap(),
-            user_3.get_identifier(&test.host),
-            4_000_000,
-        )
+        .incr_allow(&user, user_3.address(), 4_000_000)
         .unwrap();
     // Transfer the remaining allowance to user 3.
     token
@@ -549,7 +530,9 @@ fn test_transfer_with_allowance() {
     );
 
     // Allow 1_000_000 units of token to be transferred from user by user 3.
-    token.approve(&user, user_3.address(), 1_000_000).unwrap();
+    token
+        .incr_allow(&user, user_3.address(), 1_000_000)
+        .unwrap();
 
     assert_eq!(
         token.allowance(user.address(), user_3.address()).unwrap(),
@@ -581,71 +564,31 @@ fn test_burn() {
     let user = TestSigner::Ed25519(&test.user_key);
     let user_2 = TestSigner::Ed25519(&test.user_key_2);
 
-    token
-        .mint(
-            &admin,
-            token.nonce(admin.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
-            100_000_000,
-        )
-        .unwrap();
+    token.mint(&admin, user.address(), 100_000_000).unwrap();
+    assert_eq!(token.balance(user.address()).unwrap(), 100_000_000);
+    assert_eq!(token.balance(user_2.address()).unwrap(), 0);
     assert_eq!(
-        token.balance(user.get_identifier(&test.host)).unwrap(),
-        100_000_000
-    );
-    assert_eq!(token.balance(user_2.get_identifier(&test.host)).unwrap(), 0);
-    assert_eq!(
-        token
-            .allowance(
-                user.get_identifier(&test.host),
-                user_2.get_identifier(&test.host)
-            )
-            .unwrap(),
+        token.allowance(user.address(), user_2.address()).unwrap(),
         0
     );
 
     // Allow 10_000_000 units of token to be transferred from user by user 3.
     token
-        .incr_allow(
-            &user,
-            token.nonce(user.get_identifier(&test.host)).unwrap(),
-            user_2.get_identifier(&test.host),
-            10_000_000,
-        )
+        .incr_allow(&user, user_2.address(), 10_000_000)
         .unwrap();
 
     assert_eq!(
-        token
-            .allowance(
-                user.get_identifier(&test.host),
-                user_2.get_identifier(&test.host)
-            )
-            .unwrap(),
+        token.allowance(user.address(), user_2.address()).unwrap(),
         10_000_000
     );
 
     // Burn 5_000_000 of allowance from user.
-    token
-        .burn_from(
-            &user_2,
-            token.nonce(user_2.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
-            6_000_000,
-        )
-        .unwrap();
-    assert_eq!(
-        token.balance(user.get_identifier(&test.host)).unwrap(),
-        94_000_000
-    );
+    token.burn_from(&user_2, user.address(), 6_000_000).unwrap();
+    assert_eq!(token.balance(user.address()).unwrap(), 94_000_000);
 
-    assert_eq!(token.balance(user_2.get_identifier(&test.host)).unwrap(), 0);
+    assert_eq!(token.balance(user_2.address()).unwrap(), 0);
     assert_eq!(
-        token
-            .allowance(
-                user.get_identifier(&test.host),
-                user_2.get_identifier(&test.host)
-            )
-            .unwrap(),
+        token.allowance(user.address(), user_2.address()).unwrap(),
         4_000_000
     );
 
@@ -653,12 +596,7 @@ fn test_burn() {
     assert_eq!(
         to_contract_err(
             token
-                .burn_from(
-                    &user_2,
-                    token.nonce(user_2.get_identifier(&test.host)).unwrap(),
-                    user.get_identifier(&test.host),
-                    4_000_001,
-                )
+                .burn_from(&user_2, user.address(), 4_000_001,)
                 .err()
                 .unwrap()
         ),
@@ -666,105 +604,48 @@ fn test_burn() {
     );
 
     // Burn the remaining allowance to user 3.
-    token
-        .burn_from(
-            &user_2,
-            token.nonce(user_2.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
-            4_000_000,
-        )
-        .unwrap();
+    token.burn_from(&user_2, user.address(), 4_000_000).unwrap();
 
+    assert_eq!(token.balance(user.address()).unwrap(), 90_000_000);
+    assert_eq!(token.balance(user_2.address()).unwrap(), 0);
     assert_eq!(
-        token.balance(user.get_identifier(&test.host)).unwrap(),
-        90_000_000
-    );
-    assert_eq!(token.balance(user_2.get_identifier(&test.host)).unwrap(), 0);
-    assert_eq!(
-        token
-            .allowance(
-                user.get_identifier(&test.host),
-                user_2.get_identifier(&test.host)
-            )
-            .unwrap(),
+        token.allowance(user.address(), user_2.address()).unwrap(),
         0
     );
 
     // Now call burn
-    token
-        .burn(
-            &user,
-            token.nonce(user.get_identifier(&test.host)).unwrap(),
-            45_000_000,
-        )
-        .unwrap();
+    token.burn(&user, 45_000_000).unwrap();
 
-    assert_eq!(
-        token.balance(user.get_identifier(&test.host)).unwrap(),
-        45_000_000
-    );
+    assert_eq!(token.balance(user.address()).unwrap(), 45_000_000);
 
     // Deauthorize the balance of `user` and then try to burn.
-    token
-        .set_auth(
-            &admin,
-            token.nonce(admin.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
-            false,
-        )
-        .unwrap();
+    token.set_auth(&admin, user.address(), false).unwrap();
 
     // Can't burn while deauthorized
     assert_eq!(
-        to_contract_err(
-            token
-                .burn(
-                    &user,
-                    token.nonce(user.get_identifier(&test.host)).unwrap(),
-                    100,
-                )
-                .err()
-                .unwrap()
-        ),
+        to_contract_err(token.burn(&user, 100,).err().unwrap()),
         ContractError::BalanceDeauthorizedError
     );
 
     // Authorize the balance of `user` and then burn.
-    token
-        .set_auth(
-            &admin,
-            token.nonce(admin.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
-            true,
-        )
-        .unwrap();
+    token.set_auth(&admin, user.address(), true).unwrap();
 
-    token
-        .burn(
-            &user,
-            token.nonce(user.get_identifier(&test.host)).unwrap(),
-            1_000_000,
-        )
-        .unwrap();
+    token.burn(&user, 1_000_000).unwrap();
 
-    assert_eq!(
-        token.balance(user.get_identifier(&test.host)).unwrap(),
-        44_000_000
-    );
+    assert_eq!(token.balance(user.address()).unwrap(), 44_000_000);
 }
 
 #[test]
 fn test_cannot_burn_native() {
     let test = TokenTest::setup();
     let token = TestToken::new_from_asset(&test.host, Asset::Native);
-    let user_acc = signer_to_account_id(&test.host, &test.user_key);
-    let user_id = Identifier::Account(user_acc.clone());
+    let user_acc_id = signer_to_account_id(&test.host, &test.user_key);
 
-    let user_signer = TestSigner::Ed25519(&test.user_key);
-    let user2_signer = TestSigner::Ed25519(&test.user_key_2);
+    let user = TestSigner::account(&user_acc_id, vec![&test.user_key]);
+    let user2 = TestSigner::Ed25519(&test.user_key_2);
 
     test.create_classic_account(
-        &user_acc,
+        &user_acc_id,
         vec![(&test.user_key, 100)],
         100_000_000,
         1,
@@ -774,45 +655,17 @@ fn test_cannot_burn_native() {
         0,
     );
 
-    assert_eq!(token.balance(user_id.clone()).unwrap(), 100_000_000);
+    assert_eq!(token.balance(user.address()).unwrap(), 100_000_000);
 
     assert_eq!(
-        to_contract_err(
-            token
-                .burn(
-                    &user_signer,
-                    token.nonce(user_signer.get_identifier(&test.host)).unwrap(),
-                    1,
-                )
-                .err()
-                .unwrap()
-        ),
+        to_contract_err(token.burn(&user, 1,).err().unwrap()),
         ContractError::OperationNotSupportedError
     );
 
-    token
-        .incr_allow(
-            &user_signer,
-            token.nonce(user_signer.get_identifier(&test.host)).unwrap(),
-            user2_signer.get_identifier(&test.host),
-            100,
-        )
-        .unwrap();
+    token.incr_allow(&user, user2.address(), 100).unwrap();
 
     assert_eq!(
-        to_contract_err(
-            token
-                .burn_from(
-                    &user2_signer,
-                    token
-                        .nonce(user2_signer.get_identifier(&test.host))
-                        .unwrap(),
-                    user_signer.get_identifier(&test.host),
-                    1,
-                )
-                .err()
-                .unwrap()
-        ),
+        to_contract_err(token.burn_from(&user2, user.address(), 1,).err().unwrap()),
         ContractError::OperationNotSupportedError
     );
 }
@@ -828,7 +681,7 @@ fn test_token_authorization() {
     token.mint(&admin, user.address(), 100_000_000).unwrap();
     token.mint(&admin, user_2.address(), 200_000_000).unwrap();
 
-    assert!(!token.authorized(user.address()).unwrap());
+    assert!(token.authorized(user.address()).unwrap());
 
     // Deauthorize the balance of `user`.
     token.set_auth(&admin, user.address(), false).unwrap();
@@ -864,23 +717,23 @@ fn test_clawback() {
 
     assert_eq!(token.balance(user.address()).unwrap(), 100_000_000);
 
-    token.burn(&admin, user.address(), 40_000_000).unwrap();
+    token.clawback(&admin, user.address(), 40_000_000).unwrap();
 
     assert_eq!(token.balance(user.address()).unwrap(), 60_000_000);
 
-    // Can't burn more than the balance
+    // Can't clawback more than the balance
     assert_eq!(
         to_contract_err(
             token
-                .burn(&admin, user.address(), 60_000_001,)
+                .clawback(&admin, user.address(), 60_000_001,)
                 .err()
                 .unwrap()
         ),
         ContractError::BalanceError
     );
 
-    // Burn everything else
-    token.burn(&admin, user.address(), 60_000_000).unwrap();
+    // Clawback everything else
+    token.clawback(&admin, user.address(), 60_000_000).unwrap();
     assert_eq!(token.balance(user.address()).unwrap(), 0);
 }
 
@@ -904,23 +757,38 @@ fn test_set_admin() {
         ContractError::UnauthorizedError
     );
     assert_eq!(
-        to_contract_err(token.burn(&admin, new_admin.address(), 1).err().unwrap()),
+        to_contract_err(
+            token
+                .clawback(&admin, new_admin.address(), 1)
+                .err()
+                .unwrap()
+        ),
         ContractError::UnauthorizedError
     );
     assert_eq!(
-        to_contract_err(token.freeze(&admin, new_admin.address(),).err().unwrap()),
+        to_contract_err(
+            token
+                .set_auth(&admin, new_admin.address(), false,)
+                .err()
+                .unwrap()
+        ),
         ContractError::UnauthorizedError
     );
     assert_eq!(
-        to_contract_err(token.unfreeze(&admin, new_admin.address(),).err().unwrap()),
+        to_contract_err(
+            token
+                .set_auth(&admin, new_admin.address(), true)
+                .err()
+                .unwrap()
+        ),
         ContractError::UnauthorizedError
     );
 
     // The admin functions are now available to the new admin.
     token.mint(&new_admin, admin.address(), 1).unwrap();
-    token.burn(&new_admin, admin.address(), 1).unwrap();
-    token.freeze(&new_admin, admin.address()).unwrap();
-    token.unfreeze(&new_admin, admin.address()).unwrap();
+    token.clawback(&new_admin, admin.address(), 1).unwrap();
+    token.set_auth(&new_admin, admin.address(), false).unwrap();
+    token.set_auth(&new_admin, admin.address(), true).unwrap();
 
     // Return the admin rights to the old admin
     token.set_admin(&new_admin, admin.address()).unwrap();
@@ -932,11 +800,11 @@ fn test_set_admin() {
 fn test_account_spendable_balance() {
     let test = TokenTest::setup();
     let token = TestToken::new_from_asset(&test.host, Asset::Native);
-    let user_acc = signer_to_account_id(&test.host, &test.user_key);
-    let user_id = Identifier::Account(user_acc.clone());
+    let user_acc_id = signer_to_account_id(&test.host, &test.user_key);
+    let user_addr = ScAddress::ClassicAccount(user_acc_id.clone());
 
     test.create_classic_account(
-        &user_acc,
+        &user_acc_id,
         vec![(&test.user_key, 100)],
         100_000_000,
         1,
@@ -946,21 +814,21 @@ fn test_account_spendable_balance() {
         0,
     );
 
-    assert_eq!(token.balance(user_id.clone()).unwrap(), 100_000_000);
+    assert_eq!(token.balance(user_addr.clone()).unwrap(), 100_000_000);
     // base reserve = 5_000_000
     // signer + account = 3 base reserves
-    assert_eq!(token.spendable(user_id.clone()).unwrap(), 85_000_000);
+    assert_eq!(token.spendable(user_addr.clone()).unwrap(), 85_000_000);
 }
 
 #[test]
 fn test_trustline_auth() {
     let test = TokenTest::setup();
     // the admin is the issuer_key
-    let admin_acc = signer_to_account_id(&test.host, &test.issuer_key);
-    let user_acc = signer_to_account_id(&test.host, &test.user_key);
+    let admin_acc_id = signer_to_account_id(&test.host, &test.issuer_key);
+    let user_acc_id = signer_to_account_id(&test.host, &test.user_key);
 
     test.create_classic_account(
-        &admin_acc,
+        &admin_acc_id,
         vec![(&test.admin_key, 100)],
         10_000_000,
         1,
@@ -970,7 +838,7 @@ fn test_trustline_auth() {
         0,
     );
     test.create_classic_account(
-        &user_acc,
+        &user_acc_id,
         vec![(&test.user_key, 100)],
         10_000_000,
         1,
@@ -980,16 +848,14 @@ fn test_trustline_auth() {
         0,
     );
 
-    let admin_id = Identifier::Account(admin_acc.clone());
-    let user_id = Identifier::Account(user_acc.clone());
-
-    let acc_invoker = TestSigner::AccountInvoker;
-    let token = test.default_token_with_admin_id(admin_id.clone());
+    let admin = TestSigner::account(&admin_acc_id, vec![&test.issuer_key]);
+    let user = TestSigner::account(&user_acc_id, vec![&test.user_key]);
+    let token = test.default_token_with_admin_id(&admin.address());
 
     // create a trustline for user_acc so the issuer can mint into it
     test.create_classic_trustline(
-        &user_acc,
-        &admin_acc,
+        &user_acc_id,
+        &admin_acc_id,
         &test.asset_code,
         0,
         10000,
@@ -997,38 +863,27 @@ fn test_trustline_auth() {
         Some((0, 0)),
     );
 
-    //mint to user_id
-    test.run_from_account(admin_acc.clone(), || {
-        token.mint(&acc_invoker, 0, user_id.clone(), 1000)
-    })
-    .unwrap();
+    //mint some token to the user
+    token.mint(&admin, user.address(), 1000).unwrap();
 
-    assert_eq!(token.balance(user_id.clone()).unwrap(), 1000);
+    assert_eq!(token.balance(user.address()).unwrap(), 1000);
 
     // transfer 1 back to the issuer (which gets burned)
-    test.run_from_account(user_acc.clone(), || {
-        token.xfer(&acc_invoker, 0, admin_id.clone(), 1)
-    })
-    .unwrap();
+    token.xfer(&user, admin.address(), 1).unwrap();
 
-    assert_eq!(token.balance(user_id.clone()).unwrap(), 999);
-    assert_eq!(token.balance(admin_id.clone()).unwrap(), i64::MAX.into());
+    assert_eq!(token.balance(user.address()).unwrap(), 999);
+    assert_eq!(token.balance(admin.address()).unwrap(), i64::MAX.into());
 
-    // try to deauthorize trustline, but fail because RevocableFlag is not set on the issuer
+    // try to deauthorize trustline, but fail because RevocableFlag is not set
+    // on the issuer
     assert_eq!(
-        to_contract_err(
-            test.run_from_account(admin_acc.clone(), || {
-                token.set_auth(&acc_invoker, 0, user_id.clone(), false)
-            })
-            .err()
-            .unwrap()
-        ),
+        to_contract_err(token.set_auth(&admin, user.address(), false).err().unwrap()),
         ContractError::OperationNotSupportedError
     );
 
     // Add RevocableFlag to the issuer
     test.create_classic_account(
-        &admin_acc,
+        &admin_acc_id,
         vec![(&test.admin_key, 100)],
         10_000_000,
         1,
@@ -1039,75 +894,44 @@ fn test_trustline_auth() {
     );
 
     // trustline should be deauthorized now.
-    test.run_from_account(admin_acc.clone(), || {
-        token.set_auth(&acc_invoker, 0, user_id.clone(), false)
-    })
-    .unwrap();
+
+    token.set_auth(&admin, user.address(), false).unwrap();
 
     // transfer should fail from deauthorized trustline
     assert_eq!(
-        to_contract_err(
-            test.run_from_account(user_acc.clone(), || {
-                token.xfer(&acc_invoker, 0, admin_id.clone(), 1)
-            })
-            .err()
-            .unwrap()
-        ),
+        to_contract_err(token.xfer(&user, admin.address(), 1).err().unwrap()),
         ContractError::BalanceDeauthorizedError
     );
 
     // mint should also fail for the same reason
     assert_eq!(
-        to_contract_err(
-            test.run_from_account(admin_acc.clone(), || {
-                token.mint(&acc_invoker, 0, user_id.clone(), 1000)
-            })
-            .err()
-            .unwrap()
-        ),
+        to_contract_err(token.mint(&admin, user.address(), 1000).err().unwrap()),
         ContractError::BalanceDeauthorizedError
     );
 
     // Now authorize trustline
-    test.run_from_account(admin_acc.clone(), || {
-        token.set_auth(&acc_invoker, 0, user_id.clone(), true)
-    })
-    .unwrap();
+    token.set_auth(&admin, user.address(), true).unwrap();
 
-    test.run_from_account(user_acc.clone(), || {
-        token.incr_allow(&acc_invoker, 0, admin_id.clone(), 500)
-    })
-    .unwrap();
+    // Balance operations are possible now.
+    token.incr_allow(&user, admin.address(), 500).unwrap();
+    token
+        .xfer_from(&admin, user.address(), admin.address(), 500)
+        .unwrap();
+    token.mint(&admin, user.address(), 1).unwrap();
 
-    test.run_from_account(admin_acc.clone(), || {
-        token.xfer_from(&acc_invoker, 0, user_id.clone(), admin_id, 500)
-    })
-    .unwrap();
-
-    test.run_from_account(admin_acc.clone(), || {
-        token.mint(&acc_invoker, 0, user_id.clone(), 1)
-    })
-    .unwrap();
-
-    assert_eq!(token.balance(user_id.clone()).unwrap(), 500);
+    assert_eq!(token.balance(user.address()).unwrap(), 500);
 
     // try to clawback
     assert_eq!(
-        to_contract_err(
-            test.run_from_account(admin_acc.clone(), || {
-                token.clawback(&acc_invoker, 0, user_id.clone(), 10)
-            })
-            .err()
-            .unwrap()
-        ),
+        to_contract_err(token.clawback(&admin, user.address(), 10).err().unwrap()),
         ContractError::BalanceError
     );
 
     // set TrustlineClawbackEnabledFlag on trustline
     // Also add selling liabilities to test spendable balance
     test.create_classic_trustline(
-        &user_acc,
-        &admin_acc,
+        &user_acc_id,
+        &admin_acc_id,
         &test.asset_code,
         500,
         10000,
@@ -1115,13 +939,10 @@ fn test_trustline_auth() {
         Some((0, 10)),
     );
 
-    test.run_from_account(admin_acc.clone(), || {
-        token.clawback(&acc_invoker, 0, user_id.clone(), 10)
-    })
-    .unwrap();
+    token.clawback(&admin, user.address(), 10).unwrap();
 
-    assert_eq!(token.balance(user_id.clone()).unwrap(), 490);
-    assert_eq!(token.spendable(user_id.clone()).unwrap(), 480);
+    assert_eq!(token.balance(user.address()).unwrap(), 490);
+    assert_eq!(token.spendable(user.address()).unwrap(), 480);
 }
 
 #[test]
@@ -1154,6 +975,16 @@ fn test_account_invoker_auth_with_issuer_admin() {
     let admin_address = ScAddress::ClassicAccount(admin_acc.clone());
     let user_address = ScAddress::ClassicAccount(user_acc.clone());
     let token = test.default_token_with_admin_id(&admin_address);
+    // create a trustline for user_acc so the issuer can mint into it
+    test.create_classic_trustline(
+        &user_acc,
+        &admin_acc,
+        &test.asset_code,
+        0,
+        10000,
+        TrustLineFlags::AuthorizedFlag as u32,
+        Some((0, 0)),
+    );
 
     // Admin invoker can perform admin operation.
     test.run_from_account(admin_acc.clone(), || {
@@ -1176,7 +1007,10 @@ fn test_account_invoker_auth_with_issuer_admin() {
     .unwrap();
 
     assert_eq!(token.balance(user_address.clone()).unwrap(), 1000);
-    assert_eq!(token.balance(admin_address.clone()).unwrap(), 2000);
+    assert_eq!(
+        token.balance(admin_address.clone()).unwrap(),
+        i64::MAX.into()
+    );
 
     // User invoker can't perform admin operation.
     assert_eq!(
@@ -1214,7 +1048,10 @@ fn test_account_invoker_auth_with_issuer_admin() {
     .unwrap();
 
     assert_eq!(token.balance(user_address.clone()).unwrap(), 1300);
-    assert_eq!(token.balance(admin_address.clone()).unwrap(), 1700);
+    assert_eq!(
+        token.balance(admin_address.clone()).unwrap(),
+        i64::MAX.into()
+    );
 
     // Contract invoker can't perform unauthorized admin operation.
     let contract_id = generate_bytes_array();
@@ -1535,12 +1372,13 @@ fn test_classic_account_multisig_auth() {
         0,
     );
     let token = TestToken::new_from_asset(&test.host, Asset::Native);
+    let receiver = TestSigner::Ed25519(&test.user_key).address();
 
     // Success: account weight (60) + 40 = 100
     token
         .xfer(
             &TestSigner::account(&account_id, vec![&test.user_key, &test.user_key_3]),
-            
+            receiver.clone(),
             100,
         )
         .unwrap();
@@ -1549,6 +1387,7 @@ fn test_classic_account_multisig_auth() {
     token
         .xfer(
             &TestSigner::account(&account_id, vec![&test.user_key_2]),
+            receiver.clone(),
             100,
         )
         .unwrap();
@@ -1557,6 +1396,7 @@ fn test_classic_account_multisig_auth() {
     token
         .xfer(
             &TestSigner::account(&account_id, vec![&test.user_key_3, &test.user_key_4]),
+            receiver.clone(),
             100,
         )
         .unwrap();
@@ -1568,6 +1408,7 @@ fn test_classic_account_multisig_auth() {
                 &account_id,
                 vec![&test.user_key, &test.user_key_3, &test.user_key_4],
             ),
+            receiver.clone(),
             100,
         )
         .unwrap();
@@ -1584,6 +1425,7 @@ fn test_classic_account_multisig_auth() {
                     &test.user_key_4,
                 ],
             ),
+            receiver.clone(),
             100,
         )
         .unwrap();
@@ -1592,7 +1434,11 @@ fn test_classic_account_multisig_auth() {
     assert_eq!(
         to_contract_err(
             token
-                .xfer(&TestSigner::account(&account_id, vec![&test.user_key]), 100,)
+                .xfer(
+                    &TestSigner::account(&account_id, vec![&test.user_key]),
+                    receiver.clone(),
+                    100,
+                )
                 .err()
                 .unwrap()
         ),
@@ -1605,6 +1451,7 @@ fn test_classic_account_multisig_auth() {
             token
                 .xfer(
                     &TestSigner::account(&account_id, vec![&test.user_key, &test.user_key_4]),
+                    receiver.clone(),
                     100,
                 )
                 .err()
@@ -1619,6 +1466,7 @@ fn test_classic_account_multisig_auth() {
             token
                 .xfer(
                     &TestSigner::account(&account_id, vec![&test.user_key_3, &test.user_key_3]),
+                    receiver.clone(),
                     100,
                 )
                 .err()
@@ -1636,6 +1484,7 @@ fn test_classic_account_multisig_auth() {
                         &account_id,
                         vec![&test.user_key_3, &test.user_key_4, &test.user_key_3],
                     ),
+                    receiver.clone(),
                     100,
                 )
                 .err()
@@ -1650,6 +1499,7 @@ fn test_classic_account_multisig_auth() {
             token
                 .xfer(
                     &TestSigner::account(&account_id, vec![&test.user_key_3, &test.admin_key],),
+                    receiver.clone(),
                     100,
                 )
                 .err()
@@ -1667,6 +1517,7 @@ fn test_classic_account_multisig_auth() {
                         &account_id,
                         vec![&test.user_key_3, &test.user_key_4, &test.admin_key],
                     ),
+                    receiver.clone(),
                     100,
                 )
                 .err()
@@ -1684,7 +1535,11 @@ fn test_classic_account_multisig_auth() {
     assert_eq!(
         to_contract_err(
             token
-                .xfer(&TestSigner::account(&account_id, too_many_sigs,), 100,)
+                .xfer(
+                    &TestSigner::account(&account_id, too_many_sigs,),
+                    receiver.clone(),
+                    100,
+                )
                 .err()
                 .unwrap()
         ),
@@ -1708,6 +1563,7 @@ fn test_classic_account_multisig_auth() {
                         account_id: account_id,
                         signers: out_of_order_signers,
                     }),
+                    receiver.clone(),
                     100,
                 )
                 .err()
@@ -1733,7 +1589,7 @@ fn test_negative_amounts_are_not_allowed() {
     );
 
     assert_eq!(
-        to_contract_err(token.burn(&admin, user.address(), -1,).err().unwrap()),
+        to_contract_err(token.clawback(&admin, user.address(), -1,).err().unwrap()),
         ContractError::NegativeAmountError
     );
 
@@ -1743,12 +1599,17 @@ fn test_negative_amounts_are_not_allowed() {
     );
 
     assert_eq!(
-        to_contract_err(token.approve(&user, user_2.address(), -1).err().unwrap()),
+        to_contract_err(token.incr_allow(&user, user_2.address(), -1).err().unwrap()),
+        ContractError::NegativeAmountError
+    );
+
+    assert_eq!(
+        to_contract_err(token.decr_allow(&user, user_2.address(), -1).err().unwrap()),
         ContractError::NegativeAmountError
     );
 
     // Approve some balance before doing the negative xfer_from.
-    token.approve(&user, user_2.address(), 10_000).unwrap();
+    token.incr_allow(&user, user_2.address(), 10_000).unwrap();
 
     assert_eq!(
         to_contract_err(
@@ -1770,14 +1631,28 @@ fn test_native_token_classic_balance_boundaries(
     expected_max_balance: i64,
 ) {
     let token = TestToken::new_from_asset(&test.host, Asset::Native);
-    // Try to do smart conversion that would leave balance lower than min.
+
+    let new_balance_key = generate_keypair();
+    let new_balance_acc = signer_to_account_id(&test.host, &new_balance_key);
+    let new_balance_signer = TestSigner::account(&new_balance_acc, vec![&new_balance_key]);
+    test.create_classic_account(
+        &new_balance_acc,
+        vec![(&new_balance_key, 100)],
+        10_000_000,
+        0,
+        [1, 0, 0, 0],
+        None,
+        None,
+        0,
+    );
+
+    // Try to do xfer that would leave balance lower than min.
     assert_eq!(
         to_contract_err(
             token
                 .xfer(
                     &user,
-                    token.nonce(user.get_identifier(&test.host)).unwrap(),
-                    new_balance_signer.get_identifier(&test.host),
+                    new_balance_signer.address(),
                     (init_balance - expected_min_balance + 1).into(),
                 )
                 .err()
@@ -1790,8 +1665,7 @@ fn test_native_token_classic_balance_boundaries(
     token
         .xfer(
             &user,
-            token.nonce(user.get_identifier(&test.host)).unwrap(),
-            new_balance_signer.get_identifier(&test.host),
+            new_balance_signer.address(),
             (init_balance - expected_min_balance).into(),
         )
         .unwrap();
@@ -1801,10 +1675,7 @@ fn test_native_token_classic_balance_boundaries(
     token
         .xfer(
             &new_balance_signer,
-            token
-                .nonce(new_balance_signer.get_identifier(&test.host))
-                .unwrap(),
-            user.get_identifier(&test.host),
+            user.address(),
             (init_balance - expected_min_balance).into(),
         )
         .unwrap();
@@ -1834,10 +1705,7 @@ fn test_native_token_classic_balance_boundaries(
             token
                 .xfer(
                     &large_balance_signer,
-                    token
-                        .nonce(large_balance_signer.get_identifier(&test.host))
-                        .unwrap(),
-                    user.get_identifier(&test.host),
+                    user.address(),
                     (expected_max_balance - init_balance + 1).into(),
                 )
                 .err()
@@ -1851,10 +1719,7 @@ fn test_native_token_classic_balance_boundaries(
     token
         .xfer(
             &large_balance_signer,
-            token
-                .nonce(large_balance_signer.get_identifier(&test.host))
-                .unwrap(),
-            user.get_identifier(&test.host),
+            user.address(),
             (expected_max_balance - init_balance).into(),
         )
         .unwrap();
@@ -2087,8 +1952,7 @@ fn test_wrapped_asset_classic_balance_boundaries(
             token
                 .xfer(
                     &user,
-                    token.nonce(user.get_identifier(&test.host)).unwrap(),
-                    user.get_identifier(&test.host),
+                    user2.address(),
                     (init_balance - expected_min_balance + 1).into(),
                 )
                 .err()
@@ -2101,8 +1965,7 @@ fn test_wrapped_asset_classic_balance_boundaries(
     token
         .xfer(
             &user,
-            token.nonce(user.get_identifier(&test.host)).unwrap(),
-            user2.get_identifier(&test.host),
+            user2.address(),
             (init_balance - expected_min_balance).into(),
         )
         .unwrap();
@@ -2120,8 +1983,7 @@ fn test_wrapped_asset_classic_balance_boundaries(
     token
         .xfer(
             &user2,
-            token.nonce(user2.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
+            user.address(),
             (init_balance - expected_min_balance).into(),
         )
         .unwrap();
@@ -2133,8 +1995,7 @@ fn test_wrapped_asset_classic_balance_boundaries(
             token
                 .mint(
                     &issuer,
-                    token.nonce(issuer.get_identifier(&test.host)).unwrap(),
-                    user.get_identifier(&test.host),
+                    user.address(),
                     (expected_max_balance - init_balance + 1).into(),
                 )
                 .err()
@@ -2148,8 +2009,7 @@ fn test_wrapped_asset_classic_balance_boundaries(
     token
         .mint(
             &issuer,
-            token.nonce(issuer.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
+            user.address(),
             (expected_max_balance - init_balance).into(),
         )
         .unwrap();
@@ -2248,14 +2108,7 @@ fn test_classic_transfers_not_possible_for_unauthorized_asset() {
     );
 
     // Authorized to xfer
-    token
-        .xfer(
-            &user,
-            token.nonce(user.get_identifier(&test.host)).unwrap(),
-            user.get_identifier(&test.host),
-            1.into(),
-        )
-        .unwrap();
+    token.xfer(&user, user.address(), 1_i128).unwrap();
 
     // Override the trustline authorization flag.
     let trustline_key = test.create_classic_trustline(
@@ -2270,17 +2123,7 @@ fn test_classic_transfers_not_possible_for_unauthorized_asset() {
 
     // No longer authorized
     assert_eq!(
-        to_contract_err(
-            token
-                .xfer(
-                    &user,
-                    token.nonce(user.get_identifier(&test.host)).unwrap(),
-                    user.get_identifier(&test.host),
-                    1.into(),
-                )
-                .err()
-                .unwrap()
-        ),
+        to_contract_err(token.xfer(&user, user.address(), 1_i128,).err().unwrap()),
         ContractError::BalanceDeauthorizedError
     );
 
@@ -2396,24 +2239,22 @@ fn test_recording_auth_for_token() {
     );
     host.set_ledger_info(Default::default());
 
-    let admin_hash = Hash(generate_bytes_array());
-    let admin_address = ScAddress::Contract(admin_hash.clone());
+    let admin_acc_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
+        generate_bytes_array(),
+    )));
+    let admin_address = ScAddress::ClassicAccount(admin_acc_id.clone());
     let admin_account = ScAccount {
-        account_id: ScAccountId::GenericAccount(admin_hash.clone()),
+        account_id: ScAccountId::BuiltinClassicAccount(admin_acc_id.clone()),
         invocations: vec![].try_into().unwrap(),
         signature_args: ScVec(vec![].try_into().unwrap()),
     };
-    let token = TestToken::new(&host);
-    token
-        .init(
-            admin_address.clone(),
-            TokenMetadata {
-                name: convert_bytes(&host, b"abcd"),
-                symbol: convert_bytes(&host, b"123xyz"),
-                decimals: 8,
-            },
-        )
-        .unwrap();
+    let token = TestToken::new_from_asset(
+        &host,
+        Asset::CreditAlphanum4(AlphaNum4 {
+            asset_code: AssetCode4([0; 4]),
+            issuer: admin_acc_id.clone(),
+        }),
+    );
 
     let user = ScAddress::Contract(Hash(generate_bytes_array()));
     let args_vec = host_vec![&host, admin_account, user.clone(), 100_i128];

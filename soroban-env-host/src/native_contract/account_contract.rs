@@ -91,7 +91,7 @@ pub(crate) fn check_generic_account_auth(
                 auth_context_vec.into(),
             ],
             // Allow reentry for this function in order to do wallet admin ops
-            // within the auth framework. Maybe there is a more elegant way 
+            // within the auth framework. Maybe there is a more elegant way
             // around this.
             // TODO: check if there are security concerns about this.
             true,
@@ -176,7 +176,7 @@ fn check_classic_account_authentication(
             MAX_ACCOUNT_SIGNATURES
         ));
     }
-    let payload_obj = host.add_host_object(payload.to_vec())?.to_object();
+    let payload_obj = host.add_host_object(payload.to_vec())?;
     let account = host.load_account(account_id.metered_clone(host.budget_ref())?)?;
     let mut prev_pk: Option<BytesN<32>> = None;
     let mut weight = 0u32;

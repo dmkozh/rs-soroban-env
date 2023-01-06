@@ -1,4 +1,4 @@
-pub(crate) use crate::native_contract::base_types::{Bytes, BytesN, Map};
+pub(crate) use crate::native_contract::base_types::{BytesN, Map};
 use soroban_env_common::{xdr::AccountId, TryIntoVal};
 use soroban_native_sdk_macros::contracttype;
 
