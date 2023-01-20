@@ -125,7 +125,7 @@ fn check_non_native(e: &Host) -> Result<(), HostError> {
 // Metering: *mostly* covered by components.
 impl TokenTrait for Token {
     fn init_asset(e: &Host, asset_bytes: Bytes) -> Result<(), HostError> {
-        if has_metadata(e)? {
+        if has_metadata(&e)? {
             return Err(e.err_status_msg(
                 ContractError::AlreadyInitializedError,
                 "token has been already initialized",
@@ -147,20 +147,20 @@ impl TokenTrait for Token {
         }
         match asset {
             Asset::Native => {
-                write_metadata(e, Metadata::Native)?;
+                write_metadata(&e, Metadata::Native)?;
                 //No admin for the Native token
             }
             Asset::CreditAlphanum4(asset4) => {
                 write_administrator(
-                    e,
+                    &e,
                     ScAddress::ClassicAccount(asset4.issuer.metered_clone(e.budget_ref())?),
                 )?;
                 write_metadata(
-                    e,
+                    &e,
                     Metadata::AlphaNum4(AlphaNum4Metadata {
                         asset_code: BytesN::<4>::try_from_val(
                             e,
-                            e.bytes_new_from_slice(&asset4.asset_code.0)?,
+                            &e.bytes_new_from_slice(&asset4.asset_code.0)?,
                         )?,
                         issuer: asset4.issuer,
                     }),
@@ -168,15 +168,15 @@ impl TokenTrait for Token {
             }
             Asset::CreditAlphanum12(asset12) => {
                 write_administrator(
-                    e,
+                    &e,
                     ScAddress::ClassicAccount(asset12.issuer.metered_clone(e.budget_ref())?),
                 )?;
                 write_metadata(
-                    e,
+                    &e,
                     Metadata::AlphaNum12(AlphaNum12Metadata {
                         asset_code: BytesN::<12>::try_from_val(
                             e,
-                            e.bytes_new_from_slice(&asset12.asset_code.0)?,
+                            &e.bytes_new_from_slice(&asset12.asset_code.0)?,
                         )?,
                         issuer: asset12.issuer,
                     }),
@@ -200,14 +200,14 @@ impl TokenTrait for Token {
         check_nonnegative_amount(e, amount)?;
         let from_id = from.address()?;
         let mut args = Vec::new(e)?;
-        args.push(spender.clone())?;
-        args.push(amount.clone())?;
+        args.push(&spender)?;
+        args.push(&amount)?;
         from.authorize(args)?;
         let allowance = read_allowance(&e, from_id.clone(), spender.clone())?;
         let new_allowance = allowance
             .checked_add(amount)
             .ok_or_else(|| e.err_status(ContractError::OverflowError))?;
-        write_allowance(e, from_id.clone(), spender.clone(), new_allowance)?;
+        write_allowance(&e, from_id.clone(), spender.clone(), new_allowance)?;
         event::incr_allow(e, from_id, spender, amount)?;
         Ok(())
     }
@@ -221,8 +221,8 @@ impl TokenTrait for Token {
         check_nonnegative_amount(e, amount)?;
         let from_id = from.address()?;
         let mut args = Vec::new(e)?;
-        args.push(spender.clone())?;
-        args.push(amount.clone())?;
+        args.push(&spender)?;
+        args.push(&amount)?;
         from.authorize(args)?;
         let allowance = read_allowance(&e, from_id.clone(), spender.clone())?;
         if amount >= allowance {
@@ -253,8 +253,8 @@ impl TokenTrait for Token {
         check_nonnegative_amount(e, amount)?;
         let from_id = from.address()?;
         let mut args = Vec::new(e)?;
-        args.push(to.clone())?;
-        args.push(amount)?;
+        args.push(&to)?;
+        args.push(&amount)?;
         from.authorize(args)?;
         spend_balance(e, from_id.clone(), amount)?;
         receive_balance(e, to.clone(), amount)?;
@@ -273,9 +273,9 @@ impl TokenTrait for Token {
         check_nonnegative_amount(e, amount)?;
         let spender_id = spender.address()?;
         let mut args = Vec::new(e)?;
-        args.push(from.clone())?;
-        args.push(to.clone())?;
-        args.push(amount)?;
+        args.push(&from)?;
+        args.push(&to)?;
+        args.push(&amount)?;
         spender.authorize(args)?;
         spend_allowance(e, from.clone(), spender_id, amount)?;
         spend_balance(e, from.clone(), amount)?;
@@ -290,7 +290,7 @@ impl TokenTrait for Token {
         check_non_native(e)?;
         let from_addr = from.address()?;
         let mut args = Vec::new(e)?;
-        args.push(amount)?;
+        args.push(&amount)?;
         from.authorize(args)?;
         spend_balance(&e, from_addr.clone(), amount)?;
         event::burn(e, from_addr, amount)?;
@@ -307,8 +307,8 @@ impl TokenTrait for Token {
         check_nonnegative_amount(e, amount)?;
         check_non_native(e)?;
         let mut args = Vec::new(e)?;
-        args.push(from.clone())?;
-        args.push(amount)?;
+        args.push(&from)?;
+        args.push(&amount)?;
         spender.authorize(args)?;
         spend_allowance(&e, from.clone(), spender.address()?, amount)?;
         spend_balance(&e, from.clone(), amount)?;
@@ -322,8 +322,8 @@ impl TokenTrait for Token {
         check_admin(e, &admin.address()?)?;
         check_clawbackable(&e, from.clone())?;
         let mut args = Vec::new(e)?;
-        args.push(from.clone())?;
-        args.push(amount)?;
+        args.push(&from)?;
+        args.push(&amount)?;
         admin.authorize(args)?;
         spend_balance_no_authorization_check(e, from.clone(), amount.clone())?;
         event::clawback(e, admin.address()?, from, amount)?;
@@ -339,8 +339,8 @@ impl TokenTrait for Token {
     ) -> Result<(), HostError> {
         check_admin(e, &admin.address()?)?;
         let mut args = Vec::new(e)?;
-        args.push(addr.clone())?;
-        args.push(authorize)?;
+        args.push(&addr)?;
+        args.push(&authorize)?;
         admin.authorize(args)?;
         write_authorization(e, addr.clone(), authorize)?;
         event::set_auth(e, admin.address()?, addr, authorize)?;
@@ -352,8 +352,8 @@ impl TokenTrait for Token {
         check_nonnegative_amount(e, amount)?;
         check_admin(e, &admin.address()?)?;
         let mut args = Vec::new(e)?;
-        args.push(to.clone())?;
-        args.push(amount)?;
+        args.push(&to)?;
+        args.push(&amount)?;
         admin.authorize(args)?;
         receive_balance(e, to.clone(), amount)?;
         event::mint(e, admin.address()?, to, amount)?;
@@ -364,7 +364,7 @@ impl TokenTrait for Token {
     fn set_admin(e: &Host, admin: Account, new_admin: ScAddress) -> Result<(), HostError> {
         check_admin(e, &admin.address()?)?;
         let mut args = Vec::new(e)?;
-        args.push(new_admin.clone())?;
+        args.push(&new_admin)?;
         admin.authorize(args)?;
         write_administrator(e, new_admin.clone())?;
         event::set_admin(e, admin.address()?, new_admin)?;

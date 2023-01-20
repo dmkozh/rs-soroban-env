@@ -12,14 +12,27 @@ use soroban_env_common::xdr::{
 };
 use soroban_env_common::{CheckedEnv, TryIntoVal};
 
+use super::storage_types::BalanceValue;
+
+/// This module handles all balance and authorization related logic for both
+/// Accounts and non-Accounts. For Accounts, a trustline is expected (unless this
+/// contract is for the native asset) and trustline semantics will be followed,
+/// while non-Accounts will use ContractData.
+///
+/// Even though non-account balances don't use trustlines, some issuer/trustline
+/// semantics have been implemented for these balances. If the asset issuer has
+/// the AUTH_REQUIRED flag set, then the non-account identifier must first be authorized
+/// by the issuer/admin before it's allowed to hold a balance.
+
 // Metering: *mostly* covered by components. Not sure about `try_into_val`.
 pub fn read_balance(e: &Host, addr: ScAddress) -> Result<i128, HostError> {
     match addr {
         ScAddress::ClassicAccount(acc_id) => Ok(get_classic_balance(e, acc_id)?.0.into()),
         ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
             let key = DataKey::Balance(addr);
-            if let Ok(balance) = e.get_contract_data(key.try_into_val(e)?) {
-                Ok(balance.try_into_val(e)?)
+            if let Ok(raw_balance) = e.get_contract_data(key.try_into_val(e)?) {
+                let balance: BalanceValue = raw_balance.try_into_val(e)?;
+                Ok(balance.amount)
             } else {
                 Ok(0)
             }
@@ -35,10 +48,17 @@ pub fn get_spendable_balance(e: &Host, addr: ScAddress) -> Result<i128, HostErro
     }
 }
 
-// Metering: *mostly* covered by components. Not sure about `try_into_val`.
-fn write_balance(e: &Host, addr: ScAddress, amount: i128) -> Result<(), HostError> {
+fn write_balance_and_auth(
+    e: &Host,
+    addr: ScAddress,
+    amount: i128,
+    authorized: bool,
+) -> Result<(), HostError> {
     let key = DataKey::Balance(addr);
-    e.put_contract_data(key.try_into_val(e)?, amount.try_into_val(e)?)?;
+    e.put_contract_data(
+        key.try_into_val(e)?,
+        BalanceValue { amount, authorized }.try_into_val(e)?,
+    )?;
     Ok(())
 }
 
@@ -66,7 +86,9 @@ pub fn receive_balance(e: &Host, addr: ScAddress, amount: i128) -> Result<(), Ho
             let new_balance = balance
                 .checked_add(amount)
                 .ok_or_else(|| e.err_status(ContractError::OverflowError))?;
-            write_balance(e, addr, new_balance)
+
+            // balance passed the authorization check at the top of this function, so write true.
+            write_balance_and_auth(e, addr, new_balance, true)
         }
     }
 }
@@ -88,21 +110,35 @@ pub fn spend_balance_no_authorization_check(
             transfer_classic_balance(e, acc_id, -(i64_amount as i64))
         }
         ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
-            let balance = read_balance(e, addr.clone())?;
-            if balance < amount {
-                Err(err!(
+            // If a balance exists, calculate new amount and write the existing authorized state as is because
+            // this can be used to clawback when deauthorized.
+            let key = DataKey::Balance(addr.clone());
+            if let Ok(raw_balance) = e.get_contract_data(key.try_into_val(e)?) {
+                let balance: BalanceValue = raw_balance.try_into_val(e)?;
+                if balance.amount < amount {
+                    return Err(err!(
+                        e,
+                        ContractError::BalanceError,
+                        "balance is not sufficient to spend: {} < {}",
+                        balance,
+                        amount
+                    ));
+                } else {
+                    let new_balance = balance
+                        .amount
+                        .checked_sub(amount)
+                        .ok_or_else(|| e.err_status(ContractError::OverflowError))?;
+                    write_balance_and_auth(e, addr, new_balance, balance.authorized)?
+                }
+            } else if amount > 0 {
+                return Err(err!(
                     e,
                     ContractError::BalanceError,
-                    "balance is not sufficient to spend: {} < {}",
-                    balance,
+                    "balance is not sufficient to spend: 0 < {}",
                     amount
-                ))
-            } else {
-                let new_balance = balance
-                    .checked_sub(amount)
-                    .ok_or_else(|| e.err_status(ContractError::OverflowError))?;
-                write_balance(e, addr, new_balance)
+                ));
             }
+            Ok(())
         }
     }
 }
@@ -124,11 +160,12 @@ pub fn is_authorized(e: &Host, addr: ScAddress) -> Result<bool, HostError> {
     match addr {
         ScAddress::ClassicAccount(acc_id) => is_account_authorized(e, acc_id),
         ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
-            let key = DataKey::State(addr);
-            if let Ok(state) = e.get_contract_data(key.try_into_val(e)?) {
-                Ok(state.try_into()?)
+            let key = DataKey::Balance(addr);
+            if let Ok(raw_balance) = e.get_contract_data(key.try_into_val(e)?) {
+                let balance: BalanceValue = raw_balance.try_into_val(e)?;
+                Ok(balance.authorized)
             } else {
-                Ok(true)
+                Ok(!is_asset_auth_required(e)?)
             }
         }
     }
@@ -139,9 +176,15 @@ pub fn write_authorization(e: &Host, addr: ScAddress, authorize: bool) -> Result
     match addr {
         ScAddress::ClassicAccount(acc_id) => set_authorization(e, acc_id, authorize),
         ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
-            let key = DataKey::State(addr);
-            e.put_contract_data(key.try_into_val(e)?, authorize.into())?;
-            Ok(())
+            let key = DataKey::Balance(addr.clone());
+            if let Ok(raw_balance) = e.get_contract_data(key.try_into_val(e)?) {
+                let balance: BalanceValue = raw_balance.try_into_val(e)?;
+                write_balance_and_auth(e, addr, balance.amount, authorize)
+            } else {
+                // Balance does not exist, so write a 0 amount along with the authorization flag.
+                // No need to check auth_required because this function can only be called by the admin.
+                write_balance_and_auth(e, addr, 0, authorize)
+            }
         }
     }
 }
@@ -559,4 +602,17 @@ fn set_trustline_authorization(
         }
         storage.put(&lk, &le, e.as_budget())
     })
+}
+
+fn is_issuer_auth_required(e: &Host, issuer_id: AccountId) -> Result<bool, HostError> {
+    let issuer_acc = e.load_account(issuer_id.clone())?;
+    Ok(issuer_acc.flags & (AccountFlags::RequiredFlag as u32) != 0)
+}
+
+fn is_asset_auth_required(e: &Host) -> Result<bool, HostError> {
+    match read_metadata(e)? {
+        Metadata::Native => Ok(false),
+        Metadata::AlphaNum4(asset) => is_issuer_auth_required(e, asset.issuer),
+        Metadata::AlphaNum12(asset) => is_issuer_auth_required(e, asset.issuer),
+    }
 }

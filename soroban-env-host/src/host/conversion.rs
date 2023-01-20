@@ -299,7 +299,7 @@ impl Host {
             Ok(ScVec(
                 hv.iter()
                     .map(|v| {
-                        ScVal::try_from_val(self, *v)
+                        ScVal::try_from_val(self, v)
                             .map_err(|_| self.err_general("couldn't convert RawVal"))
                     })
                     .collect::<Result<Vec<ScVal>, HostError>>()?

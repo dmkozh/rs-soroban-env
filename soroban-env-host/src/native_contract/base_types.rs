@@ -349,10 +349,10 @@ impl From<Vec> for Object {
 impl TryFromVal<Host, std::vec::Vec<RawVal>> for Vec {
     type Error = HostError;
 
-    fn try_from_val(env: &Host, vals: std::vec::Vec<RawVal>) -> Result<Self, Self::Error> {
+    fn try_from_val(env: &Host, vals: &std::vec::Vec<RawVal>) -> Result<Self, Self::Error> {
         let mut v = Vec::new(env)?;
         for rv in vals {
-            v.push_raw(rv)?
+            v.push_raw(rv.clone())?
         }
         Ok(v)
     }
@@ -417,16 +417,35 @@ impl TryFromVal<Host, RawVal> for AccountId {
 impl TryFromVal<Host, AccountId> for RawVal {
     type Error = HostError;
 
-    fn try_into_val(self, env: &Host) -> Result<RawVal, Self::Error> {
-        Ok(env.add_host_object(self)?.to_raw())
+    fn try_from_val(env: &Host, val: &AccountId) -> Result<RawVal, Self::Error> {
+        Ok(env.add_host_object(val.clone())?.to_raw())
     }
 }
 
-impl TryIntoVal<Host, ScAddress> for RawVal {
+impl TryFromVal<Host, ScAddress> for RawVal {
     type Error = HostError;
 
-    fn try_into_val(self, env: &Host) -> Result<ScAddress, Self::Error> {
-        <_ as TryFromVal<_, RawVal>>::try_from_val(env, self.try_into()?)
+    fn try_from_val(env: &Host, val: &ScAddress) -> Result<RawVal, Self::Error> {
+        Ok(env.add_host_object(val.clone())?.to_raw())
+    }
+}
+
+impl TryFromVal<Host, Object> for ScAddress {
+    type Error = HostError;
+
+    fn try_from_val(env: &Host, val: &Object) -> Result<Self, Self::Error> {
+        let val = *val;
+        env.visit_obj(val, |addr: &ScAddress| Ok(addr.clone()))
+    }
+}
+
+impl TryFromVal<Host, RawVal> for ScAddress {
+    type Error = HostError;
+
+    fn try_from_val(env: &Host, val: &RawVal) -> Result<Self, Self::Error> {
+        let val = *val;
+        let obj: Object = val.try_into()?;
+        ScAddress::try_from_val(env, &obj)
     }
 }
 
@@ -447,38 +466,32 @@ pub struct Account {
 impl TryFromVal<Host, Object> for Account {
     type Error = HostError;
 
-    fn try_from_val(env: &Host, obj: Object) -> Result<Self, Self::Error> {
+    fn try_from_val(env: &Host, obj: &Object) -> Result<Self, Self::Error> {
         if obj.is_obj_type(ScObjectType::Account) {
             Ok(Account {
                 host: env.clone(),
-                object: obj,
+                object: obj.clone(),
             })
         } else {
             Err(ConversionError.into())
         }
     }
 }
-
 impl TryFromVal<Host, RawVal> for Account {
     type Error = HostError;
 
-    fn try_from_val(env: &Host, val: RawVal) -> Result<Self, Self::Error> {
-        <_ as TryFromVal<_, Object>>::try_from_val(env, val.try_into()?)
-    }
-}
-impl TryIntoVal<Host, RawVal> for Account {
-    type Error = HostError;
-
-    fn try_into_val(self, _env: &Host) -> Result<RawVal, Self::Error> {
-        Ok(self.object.into())
+    fn try_from_val(env: &Host, val: &RawVal) -> Result<Self, Self::Error> {
+        let val = *val;
+        let obj: Object = val.try_into()?;
+        Account::try_from_val(env, &obj)
     }
 }
 
-impl TryIntoVal<Host, Account> for RawVal {
+impl TryFromVal<Host, Account> for RawVal {
     type Error = HostError;
 
-    fn try_into_val(self, env: &Host) -> Result<Account, Self::Error> {
-        <_ as TryFromVal<_, RawVal>>::try_from_val(env, self.try_into()?)
+    fn try_from_val(env: &Host, val: &Account) -> Result<RawVal, Self::Error> {
+        Ok(val.object.into())
     }
 }
 
@@ -487,7 +500,7 @@ impl Account {
         let host = &self.host;
         Ok(ScAddress::try_from_val(
             host,
-            host.get_account_address(self.object.clone())?,
+            &host.get_account_address(self.object.clone())?,
         )?)
     }
 

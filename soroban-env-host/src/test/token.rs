@@ -20,7 +20,7 @@ use crate::{
 };
 use ed25519_dalek::Keypair;
 use soroban_env_common::{
-    xdr::{self, AccountFlags, ScAccount, ScAccountId, ScVec, Uint256},
+    xdr::{self, AccountFlags, ScAccount, ScAccountId, ScVal, ScVec, Uint256},
     xdr::{
         AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext,
         AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountId, AlphaNum12, AlphaNum4,
@@ -36,7 +36,7 @@ use soroban_test_wasms::SIMPLE_ACCOUNT_CONTRACT;
 use crate::native_contract::base_types::{Bytes, BytesN};
 
 fn convert_bytes(host: &Host, bytes: &[u8]) -> Bytes {
-    Bytes::try_from_val(host, host.bytes_new_from_slice(bytes).unwrap()).unwrap()
+    Bytes::try_from_val(host, &host.bytes_new_from_slice(bytes).unwrap()).unwrap()
 }
 
 struct TokenTest {
@@ -1058,7 +1058,7 @@ fn test_account_invoker_auth_with_issuer_admin() {
     let contract_invoker = TestSigner::ContractInvoker(Hash(contract_id.clone()));
     let contract_id_bytes = BytesN::<32>::try_from_val(
         &test.host,
-        test.host.bytes_new_from_slice(&contract_id).unwrap(),
+        &test.host.bytes_new_from_slice(&contract_id).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -1085,12 +1085,12 @@ fn test_contract_invoker_auth() {
     let user_contract_address = ScAddress::Contract(Hash(user_contract_id.clone()));
     let admin_contract_id_bytes = BytesN::<32>::try_from_val(
         &test.host,
-        test.host.bytes_new_from_slice(&admin_contract_id).unwrap(),
+        &test.host.bytes_new_from_slice(&admin_contract_id).unwrap(),
     )
     .unwrap();
     let user_contract_id_bytes = BytesN::<32>::try_from_val(
         &test.host,
-        test.host.bytes_new_from_slice(&user_contract_id).unwrap(),
+        &test.host.bytes_new_from_slice(&user_contract_id).unwrap(),
     )
     .unwrap();
     let token = test.default_token_with_admin_id(&admin_contract_address);
@@ -2164,7 +2164,8 @@ fn test_custom_account_auth() {
 
     let admin_public_key = BytesN::<32>::try_from_val(
         &test.host,
-        test.host
+        &test
+            .host
             .bytes_new_from_slice(admin_kp.public.as_bytes().as_slice())
             .unwrap(),
     )
@@ -2192,7 +2193,8 @@ fn test_custom_account_auth() {
     });
     let new_admin_public_key = BytesN::<32>::try_from_val(
         &test.host,
-        test.host
+        &test
+            .host
             .bytes_new_from_slice(new_admin_kp.public.as_bytes().as_slice())
             .unwrap(),
     )
@@ -2203,7 +2205,7 @@ fn test_custom_account_auth() {
     // Create account for the 'set_owner' invocation with the current owner signature.
     let admin_acc = AccountAuthBuilder::new(&test.host, &admin)
         .add_invocation(
-            &BytesN::<32>::try_from_val(&test.host, account_contract_id_obj).unwrap(),
+            &BytesN::<32>::try_from_val(&test.host, &account_contract_id_obj).unwrap(),
             "set_owner",
             host_vec![&test.host, new_admin_public_key.clone()].into(),
         )
@@ -2280,15 +2282,13 @@ fn test_recording_auth_for_token() {
                 .unwrap(),
                 top_args: ScVec(
                     vec![
-                        user.try_into_val(&host)
-                            .unwrap()
-                            .try_into_val(&host)
+                        ScVal::try_from_val(&host, &RawVal::try_from_val(&host, &user).unwrap())
                             .unwrap(),
-                        <i128 as soroban_env_common::IntoVal<Host, RawVal>>::into_val(
-                            100_i128, &host
+                        ScVal::try_from_val(
+                            &host,
+                            &RawVal::try_from_val(&host, &100_i128).unwrap()
                         )
-                        .try_into_val(&host)
-                        .unwrap(),
+                        .unwrap()
                     ]
                     .try_into()
                     .unwrap()

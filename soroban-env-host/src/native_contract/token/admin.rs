@@ -9,7 +9,7 @@ use soroban_env_common::{CheckedEnv, TryFromVal, TryIntoVal};
 fn read_administrator(e: &Host) -> Result<ScAddress, HostError> {
     let key = DataKey::Admin;
     let rv = e.get_contract_data(key.try_into_val(e)?)?;
-    Ok(ScAddress::try_from_val(e, rv)?)
+    Ok(ScAddress::try_from_val(e, &rv)?)
 }
 
 // Metering: covered by components

@@ -51,12 +51,12 @@ impl AuthorizationContext {
             .ok_or_else(|| host.err_general("empty auth call stack"))?;
         let args = HostVec::try_from_val(
             host,
-            host.scvals_to_rawvals(invocation.top_args.0.as_slice())?,
+            &host.scvals_to_rawvals(invocation.top_args.0.as_slice())?,
         )?;
         Ok(Self {
             contract: BytesN::try_from_val(
                 host,
-                host.bytes_new_from_slice(top_invocation.contract_id.0.as_slice())?,
+                &host.bytes_new_from_slice(top_invocation.contract_id.0.as_slice())?,
             )?,
             fn_name: top_invocation.function_name,
             args,
@@ -72,10 +72,10 @@ pub(crate) fn check_generic_account_auth(
     invocations: &Vec<AuthorizedInvocation>,
 ) -> Result<(), HostError> {
     let payload_obj = host.bytes_new_from_slice(signature_payload)?;
-    let signature_args_vec = HostVec::try_from_val(host, signature_args)?;
+    let signature_args_vec = HostVec::try_from_val(host, &signature_args)?;
     let mut auth_context_vec = HostVec::new(host)?;
     for invocation in invocations {
-        auth_context_vec.push(AuthorizationContext::from_invocation(host, invocation)?)?;
+        auth_context_vec.push(&AuthorizationContext::from_invocation(host, invocation)?)?;
     }
     // TODO: auth_context_vec now contains account which may be problematic from
     // the security and safety perspective. Probably AuthorizationManager and Host

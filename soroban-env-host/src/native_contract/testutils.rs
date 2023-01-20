@@ -41,7 +41,7 @@ pub(crate) fn generate_keypair() -> Keypair {
 pub(crate) fn generate_bytes(host: &Host) -> BytesN<32> {
     BytesN::<32>::try_from_val(
         host,
-        host.bytes_new_from_slice(&generate_bytes_array()).unwrap(),
+        &host.bytes_new_from_slice(&generate_bytes_array()).unwrap(),
     )
     .unwrap()
 }
@@ -49,7 +49,7 @@ pub(crate) fn generate_bytes(host: &Host) -> BytesN<32> {
 pub(crate) fn signer_to_id_bytes(host: &Host, key: &Keypair) -> BytesN<32> {
     BytesN::<32>::try_from_val(
         host,
-        host.bytes_new_from_slice(&key.public.to_bytes()).unwrap(),
+        &host.bytes_new_from_slice(&key.public.to_bytes()).unwrap(),
     )
     .unwrap()
 }
@@ -101,7 +101,7 @@ impl<'a> TestSigner<'a> {
                 let mut signatures = HostVec::new(&host).unwrap();
                 for key in &account_signer.signers {
                     signatures
-                        .push(sign_payload_for_account(host, key, payload))
+                        .push(&sign_payload_for_account(host, key, payload))
                         .unwrap();
                 }
                 host_vec![host, Signature::Account(signatures)]
@@ -135,11 +135,20 @@ impl<'a> TestSigner<'a> {
     }
 }
 
-impl TryIntoVal<Host, RawVal> for ScAccount {
+// impl TryIntoVal<Host, RawVal> for ScAccount {
+//     type Error = HostError;
+
+//     fn try_into_val(&self, env: &Host) -> Result<RawVal, Self::Error> {
+//         let sc_obj = ScVal::Object(Some(ScObject::Account(self)));
+//         env.to_host_val(&sc_obj)
+//     }
+// }
+
+impl TryFromVal<Host, ScAccount> for RawVal {
     type Error = HostError;
 
-    fn try_into_val(self, env: &Host) -> Result<RawVal, Self::Error> {
-        let sc_obj = ScVal::Object(Some(ScObject::Account(self)));
+    fn try_from_val(env: &Host, v: &ScAccount) -> Result<Self, Self::Error> {
+        let sc_obj = ScVal::Object(Some(ScObject::Account(v.clone())));
         env.to_host_val(&sc_obj)
     }
 }
@@ -225,10 +234,10 @@ impl<'a, 'b> AccountAuthBuilder<'a, 'b> {
                     invocations: self.invocations.clone().try_into().unwrap(),
                     signature_args,
                 };
-                account.try_into_val(&self.host).unwrap()
+                account.try_into_val(self.host).unwrap()
             }
         };
-        Account::try_from_val(self.host, host_acc).unwrap()
+        Account::try_from_val(self.host, &host_acc).unwrap()
     }
 }
 
@@ -240,13 +249,15 @@ fn sign_payload_for_account(
     AccountEd25519Signature {
         public_key: BytesN::<32>::try_from_val(
             host,
-            host.bytes_new_from_slice(&signer.public.to_bytes())
+            &host
+                .bytes_new_from_slice(&signer.public.to_bytes())
                 .unwrap(),
         )
         .unwrap(),
         signature: BytesN::<64>::try_from_val(
             host,
-            host.bytes_new_from_slice(&signer.sign(payload).to_bytes())
+            &host
+                .bytes_new_from_slice(&signer.sign(payload).to_bytes())
                 .unwrap(),
         )
         .unwrap(),
@@ -260,7 +271,8 @@ pub(crate) fn sign_payload_for_ed25519(
 ) -> BytesN<64> {
     BytesN::<64>::try_from_val(
         host,
-        host.bytes_new_from_slice(&signer.sign(payload).to_bytes())
+        &host
+            .bytes_new_from_slice(&signer.sign(payload).to_bytes())
             .unwrap(),
     )
     .unwrap()
