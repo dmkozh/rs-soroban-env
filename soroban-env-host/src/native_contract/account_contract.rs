@@ -11,7 +11,7 @@ use crate::native_contract::{
 };
 use crate::{err, HostError};
 use core::cmp::Ordering;
-use soroban_env_common::xdr::{Hash, ScAccountId, ThresholdIndexes, Uint256};
+use soroban_env_common::xdr::{Hash, ThresholdIndexes, Uint256};
 use soroban_env_common::{CheckedEnv, EnvBase, RawVal, Symbol, TryFromVal, TryIntoVal};
 
 use crate::native_contract::base_types::Vec as HostVec;
@@ -31,13 +31,6 @@ pub struct AuthorizationContext {
 
 #[derive(Clone)]
 #[contracttype]
-pub enum Signature {
-    Ed25519(BytesN<64>),
-    Account(HostVec),
-}
-
-#[derive(Clone)]
-#[contracttype]
 pub struct AccountEd25519Signature {
     pub public_key: BytesN<32>,
     pub signature: BytesN<64>,
@@ -45,42 +38,42 @@ pub struct AccountEd25519Signature {
 
 impl AuthorizationContext {
     fn from_invocation(host: &Host, invocation: &AuthorizedInvocation) -> Result<Self, HostError> {
-        let top_invocation = invocation
-            .call_stack
-            .last()
-            .ok_or_else(|| host.err_general("empty auth call stack"))?;
-        let args = HostVec::try_from_val(
-            host,
-            &host.scvals_to_rawvals(invocation.top_args.0.as_slice())?,
-        )?;
+        let args =
+            HostVec::try_from_val(host, &host.scvals_to_rawvals(invocation.args.0.as_slice())?)?;
         Ok(Self {
             contract: BytesN::try_from_val(
                 host,
-                &host.bytes_new_from_slice(top_invocation.contract_id.0.as_slice())?,
+                &host.bytes_new_from_slice(invocation.contract_id.0.as_slice())?,
             )?,
-            fn_name: top_invocation.function_name,
+            fn_name: invocation.function_name,
             args,
         })
     }
+}
+
+fn invocation_tree_to_auth_contexts(
+    host: &Host,
+    invocation: &AuthorizedInvocation,
+    out_contexts: &mut HostVec,
+) -> Result<(), HostError> {
+    out_contexts.push(&AuthorizationContext::from_invocation(host, invocation)?)?;
+    for sub_invocation in &invocation.sub_invocations {
+        invocation_tree_to_auth_contexts(host, sub_invocation, out_contexts)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn check_generic_account_auth(
     host: &Host,
     generic_account_contract: &Hash,
     signature_payload: &[u8; 32],
-    signature_args: Vec<RawVal>,
-    invocations: &Vec<AuthorizedInvocation>,
+    signature_args: &Vec<RawVal>,
+    invocation: &AuthorizedInvocation,
 ) -> Result<(), HostError> {
     let payload_obj = host.bytes_new_from_slice(signature_payload)?;
-    let signature_args_vec = HostVec::try_from_val(host, &signature_args)?;
+    let signature_args_vec = HostVec::try_from_val(host, signature_args)?;
     let mut auth_context_vec = HostVec::new(host)?;
-    for invocation in invocations {
-        auth_context_vec.push(&AuthorizationContext::from_invocation(host, invocation)?)?;
-    }
-    // TODO: auth_context_vec now contains account which may be problematic from
-    // the security and safety perspective. Probably AuthorizationManager and Host
-    // should fail on any account access while checking account auth (one more
-    // reason for the special mode for the check_auth invocations).
+    invocation_tree_to_auth_contexts(host, invocation, &mut auth_context_vec)?;
     Ok(host
         .call_n_internal(
             generic_account_contract,
@@ -99,11 +92,11 @@ pub(crate) fn check_generic_account_auth(
         .try_into()?)
 }
 
-pub(crate) fn check_account_authentication(
+pub(crate) fn check_classic_account_authentication(
     host: &Host,
-    account_id: &ScAccountId,
+    account_id: &AccountId,
     payload: &[u8],
-    signature_args: Vec<RawVal>,
+    signature_args: &Vec<RawVal>,
 ) -> Result<(), HostError> {
     if signature_args.len() != 1 {
         return Err(err!(
@@ -113,57 +106,12 @@ pub(crate) fn check_account_authentication(
             signature_args.len() as u32
         ));
     }
-    let signature: Signature = signature_args[0].try_into_val(host).map_err(|_| {
+    let sigs: HostVec = signature_args[0].try_into_val(host).map_err(|_| {
         host.err_status_msg(
             ContractError::AuthenticationError,
             "incompatible signature format",
         )
     })?;
-
-    match &account_id {
-        ScAccountId::BuiltinClassicAccount(acc_id) => {
-            check_classic_account_authentication(host, payload, acc_id, signature)
-        }
-        ScAccountId::BuiltinEd25519(public_key) => {
-            check_ed25519_authentication(host, payload, public_key, signature)
-        }
-        ScAccountId::GenericAccount(_) => Err(host.err_status(ContractError::InternalError)),
-        ScAccountId::BuiltinInvoker => Err(host.err_status(ContractError::InternalError)),
-    }
-}
-
-fn check_ed25519_authentication(
-    host: &Host,
-    payload: &[u8],
-    public_key: &Hash,
-    signature: Signature,
-) -> Result<(), HostError> {
-    if let Signature::Ed25519(signature) = signature {
-        let public_key = host.ed25519_pub_key_from_bytes(&public_key.0)?;
-        let signature = host.signature_from_obj_input("ed25519_sig", signature.into())?;
-        host.verify_sig_ed25519_internal(payload, &public_key, &signature)
-    } else {
-        Err(host.err_status_msg(
-            ContractError::AuthenticationError,
-            "incompatible ed25519 signature format",
-        ))
-    }
-}
-
-fn check_classic_account_authentication(
-    host: &Host,
-    payload: &[u8],
-    account_id: &AccountId,
-    signature: Signature,
-) -> Result<(), HostError> {
-    let sigs = if let Signature::Account(sigs) = signature {
-        sigs
-    } else {
-        return Err(host.err_status_msg(
-            ContractError::AuthenticationError,
-            "incompatible account signature format",
-        ));
-    };
 
     // Check if there is too many signatures: there shouldn't be more
     // signatures then the amount of account signers.
@@ -176,7 +124,7 @@ fn check_classic_account_authentication(
             MAX_ACCOUNT_SIGNATURES
         ));
     }
-    let payload_obj = host.add_host_object(payload.to_vec())?;
+    let payload_obj = host.bytes_new_from_slice(payload)?;
     let account = host.load_account(account_id.metered_clone(host.budget_ref())?)?;
     let mut prev_pk: Option<BytesN<32>> = None;
     let mut weight = 0u32;

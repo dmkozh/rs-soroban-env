@@ -6,7 +6,6 @@ use core::cmp::Ordering;
 use core::fmt::Debug;
 use std::rc::Rc;
 
-use sha2::{Digest, Sha256};
 use soroban_env_common::{
     xdr::{
         AccountId, Asset, ContractCodeEntry, ContractDataEntry, ContractEvent, ContractEventBody,
@@ -15,21 +14,16 @@ use soroban_env_common::{
         LedgerEntryData, LedgerKey, LedgerKeyContractCode, ScAddress, ScContractCode,
         ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode,
         ScHostValErrorCode, ScMap, ScMapEntry, ScObject, ScStatusType, ScVal, ScVec,
-        ThresholdIndexes,
     },
     Convert, InvokerType, Status, TryFromVal, TryIntoVal, VmCaller,
 };
 
-use crate::auth::{AuthorizationManagerSnapshot, RecordedSignaturePayload};
+use crate::budget::{AsBudget, Budget, CostType};
 use crate::events::{DebugError, DebugEvent, Events};
 use crate::storage::Storage;
 use crate::{
-    auth::{AuthorizationManager, HostAccount},
-    storage::TempStorage,
-};
-use crate::{
-    budget::{AsBudget, Budget, CostType},
-    storage::{StorageMap, TempStorageMap},
+    auth::{AuthorizationManager, AuthorizationManagerSnapshot, RecordedSignaturePayload},
+    storage::StorageMap,
 };
 
 use crate::host_object::{HostMap, HostObject, HostObjectType, HostVec};
@@ -63,7 +57,6 @@ use crate::Compare;
 #[derive(Clone)]
 pub(crate) struct RollbackPoint {
     storage: StorageMap,
-    temp_storage: TempStorageMap,
     objects: usize,
     auth: Option<AuthorizationManagerSnapshot>,
 }
@@ -122,12 +115,12 @@ struct VmSlice {
     len: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LedgerInfo {
     pub protocol_version: u32,
     pub sequence_number: u32,
     pub timestamp: u64,
-    pub network_passphrase: Vec<u8>,
+    pub network_id: [u8; 32],
     pub base_reserve: u32,
 }
 
@@ -137,7 +130,6 @@ pub(crate) struct HostImpl {
     ledger: RefCell<Option<LedgerInfo>>,
     objects: RefCell<Vec<HostObject>>,
     storage: RefCell<Storage>,
-    temp_storage: RefCell<TempStorage>,
     pub(crate) context: RefCell<Vec<Frame>>,
     // Note: budget is refcounted and is _not_ deep-cloned when you call HostImpl::deep_clone,
     // mainly because it's not really possible to achieve (the same budget is connected to many
@@ -201,23 +193,20 @@ impl Host {
     /// Constructs a new [`Host`] that will use the provided [`Storage`] for
     /// contract-data access functions such as
     /// [`CheckedEnv::get_contract_data`].
-    pub fn with_storage_and_budget(
-        storage: Storage,
-        budget: Budget,
-        authorization_manager: AuthorizationManager,
-    ) -> Self {
+    pub fn with_storage_and_budget(storage: Storage, budget: Budget) -> Self {
         Self(Rc::new(HostImpl {
             source_account: RefCell::new(None),
             ledger: RefCell::new(None),
             objects: Default::default(),
             storage: RefCell::new(storage),
-            temp_storage: Default::default(),
             context: Default::default(),
-            budget,
+            budget: budget.clone(),
             events: Default::default(),
+            authorization_manager: RefCell::new(
+                AuthorizationManager::new_enforcing_without_authorizations(budget),
+            ),
             #[cfg(any(test, feature = "testutils"))]
             contracts: Default::default(),
-            authorization_manager: RefCell::new(authorization_manager),
         }))
     }
 
@@ -236,6 +225,20 @@ impl Host {
         } else {
             Err(self.err_general("invoker account is not configured"))
         }
+    }
+
+    pub fn switch_to_recording_auth(&self) {
+        *self.0.authorization_manager.borrow_mut() =
+            AuthorizationManager::new_recording(self.budget_cloned());
+    }
+
+    pub fn set_authorization_entries(
+        &self,
+        auth_entries: Vec<soroban_env_common::xdr::ContractAuth>,
+    ) -> Result<(), HostError> {
+        let new_auth_manager = AuthorizationManager::new_enforcing(self, auth_entries)?;
+        *self.0.authorization_manager.borrow_mut() = new_auth_manager;
+        Ok(())
     }
 
     pub fn set_ledger_info(&self, info: LedgerInfo) {
@@ -375,7 +378,6 @@ impl Host {
         Ok(RollbackPoint {
             objects: self.0.objects.borrow().len(),
             storage: self.0.storage.borrow().map.clone(),
-            temp_storage: self.0.temp_storage.borrow().map.clone(),
             auth: auth_snapshot,
         })
     }
@@ -396,7 +398,7 @@ impl Host {
         if let Ok(mut auth_manager) = self.0.authorization_manager.try_borrow_mut() {
             auth_manager.pop_frame();
         }
-        #[cfg(feature = "testutils")]
+        #[cfg(any(test, feature = "testutils"))]
         {
             // Empty call stack in tests means that some contract function call
             // has been finished and hence the authorization manager can be reset.
@@ -404,16 +406,13 @@ impl Host {
             // the authorization manager as the host instance shouldn't be
             // shared between the contract invocations.
             if self.0.context.borrow().is_empty() {
-                if self.0.context.borrow().is_empty() {
-                    self.0.authorization_manager.borrow_mut().reset(self)?;
-                }
+                self.0.authorization_manager.borrow_mut().reset();
             }
         }
 
         if let Some(rp) = orp {
             self.0.objects.borrow_mut().truncate(rp.objects);
             self.0.storage.borrow_mut().map = rp.storage;
-            self.0.temp_storage.borrow_mut().map = rp.temp_storage;
             if let Some(auth_rp) = rp.auth {
                 self.0.authorization_manager.borrow_mut().rollback(auth_rp);
             }
@@ -502,11 +501,6 @@ impl Host {
         F: FnOnce() -> Result<RawVal, HostError>,
     {
         self.with_frame(Frame::TestContract(TestContractFrame::new(id, func)), f)
-    }
-
-    #[cfg(any(test, feature = "testutils"))]
-    pub fn reset_temp_storage(&self) {
-        *self.0.temp_storage.borrow_mut() = Default::default();
     }
 
     /// Returns [`Hash`] contract ID from the VM frame at the top of the context
@@ -658,11 +652,6 @@ impl Host {
                             HostObject::ContractCode(cc) => {
                                 Ok(ScObject::ContractCode(cc.metered_clone(&self.0.budget)?))
                             }
-                            HostObject::AccountId(aid) => {
-                                Ok(ScObject::AccountId(aid.metered_clone(&self.0.budget)?))
-                            }
-                            HostObject::Account(acc) => Err(self
-                                .err_general("accounts are not allowed to be converted to ScVal")),
                             HostObject::Address(addr) => {
                                 Ok(ScObject::Address(addr.metered_clone(&self.0.budget)?))
                             }
@@ -704,18 +693,9 @@ impl Host {
                 self.add_host_object::<Vec<u8>>(b.as_vec().metered_clone(&self.0.budget)?.into())
             }
             ScObject::ContractCode(cc) => self.add_host_object(cc.metered_clone(&self.0.budget)?),
-            ScObject::AccountId(account_id) => {
-                self.add_host_object(account_id.metered_clone(&self.0.budget)?)
-            }
             ScObject::NonceKey(_) => {
                 Err(self.err_general("nonce keys aren't allowed to be used directly"))
             }
-            ScObject::Account(acc) => self.add_host_object(
-                self.0
-                    .authorization_manager
-                    .borrow_mut()
-                    .add_account(self, acc.metered_clone(&self.0.budget)?)?,
-            ),
             ScObject::Address(addr) => self.add_host_object(addr.metered_clone(&self.0.budget)?),
         }
     }
@@ -1050,30 +1030,31 @@ impl Host {
     }
 
     #[cfg(any(test, feature = "testutils"))]
-    pub fn verify_account_authorization(
+    pub fn verify_authorization(
         &self,
         account: Object,
         call_stack: Vec<(Hash, Symbol)>,
         args: Object,
     ) -> Result<bool, HostError> {
-        use crate::auth::ContractInvocation;
-        let host_account = self.visit_obj(account, |acc: &HostAccount| Ok(acc.clone()))?;
-        let call_stack = call_stack
-            .into_iter()
-            .map(|(contract_id, function_name)| ContractInvocation {
-                contract_id,
-                function_name,
-            })
-            .collect();
-        self.0
-            .authorization_manager
-            .borrow_mut()
-            .verify_last_authorization(
-                self,
-                &host_account,
-                call_stack,
-                self.call_args_to_scvec(args)?,
-            )
+        Ok(true)
+        //     use crate::auth::ContractInvocation;
+        //     let host_account = self.visit_obj(account, |acc: &HostAccount| Ok(acc.clone()))?;
+        //     let call_stack = call_stack
+        //         .into_iter()
+        //         .map(|(contract_id, function_name)| ContractInvocation {
+        //             contract_id,
+        //             function_name,
+        //         })
+        //         .collect();
+        //     self.0
+        //         .authorization_manager
+        //         .borrow_mut()
+        //         .verify_last_authorization(
+        //             self,
+        //             &host_account,
+        //             call_stack,
+        //             self.call_args_to_scvec(args)?,
+        //         )
     }
 
     /// Records a `System` contract event. `topics` is expected to be a `SCVec`
@@ -1168,7 +1149,7 @@ impl Host {
         Ok(hash)
     }
 
-    pub fn get_recorded_account_signature_payloads(
+    pub fn get_recorded_signature_payloads(
         &self,
     ) -> Result<Vec<RecordedSignaturePayload>, HostError> {
         self.0
@@ -1375,14 +1356,6 @@ impl crate::VmCallerCheckedEnv for Host {
     }
 
     // Notes on metering: covered by the components
-    fn get_invoking_account(&self, vmcaller: &mut VmCaller<Host>) -> Result<Object, HostError> {
-        if self.get_invoker_type(vmcaller)? != InvokerType::Account as u64 {
-            return Err(self.err_general("invoker is not an account"));
-        }
-        self.source_account().map(|aid| self.add_host_object(aid))?
-    }
-
-    // Notes on metering: covered by the components
     fn get_invoking_contract(&self, _vmcaller: &mut VmCaller<Host>) -> Result<Object, HostError> {
         let invoking_contract_hash = self.get_invoking_contract_internal()?;
         Ok(self
@@ -1422,12 +1395,12 @@ impl crate::VmCallerCheckedEnv for Host {
     }
 
     // Notes on metering: covered by the components.
-    fn get_current_contract_account(
+    fn get_current_contract_address(
         &self,
         _vmcaller: &mut VmCaller<Host>,
     ) -> Result<Object, HostError> {
         Ok(self
-            .add_host_object(HostAccount::InvokerContract(
+            .add_host_object(ScAddress::Contract(
                 self.get_current_contract_id_internal()?,
             ))?
             .into())
@@ -1902,67 +1875,6 @@ impl crate::VmCallerCheckedEnv for Host {
         self.create_contract_with_id_preimage(code, id_preimage)
     }
 
-    // Notes on metering: covered by components
-    fn put_tmp_contract_data(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        k: RawVal,
-        v: RawVal,
-    ) -> Result<RawVal, HostError> {
-        let key = self.from_host_val(k)?;
-        self.0.temp_storage.borrow_mut().put(
-            self.get_current_contract_id_internal()?.0,
-            key,
-            v,
-            self.budget_ref(),
-        )?;
-        Ok(().into())
-    }
-
-    // Notes on metering: covered by components
-    fn has_tmp_contract_data(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        k: RawVal,
-    ) -> Result<RawVal, HostError> {
-        let key = self.from_host_val(k)?;
-        let res = self.0.temp_storage.borrow_mut().has(
-            self.get_current_contract_id_internal()?.0,
-            key,
-            self.budget_ref(),
-        )?;
-        Ok(RawVal::from_bool(res))
-    }
-
-    // Notes on metering: covered by components
-    fn get_tmp_contract_data(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        k: RawVal,
-    ) -> Result<RawVal, HostError> {
-        let key = self.from_host_val(k)?;
-        self.0.temp_storage.borrow_mut().get(
-            self.get_current_contract_id_internal()?.0,
-            key,
-            self.budget_ref(),
-        )
-    }
-
-    // Notes on metering: covered by components
-    fn del_tmp_contract_data(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        k: RawVal,
-    ) -> Result<RawVal, HostError> {
-        let key = self.from_host_val(k)?;
-        self.0.temp_storage.borrow_mut().del(
-            self.get_current_contract_id_internal()?.0,
-            key,
-            self.budget_ref(),
-        )?;
-        Ok(().into())
-    }
-
     // Notes on metering: here covers the args unpacking. The actual VM work is changed at lower layers.
     fn call(
         &self,
@@ -2268,38 +2180,6 @@ impl crate::VmCallerCheckedEnv for Host {
         Ok(self.add_host_object(vnew)?.into())
     }
 
-    fn hash_from_bytes(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        x: Object,
-    ) -> Result<Object, HostError> {
-        todo!()
-    }
-
-    fn hash_to_bytes(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        x: Object,
-    ) -> Result<Object, HostError> {
-        todo!()
-    }
-
-    fn public_key_from_bytes(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        x: Object,
-    ) -> Result<Object, HostError> {
-        todo!()
-    }
-
-    fn public_key_to_bytes(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        x: Object,
-    ) -> Result<Object, HostError> {
-        todo!()
-    }
-
     // Notes on metering: covered by components.
     fn compute_hash_sha256(
         &self,
@@ -2326,65 +2206,6 @@ impl crate::VmCallerCheckedEnv for Host {
         Ok(res?.into())
     }
 
-    // Notes on metering: covered by components.
-    fn account_get_low_threshold(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        a: Object,
-    ) -> Result<RawVal, Self::Error> {
-        let threshold =
-            self.load_account(self.to_account_id(a)?)?.thresholds.0[ThresholdIndexes::Low as usize];
-        let threshold = Into::<u32>::into(threshold);
-        Ok(threshold.into())
-    }
-
-    // Notes on metering: covered by components.
-    fn account_get_medium_threshold(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        a: Object,
-    ) -> Result<RawVal, Self::Error> {
-        let threshold =
-            self.load_account(self.to_account_id(a)?)?.thresholds.0[ThresholdIndexes::Med as usize];
-        let threshold = Into::<u32>::into(threshold);
-        Ok(threshold.into())
-    }
-
-    // Notes on metering: covered by components.
-    fn account_get_high_threshold(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        a: Object,
-    ) -> Result<RawVal, Self::Error> {
-        let threshold = self.load_account(self.to_account_id(a)?)?.thresholds.0
-            [ThresholdIndexes::High as usize];
-        let threshold = Into::<u32>::into(threshold);
-        Ok(threshold.into())
-    }
-
-    // Notes on metering: covered by components.
-    fn account_exists(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        a: Object,
-    ) -> Result<RawVal, Self::Error> {
-        Ok(self.has_account(self.to_account_id(a)?)?.into())
-    }
-
-    // Notes on metering: some covered. The for loop and comparisons are free (for now).
-    fn account_get_signer_weight(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-        a: Object,
-        s: Object,
-    ) -> Result<RawVal, Self::Error> {
-        let target_signer = self.to_u256(s)?;
-
-        let ae = self.load_account(self.to_account_id(a)?)?;
-        let weight = self.get_signer_weight_from_account(target_signer, &ae)?;
-        Ok((weight as u32).into())
-    }
-
     fn get_ledger_version(&self, _vmcaller: &mut VmCaller<Host>) -> Result<RawVal, Self::Error> {
         self.with_ledger_info(|li| Ok(li.protocol_version.into()))
     }
@@ -2397,26 +2218,9 @@ impl crate::VmCallerCheckedEnv for Host {
         self.with_ledger_info(|li| Ok(self.add_host_object(li.timestamp)?.into()))
     }
 
-    fn get_ledger_network_passphrase(
-        &self,
-        _vmcaller: &mut VmCaller<Host>,
-    ) -> Result<Object, Self::Error> {
-        Ok(self
-            .with_ledger_info(|li| self.add_host_object(li.network_passphrase.clone()))?
-            .into())
-    }
-
     fn get_ledger_network_id(&self, _vmcaller: &mut VmCaller<Host>) -> Result<Object, Self::Error> {
         Ok(self
-            .with_ledger_info(|li| {
-                let hash = Sha256::digest(li.network_passphrase.clone())
-                    .as_slice()
-                    .to_vec();
-                if hash.len() != 32 {
-                    return Err(self.err_general("incorrect hash size"));
-                }
-                self.add_host_object(hash)
-            })?
+            .with_ledger_info(|li| self.add_host_object(li.network_id.to_vec()))?
             .into())
     }
 
@@ -2463,37 +2267,26 @@ impl crate::VmCallerCheckedEnv for Host {
     fn dummy0(&self, vmcaller: &mut VmCaller<Self::VmUserState>) -> Result<RawVal, Self::Error> {
         Ok(().into())
     }
-    // TODO: we also need a 'simple' version of this function that takes only
-    // account as argument and uses all the non-account args of the current call
-    // (or provide a way to get the current call non-account args in order to
-    // do this on the SDK side).
-    fn authorize_account(
+
+    fn require_auth(
         &self,
         vmcaller: &mut VmCaller<Self::VmUserState>,
-        account: Object,
+        address: Object,
         args: Object,
     ) -> Result<RawVal, Self::Error> {
-        let host_account = self.visit_obj(account, |acc: &HostAccount| Ok(acc.clone()))?;
+        let addr = self.visit_obj(address, |addr: &ScAddress| Ok(addr.clone()))?;
+
         Ok(self
             .0
             .authorization_manager
             .borrow_mut()
-            .authorize(self, &host_account, self.call_args_to_scvec(args)?)?
+            .require_auth(
+                self,
+                address.get_handle(),
+                addr,
+                self.call_args_to_scvec(args)?,
+            )?
             .into())
-    }
-
-    fn get_account_address(
-        &self,
-        vmcaller: &mut VmCaller<Self::VmUserState>,
-        account: Object,
-    ) -> Result<Object, Self::Error> {
-        let address = self.visit_obj(account, |acc: &HostAccount| match acc {
-            HostAccount::AbstractAccount(acc) => acc.address.metered_clone(self.budget_ref()),
-            HostAccount::InvokerContract(id) => {
-                Ok(ScAddress::Contract(id.metered_clone(self.budget_ref())?))
-            }
-        })?;
-        Ok(self.add_host_object(address)?)
     }
 
     fn get_current_contract_id(

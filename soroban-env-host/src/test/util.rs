@@ -56,14 +56,7 @@ impl Host {
         let snapshot_source = Rc::<MockSnapshotSource>::new(MockSnapshotSource::new());
         let storage = Storage::with_recording_footprint(snapshot_source);
         let budget = Budget::default();
-        let host = Host::with_storage_and_budget(
-            storage,
-            budget.clone(),
-            // Tests should explicitly use the recording auth manager, as only
-            // some of them need auth and also testing auth in the recording
-            // mode may not be necessarily desired for host.
-            AuthorizationManager::new_enforcing(budget),
-        );
+        let host = Host::with_storage_and_budget(storage, budget.clone());
         host.set_ledger_info(Default::default());
         host
     }
@@ -174,17 +167,5 @@ impl Host {
             .try_into_val(self)?;
         self.remove_source_account();
         Ok(id_obj.try_into()?)
-    }
-}
-
-impl Default for LedgerInfo {
-    fn default() -> Self {
-        Self {
-            protocol_version: Default::default(),
-            sequence_number: Default::default(),
-            timestamp: Default::default(),
-            network_passphrase: vec![0; 32],
-            base_reserve: Default::default(),
-        }
     }
 }

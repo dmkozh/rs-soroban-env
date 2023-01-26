@@ -1,17 +1,18 @@
 use crate::budget::AsBudget;
 use crate::host::Host;
+use crate::native_contract::base_types::Address;
 use crate::native_contract::contract_error::ContractError;
 use crate::native_contract::token::metadata::read_metadata;
 use crate::native_contract::token::public_types::Metadata;
 use crate::native_contract::token::storage_types::DataKey;
 use crate::{err, HostError};
-use soroban_env_common::xdr::ScAddress;
 use soroban_env_common::xdr::{
     AccountEntry, AccountEntryExt, AccountEntryExtensionV1Ext, AccountFlags, AccountId,
-    LedgerEntryData, TrustLineAsset, TrustLineEntry, TrustLineEntryExt, TrustLineFlags,
+    LedgerEntryData, ScAddress, TrustLineAsset, TrustLineEntry, TrustLineEntryExt, TrustLineFlags,
 };
 use soroban_env_common::{CheckedEnv, TryIntoVal};
 
+use super::public_types::BytesN;
 use super::storage_types::BalanceValue;
 
 /// This module handles all balance and authorization related logic for both
@@ -25,10 +26,10 @@ use super::storage_types::BalanceValue;
 /// by the issuer/admin before it's allowed to hold a balance.
 
 // Metering: *mostly* covered by components. Not sure about `try_into_val`.
-pub fn read_balance(e: &Host, addr: ScAddress) -> Result<i128, HostError> {
-    match addr {
+pub fn read_balance(e: &Host, addr: Address) -> Result<i128, HostError> {
+    match addr.to_sc_address()? {
         ScAddress::ClassicAccount(acc_id) => Ok(get_classic_balance(e, acc_id)?.0.into()),
-        ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
+        ScAddress::Contract(_) => {
             let key = DataKey::Balance(addr);
             if let Ok(raw_balance) = e.get_contract_data(key.try_into_val(e)?) {
                 let balance: BalanceValue = raw_balance.try_into_val(e)?;
@@ -41,16 +42,16 @@ pub fn read_balance(e: &Host, addr: ScAddress) -> Result<i128, HostError> {
 }
 
 // Metering: *mostly* covered by components.
-pub fn get_spendable_balance(e: &Host, addr: ScAddress) -> Result<i128, HostError> {
-    match addr {
+pub fn get_spendable_balance(e: &Host, addr: Address) -> Result<i128, HostError> {
+    match addr.to_sc_address()? {
         ScAddress::ClassicAccount(acc_id) => Ok(get_classic_balance(e, acc_id)?.1.into()),
-        ScAddress::Contract(_) | ScAddress::Ed25519(_) => read_balance(e, addr),
+        ScAddress::Contract(_) => read_balance(e, addr),
     }
 }
 
 fn write_balance_and_auth(
     e: &Host,
-    addr: ScAddress,
+    addr: Address,
     amount: i128,
     authorized: bool,
 ) -> Result<(), HostError> {
@@ -63,7 +64,7 @@ fn write_balance_and_auth(
 }
 
 // Metering: covered by components.
-pub fn receive_balance(e: &Host, addr: ScAddress, amount: i128) -> Result<(), HostError> {
+pub fn receive_balance(e: &Host, addr: Address, amount: i128) -> Result<(), HostError> {
     if !is_authorized(e, addr.clone())? {
         return Err(e.err_status_msg(
             ContractError::BalanceDeauthorizedError,
@@ -71,7 +72,7 @@ pub fn receive_balance(e: &Host, addr: ScAddress, amount: i128) -> Result<(), Ho
         ));
     }
 
-    match addr {
+    match addr.to_sc_address()? {
         ScAddress::ClassicAccount(acc_id) => {
             let i64_amount = i64::try_from(amount).map_err(|_| {
                 e.err_status_msg(
@@ -81,7 +82,7 @@ pub fn receive_balance(e: &Host, addr: ScAddress, amount: i128) -> Result<(), Ho
             })?;
             Ok(transfer_classic_balance(e, acc_id, i64_amount)?)
         }
-        ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
+        ScAddress::Contract(_) => {
             let balance = read_balance(e, addr.clone())?;
             let new_balance = balance
                 .checked_add(amount)
@@ -96,10 +97,10 @@ pub fn receive_balance(e: &Host, addr: ScAddress, amount: i128) -> Result<(), Ho
 // TODO: Metering analysis
 pub fn spend_balance_no_authorization_check(
     e: &Host,
-    addr: ScAddress,
+    addr: Address,
     amount: i128,
 ) -> Result<(), HostError> {
-    match addr {
+    match addr.to_sc_address()? {
         ScAddress::ClassicAccount(acc_id) => {
             let i64_amount = i64::try_from(amount).map_err(|_| {
                 e.err_status_msg(
@@ -109,7 +110,7 @@ pub fn spend_balance_no_authorization_check(
             })?;
             transfer_classic_balance(e, acc_id, -(i64_amount as i64))
         }
-        ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
+        ScAddress::Contract(_) => {
             // If a balance exists, calculate new amount and write the existing authorized state as is because
             // this can be used to clawback when deauthorized.
             let key = DataKey::Balance(addr.clone());
@@ -144,7 +145,7 @@ pub fn spend_balance_no_authorization_check(
 }
 
 // Metering: covered by components.
-pub fn spend_balance(e: &Host, addr: ScAddress, amount: i128) -> Result<(), HostError> {
+pub fn spend_balance(e: &Host, addr: Address, amount: i128) -> Result<(), HostError> {
     if !is_authorized(e, addr.clone())? {
         return Err(e.err_status_msg(
             ContractError::BalanceDeauthorizedError,
@@ -156,10 +157,10 @@ pub fn spend_balance(e: &Host, addr: ScAddress, amount: i128) -> Result<(), Host
 }
 
 // Metering: *mostly* covered by components. Not sure about `try_into_val`.
-pub fn is_authorized(e: &Host, addr: ScAddress) -> Result<bool, HostError> {
-    match addr {
+pub fn is_authorized(e: &Host, addr: Address) -> Result<bool, HostError> {
+    match addr.to_sc_address()? {
         ScAddress::ClassicAccount(acc_id) => is_account_authorized(e, acc_id),
-        ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
+        ScAddress::Contract(_) => {
             let key = DataKey::Balance(addr);
             if let Ok(raw_balance) = e.get_contract_data(key.try_into_val(e)?) {
                 let balance: BalanceValue = raw_balance.try_into_val(e)?;
@@ -172,10 +173,10 @@ pub fn is_authorized(e: &Host, addr: ScAddress) -> Result<bool, HostError> {
 }
 
 // Metering: *mostly* covered by components. Not sure about `try_into_val`.
-pub fn write_authorization(e: &Host, addr: ScAddress, authorize: bool) -> Result<(), HostError> {
-    match addr {
+pub fn write_authorization(e: &Host, addr: Address, authorize: bool) -> Result<(), HostError> {
+    match addr.to_sc_address()? {
         ScAddress::ClassicAccount(acc_id) => set_authorization(e, acc_id, authorize),
-        ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
+        ScAddress::Contract(_) => {
             let key = DataKey::Balance(addr.clone());
             if let Ok(raw_balance) = e.get_contract_data(key.try_into_val(e)?) {
                 let balance: BalanceValue = raw_balance.try_into_val(e)?;
@@ -190,7 +191,7 @@ pub fn write_authorization(e: &Host, addr: ScAddress, authorize: bool) -> Result
 }
 
 // TODO: Metering analysis
-pub fn check_clawbackable(e: &Host, addr: ScAddress) -> Result<(), HostError> {
+pub fn check_clawbackable(e: &Host, addr: Address) -> Result<(), HostError> {
     let validate_trustline =
         |asset: TrustLineAsset, issuer: AccountId, account: AccountId| -> Result<(), HostError> {
             if issuer == account {
@@ -208,7 +209,7 @@ pub fn check_clawbackable(e: &Host, addr: ScAddress) -> Result<(), HostError> {
             Ok(())
         };
 
-    match addr {
+    match addr.to_sc_address()? {
         ScAddress::ClassicAccount(acc_id) => match read_metadata(e)? {
             Metadata::Native => {
                 return Err(e.err_status_msg(
@@ -216,18 +217,24 @@ pub fn check_clawbackable(e: &Host, addr: ScAddress) -> Result<(), HostError> {
                     "cannot clawback native asset",
                 ))
             }
-            Metadata::AlphaNum4(asset) => validate_trustline(
-                e.create_asset_4(asset.asset_code.to_array()?, asset.issuer.clone()),
-                asset.issuer,
-                acc_id,
-            ),
-            Metadata::AlphaNum12(asset) => validate_trustline(
-                e.create_asset_12(asset.asset_code.to_array()?, asset.issuer.clone()),
-                asset.issuer,
-                acc_id,
-            ),
+            Metadata::AlphaNum4(asset) => {
+                let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+                validate_trustline(
+                    e.create_asset_4(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                    issuer_account_id,
+                    acc_id,
+                )
+            }
+            Metadata::AlphaNum12(asset) => {
+                let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+                validate_trustline(
+                    e.create_asset_12(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                    issuer_account_id,
+                    acc_id,
+                )
+            }
         },
-        ScAddress::Contract(_) | ScAddress::Ed25519(_) => {
+        ScAddress::Contract(_) => {
             // TODO: Non-account balances are always clawbackable for now if admin is set. Revisit this.
             Ok(())
         }
@@ -247,16 +254,22 @@ pub fn transfer_classic_balance(e: &Host, to_key: AccountId, amount: i64) -> Res
 
     match read_metadata(e)? {
         Metadata::Native => transfer_account_balance(e, to_key, amount)?,
-        Metadata::AlphaNum4(asset) => transfer_trustline_balance_safe(
-            e.create_asset_4(asset.asset_code.to_array()?, asset.issuer.clone()),
-            asset.issuer,
-            to_key,
-        )?,
-        Metadata::AlphaNum12(asset) => transfer_trustline_balance_safe(
-            e.create_asset_12(asset.asset_code.to_array()?, asset.issuer.clone()),
-            asset.issuer,
-            to_key,
-        )?,
+        Metadata::AlphaNum4(asset) => {
+            let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+            transfer_trustline_balance_safe(
+                e.create_asset_4(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                issuer_account_id,
+                to_key,
+            )?
+        }
+        Metadata::AlphaNum12(asset) => {
+            let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+            transfer_trustline_balance_safe(
+                e.create_asset_12(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                issuer_account_id,
+                to_key,
+            )?
+        }
     };
     Ok(())
 }
@@ -277,16 +290,23 @@ fn get_classic_balance(e: &Host, to_key: AccountId) -> Result<(i64, i64), HostEr
 
     match read_metadata(e)? {
         Metadata::Native => get_account_balance(e, to_key),
-        Metadata::AlphaNum4(asset) => get_trustline_balance_safe(
-            e.create_asset_4(asset.asset_code.to_array()?, asset.issuer.clone()),
-            asset.issuer,
-            to_key,
-        ),
-        Metadata::AlphaNum12(asset) => get_trustline_balance_safe(
-            e.create_asset_12(asset.asset_code.to_array()?, asset.issuer.clone()),
-            asset.issuer,
-            to_key,
-        ),
+        Metadata::AlphaNum4(asset) => {
+            let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+            get_trustline_balance_safe(
+                e.create_asset_4(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                issuer_account_id,
+                to_key,
+            )
+        }
+
+        Metadata::AlphaNum12(asset) => {
+            let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+            get_trustline_balance_safe(
+                e.create_asset_12(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                issuer_account_id,
+                to_key,
+            )
+        }
     }
 }
 
@@ -487,16 +507,22 @@ fn is_account_authorized(e: &Host, account_id: AccountId) -> Result<bool, HostEr
 
     match read_metadata(e)? {
         Metadata::Native => Ok(true),
-        Metadata::AlphaNum4(asset) => is_trustline_authorized_safe(
-            e.create_asset_4(asset.asset_code.to_array()?, asset.issuer.clone()),
-            asset.issuer,
-            account_id,
-        ),
-        Metadata::AlphaNum12(asset) => is_trustline_authorized_safe(
-            e.create_asset_12(asset.asset_code.to_array()?, asset.issuer.clone()),
-            asset.issuer,
-            account_id,
-        ),
+        Metadata::AlphaNum4(asset) => {
+            let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+            is_trustline_authorized_safe(
+                e.create_asset_4(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                issuer_account_id,
+                account_id,
+            )
+        }
+        Metadata::AlphaNum12(asset) => {
+            let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+            is_trustline_authorized_safe(
+                e.create_asset_12(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                issuer_account_id,
+                account_id,
+            )
+        }
     }
 }
 
@@ -560,16 +586,22 @@ fn set_authorization(e: &Host, to_key: AccountId, authorize: bool) -> Result<(),
                 "expected trustline asset",
             ))
         }
-        Metadata::AlphaNum4(asset) => set_trustline_authorization_safe(
-            e.create_asset_4(asset.asset_code.to_array()?, asset.issuer.clone()),
-            asset.issuer,
-            to_key,
-        ),
-        Metadata::AlphaNum12(asset) => set_trustline_authorization_safe(
-            e.create_asset_12(asset.asset_code.to_array()?, asset.issuer.clone()),
-            asset.issuer,
-            to_key,
-        ),
+        Metadata::AlphaNum4(asset) => {
+            let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+            set_trustline_authorization_safe(
+                e.create_asset_4(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                issuer_account_id,
+                to_key,
+            )
+        }
+        Metadata::AlphaNum12(asset) => {
+            let issuer_account_id = e.classic_account_id_from_bytes(asset.issuer.into())?;
+            set_trustline_authorization_safe(
+                e.create_asset_12(asset.asset_code.to_array()?, issuer_account_id.clone()),
+                issuer_account_id,
+                to_key,
+            )
+        }
     }
 }
 
@@ -604,8 +636,8 @@ fn set_trustline_authorization(
     })
 }
 
-fn is_issuer_auth_required(e: &Host, issuer_id: AccountId) -> Result<bool, HostError> {
-    let issuer_acc = e.load_account(issuer_id.clone())?;
+fn is_issuer_auth_required(e: &Host, issuer_id: BytesN<32>) -> Result<bool, HostError> {
+    let issuer_acc = e.load_account(e.classic_account_id_from_bytes(issuer_id.into())?)?;
     Ok(issuer_acc.flags & (AccountFlags::RequiredFlag as u32) != 0)
 }
 

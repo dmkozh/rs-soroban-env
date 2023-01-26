@@ -13,7 +13,6 @@ use soroban_env_common::{
 };
 
 use crate::{
-    auth::HostAccount,
     budget::{AsBudget, Budget, CostType},
     host_object::HostObject,
     Host, HostError,
@@ -32,9 +31,7 @@ fn host_obj_discriminant(ho: &HostObject) -> usize {
         HostObject::I128(_) => 5,
         HostObject::Bytes(_) => 6,
         HostObject::ContractCode(_) => 7,
-        HostObject::AccountId(_) => 8,
-        HostObject::Account(_) => 9,
-        HostObject::Address(_) => 10,
+        HostObject::Address(_) => 8,
     }
 }
 
@@ -52,8 +49,6 @@ impl Compare<HostObject> for Host {
             (Map(a), Map(b)) => self.compare(a, b),
             (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
             (ContractCode(a), ContractCode(b)) => self.as_budget().compare(a, b),
-            (AccountId(a), AccountId(b)) => self.as_budget().compare(a, b),
-            (Account(a), Account(b)) => self.as_budget().compare(a, b),
             (Address(a), Address(b)) => self.as_budget().compare(a, b),
 
             // List out at least one side of all the remaining cases here so
@@ -67,8 +62,6 @@ impl Compare<HostObject> for Host {
             | (Map(_), _)
             | (Bytes(_), _)
             | (ContractCode(_), _)
-            | (AccountId(_), _)
-            | (Account(_), _)
             | (Address(_), _) => {
                 let a = host_obj_discriminant(a);
                 let b = host_obj_discriminant(b);
@@ -155,7 +148,6 @@ impl_compare_fixed_size_ord_type!(Hash);
 impl_compare_fixed_size_ord_type!(Uint256);
 impl_compare_fixed_size_ord_type!(ScContractCode);
 impl_compare_fixed_size_ord_type!(AccountId);
-impl_compare_fixed_size_ord_type!(HostAccount);
 impl_compare_fixed_size_ord_type!(ScAddress);
 impl_compare_fixed_size_ord_type!(PublicKey);
 impl_compare_fixed_size_ord_type!(TrustLineAsset);
@@ -229,8 +221,6 @@ impl Compare<ScVal> for Budget {
                 | (I128(_), _)
                 | (Bytes(_), _)
                 | (ContractCode(_), _)
-                | (AccountId(_), _)
-                | (Account(_), _)
                 | (Address(_), _)
                 | (NonceKey(_), _) => Ok(a.cmp(b)),
             },

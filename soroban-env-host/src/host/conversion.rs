@@ -11,7 +11,7 @@ use crate::{
 };
 use ed25519_dalek::{PublicKey, Signature, SIGNATURE_LENGTH};
 use sha2::{Digest, Sha256};
-use soroban_env_common::xdr::{AccountId, ScObject};
+use soroban_env_common::xdr::{self, AccountId, ScObject};
 use soroban_env_common::TryFromVal;
 
 impl Host {
@@ -55,12 +55,6 @@ impl Host {
                     .arg(name),
             )),
         }
-    }
-
-    pub(crate) fn to_account_id(&self, a: Object) -> Result<AccountId, HostError> {
-        self.visit_obj(a, |account_id: &AccountId| {
-            Ok(account_id.metered_clone(&self.0.budget)?)
-        })
     }
 
     pub(crate) fn to_u256_from_account(
@@ -177,6 +171,14 @@ impl Host {
 
     pub fn ed25519_pub_key_from_obj_input(&self, k: Object) -> Result<PublicKey, HostError> {
         self.visit_obj(k, |bytes: &Vec<u8>| self.ed25519_pub_key_from_bytes(bytes))
+    }
+
+    pub(crate) fn classic_account_id_from_bytes(&self, k: Object) -> Result<AccountId, HostError> {
+        self.visit_obj(k, |bytes: &Vec<u8>| {
+            Ok(AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
+                self.fixed_length_bytes_from_slice("account_id", bytes.as_slice())?,
+            )))
+        })
     }
 
     pub fn sha256_hash_from_bytes_input(&self, x: Object) -> Result<Vec<u8>, HostError> {

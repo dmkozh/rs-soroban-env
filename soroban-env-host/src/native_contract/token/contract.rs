@@ -1,6 +1,5 @@
-use crate::host::metered_clone::MeteredClone;
 use crate::host::Host;
-use crate::native_contract::base_types::{Account, Bytes, BytesN, Vec};
+use crate::native_contract::base_types::{Address, Bytes, BytesN, Vec};
 use crate::native_contract::contract_error::ContractError;
 use crate::native_contract::token::admin::{check_admin, write_administrator};
 use crate::native_contract::token::allowance::{read_allowance, spend_allowance, write_allowance};
@@ -14,7 +13,7 @@ use crate::native_contract::token::metadata::{
 use crate::native_contract::token::public_types::Metadata;
 use crate::{err, HostError};
 
-use soroban_env_common::xdr::{Asset, ScAddress};
+use soroban_env_common::xdr::Asset;
 use soroban_env_common::{EnvBase, TryFromVal, TryIntoVal};
 use soroban_native_sdk_macros::contractimpl;
 
@@ -35,59 +34,41 @@ pub trait TokenTrait {
     /// (clawback, set_auth, mint, set_admin) will always fail
     fn init_asset(e: &Host, asset_bytes: Bytes) -> Result<(), HostError>;
 
-    fn allowance(e: &Host, from: ScAddress, spender: ScAddress) -> Result<i128, HostError>;
+    fn allowance(e: &Host, from: Address, spender: Address) -> Result<i128, HostError>;
 
-    fn incr_allow(
-        e: &Host,
-        from: Account,
-        spender: ScAddress,
-        amount: i128,
-    ) -> Result<(), HostError>;
+    fn incr_allow(e: &Host, from: Address, spender: Address, amount: i128)
+        -> Result<(), HostError>;
 
-    fn decr_allow(
-        e: &Host,
-        from: Account,
-        spender: ScAddress,
-        amount: i128,
-    ) -> Result<(), HostError>;
+    fn decr_allow(e: &Host, from: Address, spender: Address, amount: i128)
+        -> Result<(), HostError>;
 
-    fn balance(e: &Host, addr: ScAddress) -> Result<i128, HostError>;
+    fn balance(e: &Host, addr: Address) -> Result<i128, HostError>;
 
-    fn spendable(e: &Host, addr: ScAddress) -> Result<i128, HostError>;
+    fn spendable(e: &Host, addr: Address) -> Result<i128, HostError>;
 
-    fn authorized(e: &Host, addr: ScAddress) -> Result<bool, HostError>;
+    fn authorized(e: &Host, addr: Address) -> Result<bool, HostError>;
 
-    fn xfer(e: &Host, from: Account, to: ScAddress, amount: i128) -> Result<(), HostError>;
+    fn xfer(e: &Host, from: Address, to: Address, amount: i128) -> Result<(), HostError>;
 
     fn xfer_from(
         e: &Host,
-        spender: Account,
-        from: ScAddress,
-        to: ScAddress,
+        spender: Address,
+        from: Address,
+        to: Address,
         amount: i128,
     ) -> Result<(), HostError>;
 
-    fn burn(e: &Host, from: Account, amount: i128) -> Result<(), HostError>;
+    fn burn(e: &Host, from: Address, amount: i128) -> Result<(), HostError>;
 
-    fn burn_from(
-        e: &Host,
-        spender: Account,
-        from: ScAddress,
-        amount: i128,
-    ) -> Result<(), HostError>;
+    fn burn_from(e: &Host, spender: Address, from: Address, amount: i128) -> Result<(), HostError>;
 
-    fn set_auth(
-        e: &Host,
-        admin: Account,
-        addr: ScAddress,
-        authorize: bool,
-    ) -> Result<(), HostError>;
+    fn set_auth(e: &Host, admin: Address, addr: Address, authorize: bool) -> Result<(), HostError>;
 
-    fn mint(e: &Host, admin: Account, to: ScAddress, amount: i128) -> Result<(), HostError>;
+    fn mint(e: &Host, admin: Address, to: Address, amount: i128) -> Result<(), HostError>;
 
-    fn clawback(e: &Host, admin: Account, from: ScAddress, amount: i128) -> Result<(), HostError>;
+    fn clawback(e: &Host, admin: Address, from: Address, amount: i128) -> Result<(), HostError>;
 
-    fn set_admin(e: &Host, admin: Account, new_admin: ScAddress) -> Result<(), HostError>;
+    fn set_admin(e: &Host, admin: Address, new_admin: Address) -> Result<(), HostError>;
 
     fn decimals(e: &Host) -> Result<u32, HostError>;
 
@@ -151,10 +132,7 @@ impl TokenTrait for Token {
                 //No admin for the Native token
             }
             Asset::CreditAlphanum4(asset4) => {
-                write_administrator(
-                    &e,
-                    ScAddress::ClassicAccount(asset4.issuer.metered_clone(e.budget_ref())?),
-                )?;
+                write_administrator(&e, Address::from_classic_account(e, &asset4.issuer)?)?;
                 write_metadata(
                     &e,
                     Metadata::AlphaNum4(AlphaNum4Metadata {
@@ -162,15 +140,15 @@ impl TokenTrait for Token {
                             e,
                             &e.bytes_new_from_slice(&asset4.asset_code.0)?,
                         )?,
-                        issuer: asset4.issuer,
+                        issuer: BytesN::<32>::try_from_val(
+                            e,
+                            &e.bytes_new_from_slice(&e.to_u256_from_account(&asset4.issuer)?.0)?,
+                        )?,
                     }),
                 )?;
             }
             Asset::CreditAlphanum12(asset12) => {
-                write_administrator(
-                    &e,
-                    ScAddress::ClassicAccount(asset12.issuer.metered_clone(e.budget_ref())?),
-                )?;
+                write_administrator(&e, Address::from_classic_account(e, &asset12.issuer)?)?;
                 write_metadata(
                     &e,
                     Metadata::AlphaNum12(AlphaNum12Metadata {
@@ -178,7 +156,10 @@ impl TokenTrait for Token {
                             e,
                             &e.bytes_new_from_slice(&asset12.asset_code.0)?,
                         )?,
-                        issuer: asset12.issuer,
+                        issuer: BytesN::<32>::try_from_val(
+                            e,
+                            &e.bytes_new_from_slice(&e.to_u256_from_account(&asset12.issuer)?.0)?,
+                        )?,
                     }),
                 )?;
             }
@@ -186,98 +167,76 @@ impl TokenTrait for Token {
         Ok(())
     }
 
-    fn allowance(e: &Host, from: ScAddress, spender: ScAddress) -> Result<i128, HostError> {
+    fn allowance(e: &Host, from: Address, spender: Address) -> Result<i128, HostError> {
         read_allowance(e, from, spender)
     }
 
     // Metering: covered by components
     fn incr_allow(
         e: &Host,
-        from: Account,
-        spender: ScAddress,
+        from: Address,
+        spender: Address,
         amount: i128,
     ) -> Result<(), HostError> {
         check_nonnegative_amount(e, amount)?;
-        let from_id = from.address()?;
         let mut args = Vec::new(e)?;
+        args.push(&from)?;
         args.push(&spender)?;
         args.push(&amount)?;
         from.authorize(args)?;
-        let allowance = read_allowance(&e, from_id.clone(), spender.clone())?;
+        let allowance = read_allowance(&e, from.clone(), spender.clone())?;
         let new_allowance = allowance
             .checked_add(amount)
             .ok_or_else(|| e.err_status(ContractError::OverflowError))?;
-        write_allowance(&e, from_id.clone(), spender.clone(), new_allowance)?;
-        event::incr_allow(e, from_id, spender, amount)?;
+        write_allowance(&e, from.clone(), spender.clone(), new_allowance)?;
+        event::incr_allow(e, from, spender, amount)?;
         Ok(())
     }
 
     fn decr_allow(
         e: &Host,
-        from: Account,
-        spender: ScAddress,
+        from: Address,
+        spender: Address,
         amount: i128,
     ) -> Result<(), HostError> {
         check_nonnegative_amount(e, amount)?;
-        let from_id = from.address()?;
         let mut args = Vec::new(e)?;
+        args.push(&from)?;
         args.push(&spender)?;
         args.push(&amount)?;
         from.authorize(args)?;
-        let allowance = read_allowance(&e, from_id.clone(), spender.clone())?;
+        let allowance = read_allowance(&e, from.clone(), spender.clone())?;
         if amount >= allowance {
-            write_allowance(&e, from_id.clone(), spender.clone(), 0)?;
+            write_allowance(&e, from.clone(), spender.clone(), 0)?;
         } else {
-            write_allowance(&e, from_id.clone(), spender.clone(), allowance - amount)?;
+            write_allowance(&e, from.clone(), spender.clone(), allowance - amount)?;
         }
-        event::decr_allow(e, from_id, spender, amount)?;
+        event::decr_allow(e, from, spender, amount)?;
         Ok(())
     }
 
     // Metering: covered by components
-    fn balance(e: &Host, addr: ScAddress) -> Result<i128, HostError> {
+    fn balance(e: &Host, addr: Address) -> Result<i128, HostError> {
         read_balance(e, addr)
     }
 
-    fn spendable(e: &Host, addr: ScAddress) -> Result<i128, HostError> {
+    fn spendable(e: &Host, addr: Address) -> Result<i128, HostError> {
         get_spendable_balance(e, addr)
     }
 
     // Metering: covered by components
-    fn authorized(e: &Host, addr: ScAddress) -> Result<bool, HostError> {
+    fn authorized(e: &Host, addr: Address) -> Result<bool, HostError> {
         is_authorized(&e, addr)
     }
 
     // Metering: covered by components
-    fn xfer(e: &Host, from: Account, to: ScAddress, amount: i128) -> Result<(), HostError> {
+    fn xfer(e: &Host, from: Address, to: Address, amount: i128) -> Result<(), HostError> {
         check_nonnegative_amount(e, amount)?;
-        let from_id = from.address()?;
-        let mut args = Vec::new(e)?;
-        args.push(&to)?;
-        args.push(&amount)?;
-        from.authorize(args)?;
-        spend_balance(e, from_id.clone(), amount)?;
-        receive_balance(e, to.clone(), amount)?;
-        event::transfer(e, from_id, to, amount)?;
-        Ok(())
-    }
-
-    // Metering: covered by components
-    fn xfer_from(
-        e: &Host,
-        spender: Account,
-        from: ScAddress,
-        to: ScAddress,
-        amount: i128,
-    ) -> Result<(), HostError> {
-        check_nonnegative_amount(e, amount)?;
-        let spender_id = spender.address()?;
         let mut args = Vec::new(e)?;
         args.push(&from)?;
         args.push(&to)?;
         args.push(&amount)?;
-        spender.authorize(args)?;
-        spend_allowance(e, from.clone(), spender_id, amount)?;
+        from.authorize(args)?;
         spend_balance(e, from.clone(), amount)?;
         receive_balance(e, to.clone(), amount)?;
         event::transfer(e, from, to, amount)?;
@@ -285,89 +244,106 @@ impl TokenTrait for Token {
     }
 
     // Metering: covered by components
-    fn burn(e: &Host, from: Account, amount: i128) -> Result<(), HostError> {
+    fn xfer_from(
+        e: &Host,
+        spender: Address,
+        from: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), HostError> {
         check_nonnegative_amount(e, amount)?;
-        check_non_native(e)?;
-        let from_addr = from.address()?;
         let mut args = Vec::new(e)?;
+        args.push(&spender)?;
+        args.push(&from)?;
+        args.push(&to)?;
         args.push(&amount)?;
-        from.authorize(args)?;
-        spend_balance(&e, from_addr.clone(), amount)?;
-        event::burn(e, from_addr, amount)?;
+        spender.authorize(args)?;
+        spend_allowance(e, from.clone(), spender, amount)?;
+        spend_balance(e, from.clone(), amount)?;
+        receive_balance(e, to.clone(), amount)?;
+        event::transfer(e, from, to, amount)?;
         Ok(())
     }
 
     // Metering: covered by components
-    fn burn_from(
-        e: &Host,
-        spender: Account,
-        from: ScAddress,
-        amount: i128,
-    ) -> Result<(), HostError> {
+    fn burn(e: &Host, from: Address, amount: i128) -> Result<(), HostError> {
         check_nonnegative_amount(e, amount)?;
         check_non_native(e)?;
         let mut args = Vec::new(e)?;
         args.push(&from)?;
         args.push(&amount)?;
-        spender.authorize(args)?;
-        spend_allowance(&e, from.clone(), spender.address()?, amount)?;
+        from.authorize(args)?;
         spend_balance(&e, from.clone(), amount)?;
         event::burn(e, from, amount)?;
         Ok(())
     }
 
     // Metering: covered by components
-    fn clawback(e: &Host, admin: Account, from: ScAddress, amount: i128) -> Result<(), HostError> {
+    fn burn_from(e: &Host, spender: Address, from: Address, amount: i128) -> Result<(), HostError> {
         check_nonnegative_amount(e, amount)?;
-        check_admin(e, &admin.address()?)?;
+        check_non_native(e)?;
+        let mut args = Vec::new(e)?;
+        args.push(&spender)?;
+        args.push(&from)?;
+        args.push(&amount)?;
+        spender.authorize(args)?;
+        spend_allowance(&e, from.clone(), spender, amount)?;
+        spend_balance(&e, from.clone(), amount)?;
+        event::burn(e, from, amount)?;
+        Ok(())
+    }
+
+    // Metering: covered by components
+    fn clawback(e: &Host, admin: Address, from: Address, amount: i128) -> Result<(), HostError> {
+        check_nonnegative_amount(e, amount)?;
+        check_admin(e, &admin)?;
         check_clawbackable(&e, from.clone())?;
         let mut args = Vec::new(e)?;
+        args.push(&admin)?;
         args.push(&from)?;
         args.push(&amount)?;
         admin.authorize(args)?;
         spend_balance_no_authorization_check(e, from.clone(), amount.clone())?;
-        event::clawback(e, admin.address()?, from, amount)?;
+        event::clawback(e, admin, from, amount)?;
         Ok(())
     }
 
     // Metering: covered by components
-    fn set_auth(
-        e: &Host,
-        admin: Account,
-        addr: ScAddress,
-        authorize: bool,
-    ) -> Result<(), HostError> {
-        check_admin(e, &admin.address()?)?;
+    fn set_auth(e: &Host, admin: Address, addr: Address, authorize: bool) -> Result<(), HostError> {
+        check_admin(e, &admin)?;
         let mut args = Vec::new(e)?;
+        args.push(&admin)?;
         args.push(&addr)?;
         args.push(&authorize)?;
         admin.authorize(args)?;
         write_authorization(e, addr.clone(), authorize)?;
-        event::set_auth(e, admin.address()?, addr, authorize)?;
+        event::set_auth(e, admin, addr, authorize)?;
         Ok(())
     }
 
     // Metering: covered by components
-    fn mint(e: &Host, admin: Account, to: ScAddress, amount: i128) -> Result<(), HostError> {
+    fn mint(e: &Host, admin: Address, to: Address, amount: i128) -> Result<(), HostError> {
         check_nonnegative_amount(e, amount)?;
-        check_admin(e, &admin.address()?)?;
+        check_admin(e, &admin)?;
         let mut args = Vec::new(e)?;
+        args.push(&admin)?;
         args.push(&to)?;
         args.push(&amount)?;
         admin.authorize(args)?;
         receive_balance(e, to.clone(), amount)?;
-        event::mint(e, admin.address()?, to, amount)?;
+        event::mint(e, admin, to, amount)?;
         Ok(())
     }
 
     // Metering: covered by components
-    fn set_admin(e: &Host, admin: Account, new_admin: ScAddress) -> Result<(), HostError> {
-        check_admin(e, &admin.address()?)?;
+    fn set_admin(e: &Host, admin: Address, new_admin: Address) -> Result<(), HostError> {
+        check_admin(e, &admin)?;
         let mut args = Vec::new(e)?;
+        args.push(&admin)?;
         args.push(&new_admin)?;
         admin.authorize(args)?;
         write_administrator(e, new_admin.clone())?;
-        event::set_admin(e, admin.address()?, new_admin)?;
+        event::set_admin(e, admin, new_admin)?;
         Ok(())
     }
 

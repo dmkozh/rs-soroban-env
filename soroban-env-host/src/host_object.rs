@@ -1,4 +1,3 @@
-use crate::auth::HostAccount;
 use crate::Host;
 
 use super::{
@@ -20,9 +19,7 @@ pub(crate) enum HostObject {
     U128(u128),
     I128(i128),
     Bytes(Vec<u8>),
-    ContractCode(xdr::ScContractCode),
-    AccountId(xdr::AccountId),
-    Account(HostAccount),
+    ContractCode(xdr::ScContractCode),    
     Address(xdr::ScAddress),
 }
 
@@ -62,6 +59,4 @@ declare_host_object_type!(u128, U128, U128);
 declare_host_object_type!(i128, I128, I128);
 declare_host_object_type!(Vec<u8>, Bytes, Bytes);
 declare_host_object_type!(xdr::ScContractCode, ContractCode, ContractCode);
-declare_host_object_type!(xdr::AccountId, AccountId, AccountId);
-declare_host_object_type!(HostAccount, Account, Account);
 declare_host_object_type!(xdr::ScAddress, Address, Address);

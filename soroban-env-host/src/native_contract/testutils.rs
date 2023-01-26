@@ -1,18 +1,18 @@
-use crate::{auth::HostAccount, test::util::generate_bytes_array, Host, HostError, LedgerInfo};
+use crate::{test::util::generate_bytes_array, Host, HostError, LedgerInfo};
 use ed25519_dalek::{Keypair, Signer};
 use rand::thread_rng;
 use soroban_env_common::xdr::{
-    self, AccountId, AuthorizedInvocation, ContractInvocation, Hash, HashIdPreimage,
-    HashIdPreimageContractAuth, PublicKey, ScAccount, ScAccountId, ScAddress, ScObject, ScVal,
-    ScVec,
+    self, AccountId, AuthorizedInvocation, ContractAuth, Hash, HashIdPreimage,
+    HashIdPreimageContractAuth, PublicKey, ScAddress, ScObject, ScVal, ScVec, Uint256,
 };
 use soroban_env_common::{EnvBase, RawVal, TryFromVal, TryIntoVal};
 
-use crate::native_contract::base_types::{Account, BytesN};
+use crate::native_contract::base_types::BytesN;
 
 pub(crate) use crate::native_contract::base_types::Vec as HostVec;
 
-use super::account_contract::{AccountEd25519Signature, Signature};
+use super::account_contract::AccountEd25519Signature;
+use super::base_types::Address;
 
 impl HostVec {
     pub(crate) fn from_array(host: &Host, vals: &[RawVal]) -> Result<Self, HostError> {
@@ -46,26 +46,36 @@ pub(crate) fn generate_bytes(host: &Host) -> BytesN<32> {
     .unwrap()
 }
 
-pub(crate) fn signer_to_id_bytes(host: &Host, key: &Keypair) -> BytesN<32> {
-    BytesN::<32>::try_from_val(
+pub(crate) fn keypair_to_account_id(key: &Keypair) -> AccountId {
+    AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
+        key.public.to_bytes(),
+    )))
+}
+
+pub(crate) fn account_to_address(host: &Host, account_id: AccountId) -> Address {
+    Address::try_from_val(
         host,
-        &host.bytes_new_from_slice(&key.public.to_bytes()).unwrap(),
+        &host
+            .add_host_object(ScAddress::ClassicAccount(account_id))
+            .unwrap(),
     )
     .unwrap()
 }
 
-pub(crate) fn signer_to_account_id(host: &Host, key: &Keypair) -> AccountId {
-    let account_id_bytes = signer_to_id_bytes(host, key);
-    AccountId(PublicKey::PublicKeyTypeEd25519(
-        host.to_u256(account_id_bytes.into()).unwrap(),
-    ))
+pub(crate) fn contract_id_to_address(host: &Host, contract_id: [u8; 32]) -> Address {
+    Address::try_from_val(
+        host,
+        &host
+            .add_host_object(ScAddress::Contract(Hash(contract_id)))
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 pub(crate) enum TestSigner<'a> {
+    ClassicAccountInvoker(AccountId),
     ContractInvoker(Hash),
-    ClassicAccountInvoker,
-    Ed25519(&'a Keypair),
-    Account(AccountSigner<'a>),
+    ClassicAccount(ClassicAccountSigner<'a>),
     GenericAccount(GenericAccountSigner<'a>),
 }
 
@@ -74,171 +84,137 @@ pub(crate) struct GenericAccountSigner<'a> {
     pub(crate) sign: Box<dyn Fn(&[u8]) -> HostVec + 'a>,
 }
 
-pub(crate) struct AccountSigner<'a> {
+pub(crate) struct ClassicAccountSigner<'a> {
     pub(crate) account_id: AccountId,
     pub(crate) signers: Vec<&'a Keypair>,
 }
 
 impl<'a> TestSigner<'a> {
-    pub(crate) fn account(account_id: &AccountId, mut signers: Vec<&'a Keypair>) -> Self {
+    pub(crate) fn classic_account(kp: &'a Keypair) -> Self {
+        TestSigner::ClassicAccount(ClassicAccountSigner {
+            account_id: keypair_to_account_id(kp),
+            signers: vec![kp],
+        })
+    }
+
+    pub(crate) fn classic_account_with_multisig(
+        account_id: &AccountId,
+        mut signers: Vec<&'a Keypair>,
+    ) -> Self {
         signers.sort_by_key(|k| k.public.as_bytes());
-        TestSigner::Account(AccountSigner {
+        TestSigner::ClassicAccount(ClassicAccountSigner {
             account_id: account_id.clone(),
             signers,
         })
     }
 
+    pub(crate) fn account_id(&self) -> AccountId {
+        match self {
+            TestSigner::ClassicAccountInvoker(acc_id) => acc_id.clone(),
+            TestSigner::ClassicAccount(ClassicAccountSigner {
+                account_id,
+                signers: _,
+            }) => account_id.clone(),
+            TestSigner::GenericAccount(_) => panic!("not supported"),
+            TestSigner::ContractInvoker(_) => panic!("not supported"),
+        }
+    }
+
     fn sign(&self, host: &Host, payload: &[u8]) -> ScVec {
         let signature_args = match self {
-            TestSigner::ClassicAccountInvoker => host_vec![host],
-            TestSigner::Ed25519(signer) => {
-                host_vec![
-                    host,
-                    Signature::Ed25519(sign_payload_for_ed25519(host, signer, payload))
-                ]
-            }
-            TestSigner::Account(account_signer) => {
+            TestSigner::ClassicAccountInvoker(_) => host_vec![host],
+            TestSigner::ClassicAccount(account_signer) => {
                 let mut signatures = HostVec::new(&host).unwrap();
                 for key in &account_signer.signers {
                     signatures
                         .push(&sign_payload_for_account(host, key, payload))
                         .unwrap();
                 }
-                host_vec![host, Signature::Account(signatures)]
+                host_vec![host, signatures]
             }
-            TestSigner::ContractInvoker(_) => unreachable!(),
             TestSigner::GenericAccount(signer) => (signer.sign)(payload),
+            TestSigner::ContractInvoker(_) => host_vec![host],
         };
         host.call_args_to_scvec(signature_args.into()).unwrap()
     }
 
-    fn get_account_id(&self) -> ScAccountId {
-        match self {
-            TestSigner::Ed25519(kp) => {
-                ScAccountId::BuiltinEd25519(xdr::Hash(kp.public.to_bytes().try_into().unwrap()))
-            }
-            TestSigner::Account(acc) => ScAccountId::BuiltinClassicAccount(acc.account_id.clone()),
-            TestSigner::ClassicAccountInvoker => ScAccountId::BuiltinInvoker,
-            TestSigner::GenericAccount(signer) => ScAccountId::GenericAccount(signer.id.clone()),
-            TestSigner::ContractInvoker(_) => unreachable!(),
-        }
-    }
-
-    pub(crate) fn address(&self) -> ScAddress {
-        match self {
-            TestSigner::ClassicAccountInvoker => panic!("not supported"),
-            TestSigner::Ed25519(kp) => ScAddress::Ed25519(kp.public.to_bytes().try_into().unwrap()),
-            TestSigner::Account(acc) => ScAddress::ClassicAccount(acc.account_id.clone()),
-            TestSigner::ContractInvoker(hash) => ScAddress::Contract(hash.clone()),
+    pub(crate) fn address(&self, host: &Host) -> Address {
+        let sc_address = match self {
+            TestSigner::ClassicAccountInvoker(acc_id) => ScAddress::ClassicAccount(acc_id.clone()),
+            TestSigner::ClassicAccount(acc) => ScAddress::ClassicAccount(acc.account_id.clone()),
             TestSigner::GenericAccount(signer) => ScAddress::Contract(signer.id.clone()),
-        }
-    }
-}
-
-// impl TryIntoVal<Host, RawVal> for ScAccount {
-//     type Error = HostError;
-
-//     fn try_into_val(&self, env: &Host) -> Result<RawVal, Self::Error> {
-//         let sc_obj = ScVal::Object(Some(ScObject::Account(self)));
-//         env.to_host_val(&sc_obj)
-//     }
-// }
-
-impl TryFromVal<Host, ScAccount> for RawVal {
-    type Error = HostError;
-
-    fn try_from_val(env: &Host, v: &ScAccount) -> Result<Self, Self::Error> {
-        let sc_obj = ScVal::Object(Some(ScObject::Account(v.clone())));
-        env.to_host_val(&sc_obj)
-    }
-}
-
-pub(crate) struct AccountAuthBuilder<'a, 'b> {
-    host: &'a Host,
-    signer: &'a TestSigner<'b>,
-    invocations: Vec<AuthorizedInvocation>,
-}
-
-impl<'a, 'b> AccountAuthBuilder<'a, 'b> {
-    pub(crate) fn new(host: &'a Host, signer: &'a TestSigner<'b>) -> Self {
-        Self {
-            host,
-            signer,
-            invocations: vec![],
-        }
-    }
-
-    pub(crate) fn add_invocation(
-        &mut self,
-        contract_id: &BytesN<32>,
-        function_name: &str,
-        args: HostVec,
-    ) -> &mut Self {
-        let nonce = match self.signer {
-            TestSigner::ClassicAccountInvoker => None,
-            TestSigner::Ed25519(_) | TestSigner::Account(_) | TestSigner::GenericAccount(_) => {
-                Some(
-                    self.host
-                        .read_nonce(
-                            &Hash(contract_id.to_vec().clone().try_into().unwrap()),
-                            &self.signer.address(),
-                        )
-                        .unwrap(),
-                )
-            }
-            TestSigner::ContractInvoker(_) => {
-                return self;
-            }
+            TestSigner::ContractInvoker(contract_id) => ScAddress::Contract(contract_id.clone()),
         };
-        let invocation = AuthorizedInvocation {
-            call_stack: [ContractInvocation {
-                contract_id: contract_id.to_vec().try_into().unwrap(),
-                function_name: function_name.try_into().unwrap(),
-            }]
+        Address::try_from_val(host, &host.add_host_object(sc_address).unwrap()).unwrap()
+    }
+}
+
+pub(crate) fn authorize_single_invocation_with_nonce(
+    host: &Host,
+    signer: &TestSigner,
+    contract_id: &BytesN<32>,
+    function_name: &str,
+    args: HostVec,
+    nonce: Option<u64>,
+) {
+    let sc_address = signer.address(host).to_sc_address().unwrap();
+    let address = match signer {
+        TestSigner::ClassicAccountInvoker(_) => None,
+        TestSigner::ClassicAccount(_) | TestSigner::GenericAccount(_) => Some(sc_address.clone()),
+        TestSigner::ContractInvoker(_) => {
+            // Nothing need to be authorized for contract invoker here.
+            return;
+        }
+    };
+
+    let invocation = AuthorizedInvocation {
+        contract_id: contract_id.to_vec().try_into().unwrap(),
+        function_name: function_name.try_into().unwrap(),
+        args: host.call_args_to_scvec(args.into()).unwrap(),
+        sub_invocations: Default::default(),
+    };
+
+    let signature_payload_preimage = HashIdPreimage::ContractAuth(HashIdPreimageContractAuth {
+        network_id: host
+            .with_ledger_info(|li: &LedgerInfo| Ok(li.network_id.clone()))
+            .unwrap()
             .try_into()
             .unwrap(),
-            top_args: self.host.call_args_to_scvec(args.into()).unwrap(),
-            nonce,
-        };
-        self.invocations.push(invocation);
+        invocation: invocation.clone(),
+    });
+    let signature_payload = host.metered_hash_xdr(&signature_payload_preimage).unwrap();
+    let signature_args = signer.sign(host, &signature_payload);
+    let auth_entry = ContractAuth {
+        address,
+        invocation,
+        signature_args,
+        nonce,
+    };
 
-        self
-    }
+    host.set_authorization_entries(vec![auth_entry]).unwrap();
+}
 
-    pub(crate) fn build(&mut self) -> Account {
-        let host_acc = match self.signer {
-            TestSigner::ContractInvoker(id) => self
-                .host
-                .add_host_object(HostAccount::InvokerContract(id.clone()))
-                .unwrap()
-                .to_raw(),
-            _ => {
-                let account_id = self.signer.get_account_id();
-                let signature_payload_preimage =
-                    HashIdPreimage::ContractAuth(HashIdPreimageContractAuth {
-                        network_passphrase: self
-                            .host
-                            .with_ledger_info(|li: &LedgerInfo| Ok(li.network_passphrase.clone()))
-                            .unwrap()
-                            .try_into()
-                            .unwrap(),
-                        invocations: self.invocations.clone().try_into().unwrap(),
-                    });
-                let signature_payload = self
-                    .host
-                    .metered_hash_xdr(&signature_payload_preimage)
-                    .unwrap();
-                let signature_args = self.signer.sign(self.host, &signature_payload);
-                let account = ScAccount {
-                    account_id,
-                    invocations: self.invocations.clone().try_into().unwrap(),
-                    signature_args,
-                };
-                account.try_into_val(self.host).unwrap()
-            }
-        };
-        Account::try_from_val(self.host, &host_acc).unwrap()
-    }
+pub(crate) fn authorize_single_invocation(
+    host: &Host,
+    signer: &TestSigner,
+    contract_id: &BytesN<32>,
+    function_name: &str,
+    args: HostVec,
+) {
+    let nonce = match signer {
+        TestSigner::ClassicAccountInvoker(_) => None,
+        TestSigner::ClassicAccount(_) | TestSigner::GenericAccount(_) => Some(
+            host.read_nonce(
+                &Hash(contract_id.to_vec().clone().try_into().unwrap()),
+                &signer.address(host).to_sc_address().unwrap(),
+            )
+            .unwrap(),
+        ),
+        TestSigner::ContractInvoker(_) => {
+            return;
+        }
+    };
+    authorize_single_invocation_with_nonce(host, signer, contract_id, function_name, args, nonce);
 }
 
 fn sign_payload_for_account(

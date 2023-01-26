@@ -21,7 +21,6 @@ use crate::{host::metered_map::MeteredOrdMap, HostError};
 
 pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
 pub type StorageMap = MeteredOrdMap<Rc<LedgerKey>, Option<Rc<LedgerEntry>>, Budget>;
-pub type TempStorageMap = MeteredOrdMap<([u8; 32], ScVal), RawVal, Budget>;
 
 /// A helper type used by [Footprint] to designate which ways
 /// a given [LedgerKey] is accessed, or is allowed to be accessed,
@@ -299,60 +298,6 @@ impl Storage {
                 }
             }
         }
-    }
-}
-
-#[derive(Default, Clone)]
-pub struct TempStorage {
-    pub map: TempStorageMap,
-}
-
-impl TempStorage {
-    pub fn get(
-        &self,
-        contract_id: [u8; 32],
-        key: ScVal,
-        budget: &Budget,
-    ) -> Result<RawVal, HostError> {
-        match self.map.get(&(contract_id, key), budget)? {
-            None => Err(ScHostStorageErrorCode::MissingKeyInGet.into()),
-            Some(val) => Ok(*val),
-        }
-    }
-
-    pub fn put(
-        &mut self,
-        contract_id: [u8; 32],
-        key: ScVal,
-        val: RawVal,
-        budget: &Budget,
-    ) -> Result<(), HostError> {
-        self.map = self.map.insert((contract_id, key), val, budget)?;
-        Ok(())
-    }
-
-    pub fn del(
-        &mut self,
-        contract_id: [u8; 32],
-        key: ScVal,
-        budget: &Budget,
-    ) -> Result<(), HostError> {
-        match self.map.remove(&(contract_id, key), budget)? {
-            Some((new_self, _)) => {
-                self.map = new_self;
-            }
-            None => (),
-        };
-        Ok(())
-    }
-
-    pub fn has(
-        &mut self,
-        contract_id: [u8; 32],
-        key: ScVal,
-        budget: &Budget,
-    ) -> Result<bool, HostError> {
-        self.map.contains_key(&(contract_id, key), budget)
     }
 }
 

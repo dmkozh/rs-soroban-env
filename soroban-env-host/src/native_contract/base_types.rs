@@ -1,5 +1,4 @@
 use crate::budget::CostType;
-use crate::host::metered_clone::MeteredClone;
 use crate::host::{Host, HostError};
 
 use core::cmp::Ordering;
@@ -7,8 +6,6 @@ use soroban_env_common::xdr::{AccountId, ScAddress, ScObjectType};
 use soroban_env_common::{
     CheckedEnv, Compare, ConversionError, EnvBase, Object, RawVal, TryFromVal,
 };
-
-use super::contract_error::ContractError;
 
 #[derive(Clone)]
 pub struct Bytes {
@@ -358,6 +355,14 @@ impl TryFromVal<Host, std::vec::Vec<RawVal>> for Vec {
     }
 }
 
+impl TryFromVal<Host, &std::vec::Vec<RawVal>> for Vec {
+    type Error = HostError;
+
+    fn try_from_val(env: &Host, vals: &&std::vec::Vec<RawVal>) -> Result<Self, Self::Error> {
+        Vec::try_from_val(env, *vals)
+    }
+}
+
 impl Vec {
     pub fn new(env: &Host) -> Result<Self, HostError> {
         let vec = env.vec_new(().into())?;
@@ -395,80 +400,18 @@ impl Vec {
     }
 }
 
-impl TryFromVal<Host, Object> for AccountId {
-    type Error = HostError;
-
-    fn try_from_val(env: &Host, val: &Object) -> Result<Self, Self::Error> {
-        let val = *val;
-        env.visit_obj(val, |acc: &AccountId| Ok(acc.clone()))
-    }
-}
-
-impl TryFromVal<Host, RawVal> for AccountId {
-    type Error = HostError;
-
-    fn try_from_val(env: &Host, val: &RawVal) -> Result<Self, Self::Error> {
-        let val = *val;
-        let obj: Object = val.try_into()?;
-        AccountId::try_from_val(env, &obj)
-    }
-}
-
-impl TryFromVal<Host, AccountId> for RawVal {
-    type Error = HostError;
-
-    fn try_from_val(env: &Host, val: &AccountId) -> Result<RawVal, Self::Error> {
-        Ok(env.add_host_object(val.clone())?.to_raw())
-    }
-}
-
-impl TryFromVal<Host, ScAddress> for RawVal {
-    type Error = HostError;
-
-    fn try_from_val(env: &Host, val: &ScAddress) -> Result<RawVal, Self::Error> {
-        Ok(env.add_host_object(val.clone())?.to_raw())
-    }
-}
-
-impl TryFromVal<Host, Object> for ScAddress {
-    type Error = HostError;
-
-    fn try_from_val(env: &Host, val: &Object) -> Result<Self, Self::Error> {
-        let val = *val;
-        env.visit_obj(val, |addr: &ScAddress| Ok(addr.clone()))
-    }
-}
-
-impl TryFromVal<Host, RawVal> for ScAddress {
-    type Error = HostError;
-
-    fn try_from_val(env: &Host, val: &RawVal) -> Result<Self, Self::Error> {
-        let val = *val;
-        let obj: Object = val.try_into()?;
-        ScAddress::try_from_val(env, &obj)
-    }
-}
-
-pub(crate) fn get_account_id(env: &Host, addr: &ScAddress) -> Result<AccountId, HostError> {
-    if let ScAddress::ClassicAccount(acc) = addr {
-        Ok(acc.metered_clone(env.budget_ref())?)
-    } else {
-        Err(env.err_status(ContractError::AccountIsNotClassic))
-    }
-}
-
 #[derive(Clone)]
-pub struct Account {
+pub struct Address {
     host: Host,
     object: Object,
 }
 
-impl TryFromVal<Host, Object> for Account {
+impl TryFromVal<Host, Object> for Address {
     type Error = HostError;
 
     fn try_from_val(env: &Host, obj: &Object) -> Result<Self, Self::Error> {
-        if obj.is_obj_type(ScObjectType::Account) {
-            Ok(Account {
+        if obj.is_obj_type(ScObjectType::Address) {
+            Ok(Address {
                 host: env.clone(),
                 object: obj.clone(),
             })
@@ -477,37 +420,53 @@ impl TryFromVal<Host, Object> for Account {
         }
     }
 }
-impl TryFromVal<Host, RawVal> for Account {
+
+impl TryFromVal<Host, RawVal> for Address {
     type Error = HostError;
 
     fn try_from_val(env: &Host, val: &RawVal) -> Result<Self, Self::Error> {
         let val = *val;
         let obj: Object = val.try_into()?;
-        Account::try_from_val(env, &obj)
+        Address::try_from_val(env, &obj)
     }
 }
 
-impl TryFromVal<Host, Account> for RawVal {
+impl TryFromVal<Host, Address> for RawVal {
     type Error = HostError;
 
-    fn try_from_val(env: &Host, val: &Account) -> Result<RawVal, Self::Error> {
+    fn try_from_val(_env: &Host, val: &Address) -> Result<RawVal, Self::Error> {
         Ok(val.object.into())
     }
 }
 
-impl Account {
-    pub(crate) fn address(&self) -> Result<ScAddress, HostError> {
-        let host = &self.host;
-        Ok(ScAddress::try_from_val(
-            host,
-            &host.get_account_address(self.object.clone())?,
-        )?)
+impl Compare<Address> for Host {
+    type Error = HostError;
+
+    fn compare(&self, a: &Address, b: &Address) -> Result<Ordering, Self::Error> {
+        self.compare(&a.object, &b.object)
+    }
+}
+
+impl Address {
+    pub(crate) fn from_classic_account(
+        env: &Host,
+        account_id: &AccountId,
+    ) -> Result<Self, HostError> {
+        Address::try_from_val(
+            env,
+            &env.add_host_object(ScAddress::ClassicAccount(account_id.clone()))?,
+        )
+    }
+
+    pub(crate) fn to_sc_address(&self) -> Result<ScAddress, HostError> {
+        self.host
+            .visit_obj(self.object, |addr: &ScAddress| Ok(addr.clone()))
     }
 
     pub(crate) fn authorize(&self, args: Vec) -> Result<(), HostError> {
         Ok(self
             .host
-            .authorize_account(self.object, args.into())?
+            .require_auth(self.object, args.into())?
             .try_into()?)
     }
 }
