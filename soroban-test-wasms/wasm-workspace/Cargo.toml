@@ -62,5 +62,5 @@ git = "https://github.com/stellar/rs-soroban-sdk"
 soroban-sdk = { path = "../../../rs-soroban-sdk/soroban-sdk" }
 soroban-auth = { path = "../../../rs-soroban-sdk/soroban-auth" }
 
-#[patch."https://github.com/stellar/rs-stellar-xdr"]
-#stellar-xdr = { path = "../../../rs-stellar-xdr/" }
+[patch."https://github.com/stellar/rs-stellar-xdr"]
+stellar-xdr = { path = "../../../rs-stellar-xdr/" }

@@ -16,7 +16,7 @@ use crate::{
     host::{Frame, HostImpl},
     HostError, VmCaller,
 };
-use std::{cell::RefCell, io::Cursor, ops::RangeInclusive, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, io::Cursor, ops::RangeInclusive, rc::Rc};
 
 use super::{
     xdr::{Hash, ScVal, ScVec},
@@ -25,7 +25,7 @@ use super::{
 use func_info::HOST_FUNCTIONS;
 use soroban_env_common::{
     meta,
-    xdr::{ReadXdr, ScEnvMetaEntry, ScHostFnErrorCode, ScVmErrorCode},
+    xdr::{ReadXdr, ScEnvMetaEntry, ScEnvSpecialFnType, ScHostFnErrorCode, ScVmErrorCode},
     ConversionError,
 };
 
@@ -75,6 +75,7 @@ pub struct Vm {
     // recycled across calls. Or possibly beyond, to be recycled across txs.
     module: Module,
     store: RefCell<Store<Host>>,
+    special_functions: HashMap<ScEnvSpecialFnType, String>,
     instance: Instance,
     memory: Option<Memory>,
 }
@@ -88,7 +89,10 @@ pub struct VmFunction {
 }
 
 impl Vm {
-    fn check_meta_section(host: &Host, m: &Module) -> Result<(), HostError> {
+    fn read_meta_section(
+        host: &Host,
+        m: &Module,
+    ) -> Result<HashMap<ScEnvSpecialFnType, String>, HostError> {
         // At present the supported interface-version range is always just a single
         // point, and it is hard-wired into the host as the current
         // `soroban_env_common` value [`meta::INTERFACE_VERSION`]. In the future when
@@ -109,26 +113,36 @@ impl Vm {
 
         if let Some(env_meta) = Self::module_custom_section(m, meta::ENV_META_V0_SECTION_NAME) {
             let mut cursor = Cursor::new(env_meta);
+            let mut interface_version_verified = false;
+            let mut special_functions = HashMap::<ScEnvSpecialFnType, String>::new();
             for env_meta_entry in ScEnvMetaEntry::read_xdr_iter(&mut cursor) {
                 match host.map_err(env_meta_entry)? {
-                    ScEnvMetaEntry::ScEnvMetaKindInterfaceVersion(v) => {
-                        if SUPPORTED_INTERFACE_VERSION_RANGE.contains(&v) {
-                            return Ok(());
-                        } else {
-                            return Err(host.err_status_msg(
-                                ScHostFnErrorCode::InputArgsInvalid,
-                                "unexpected environment interface version",
-                            ));
+                    ScEnvMetaEntry::InterfaceVersion(v) => {
+                        if !interface_version_verified {
+                            if !SUPPORTED_INTERFACE_VERSION_RANGE.contains(&v) {
+                                return Err(host.err_status_msg(
+                                    ScHostFnErrorCode::InputArgsInvalid,
+                                    "unexpected environment interface version",
+                                ));
+                            }
+                            interface_version_verified = true;
                         }
                     }
-                    #[allow(unreachable_patterns)]
-                    _ => (),
+                    ScEnvMetaEntry::SpecialFunctions(fns) => {
+                        for f in fns.iter() {
+                            special_functions.insert(f.fn_type, f.name.to_string_lossy());
+                        }
+                    }
                 }
             }
-            Err(host.err_status_msg(
-                ScHostFnErrorCode::InputArgsInvalid,
-                "missing environment interface version",
-            ))
+            if !interface_version_verified {
+                Err(host.err_status_msg(
+                    ScHostFnErrorCode::InputArgsInvalid,
+                    "missing environment interface version",
+                ))
+            } else {
+                Ok(special_functions)
+            }
         } else {
             Err(host.err_status_msg(
                 ScHostFnErrorCode::InputArgsInvalid,
@@ -177,7 +191,7 @@ impl Vm {
         let engine = Engine::new(&config);
         let module = host.map_err(Module::new(&engine, module_wasm_code))?;
 
-        Self::check_meta_section(host, &module)?;
+        let special_functions = Self::read_meta_section(host, &module)?;
 
         let mut store = Store::new(&engine, host.clone());
         store.set_step_meter(host.0.clone());
@@ -214,6 +228,7 @@ impl Vm {
             store,
             instance,
             memory,
+            special_functions,
         }))
     }
 
@@ -226,7 +241,7 @@ impl Vm {
         }
     }
 
-    pub(crate) fn invoke_function_raw(
+    fn invoke_function_internal(
         self: &Rc<Self>,
         host: &Host,
         func: &str,
@@ -268,6 +283,39 @@ impl Vm {
         )
     }
 
+    pub(crate) fn invoke_function_raw(
+        self: &Rc<Self>,
+        host: &Host,
+        func: &str,
+        args: &[RawVal],
+    ) -> Result<RawVal, HostError> {
+        if let Some(acc_func) = self
+            .special_functions
+            .get(&ScEnvSpecialFnType::ScEnvSpecialFnTypeCustomAccountCheckAuth)
+        {
+            if func == acc_func.as_str() {
+                return Err(host.err_status_msg(
+                    ScVmErrorCode::Unknown,
+                    "can't invoke a special function directly",
+                ));
+            }
+        }
+        self.invoke_function_internal(host, func, args)
+    }
+
+    pub(crate) fn invoke_special_function(
+        self: &Rc<Self>,
+        host: &Host,
+        special_func: &ScEnvSpecialFnType,
+        args: &[RawVal],
+    ) -> Result<RawVal, HostError> {
+        if let Some(func) = self.special_functions.get(special_func) {
+            self.invoke_function_internal(host, func.as_str(), args)
+        } else {
+            Err(host.err_status_msg(ScVmErrorCode::Unknown, "special function is not declared"))
+        }
+    }
+
     /// Invokes a function in the VM's module, converting externally stable XDR
     /// [ScVal] arguments into [Host]-specific [RawVal]s and converting the
     /// [RawVal] returned from the invocation back to an [ScVal].
@@ -278,16 +326,14 @@ impl Vm {
     //
     // NB: This function has to take self by [Rc] because it stores self in
     // a new Frame
-    pub fn invoke_function(
+    #[cfg(any(test, feature = "testutils"))]
+    pub(crate) fn invoke_function(
         self: &Rc<Self>,
         host: &Host,
         func: &str,
         args: &ScVec,
     ) -> Result<ScVal, HostError> {
-        let mut raw_args: Vec<RawVal> = Vec::new();
-        for scv in args.0.iter() {
-            raw_args.push(host.to_host_val(scv)?);
-        }
+        let raw_args = host.scvals_to_rawvals(args.0.as_slice())?;
         let raw_res = self.invoke_function_raw(host, func, raw_args.as_slice())?;
         Ok(host.from_host_val(raw_res)?)
     }

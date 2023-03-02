@@ -7,6 +7,7 @@ use crate::{
     ContractFunctionSet, Env, EnvBase, Host, HostError, RawVal, Symbol,
 };
 use expect_test::expect;
+use soroban_env_common::xdr::ScEnvSpecialFn;
 use std::rc::Rc;
 
 pub struct ContractWithSingleEvent;
@@ -20,6 +21,10 @@ impl ContractFunctionSet for ContractWithSingleEvent {
         topics = host.vec_push_back(topics, 0u32.into()).unwrap();
         topics = host.vec_push_back(topics, 1u32.into()).unwrap();
         Some(host.contract_event(topics, data.to_raw()).unwrap())
+    }
+
+    fn special_functions(&self) -> Vec<ScEnvSpecialFn> {
+        vec![]
     }
 }
 
@@ -79,6 +84,10 @@ impl ContractFunctionSet for ContractWithMultipleEvents {
         host.record_contract_event(ContractEventType::System, topics, data)
             .unwrap();
         Some(().into())
+    }
+
+    fn special_functions(&self) -> Vec<ScEnvSpecialFn> {
+        vec![]
     }
 }
 

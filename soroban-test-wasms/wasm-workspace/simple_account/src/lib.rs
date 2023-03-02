@@ -11,7 +11,7 @@ pub enum DataKey {
     Owner,
 }
 
-#[contractimpl]
+#[contractimpl(custom_account_check_auth_fn = "check_auth")]
 impl SimpleAccount {
     pub fn init(env: Env, public_key: BytesN<32>) {
         env.storage().set(&DataKey::Owner, &public_key);

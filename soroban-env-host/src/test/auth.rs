@@ -297,7 +297,13 @@ impl AuthTest {
 
         AuthorizedInvocation {
             contract_id: root.contract_id.to_vec().try_into().unwrap(),
-            function_name: root.fn_name.to_string().try_into().unwrap(),
+            function_name: root
+                .fn_name
+                .to_str()
+                .to_string()
+                .as_str()
+                .try_into()
+                .unwrap(),
             args: root.args.clone(),
             sub_invocations: sub_invocations.try_into().unwrap(),
         }
@@ -1283,4 +1289,53 @@ fn test_out_of_order_auth() {
         )]],
         false,
     );
+}
+
+#[cfg(feature = "vm")]
+#[test]
+fn test_custom_account_check_auth_is_not_directly_callable() {
+    use crate::events::{DebugEvent, HostEvent};
+    use soroban_env_common::{xdr::ScVmErrorCode, EnvBase, TryFromVal};
+    use soroban_test_wasms::SIMPLE_ACCOUNT_CONTRACT;
+
+    let host = Host::test_host_with_recording_footprint();
+    let account_contract_id_obj = host
+        .register_test_contract_wasm(SIMPLE_ACCOUNT_CONTRACT)
+        .unwrap();
+
+    let admin_public_key =
+        BytesN::<32>::try_from_val(&host, &host.bytes_new_from_slice(&[0; 32]).unwrap()).unwrap();
+    // Account contract can be initialized.
+    host.call(
+        account_contract_id_obj.clone(),
+        Symbol::from_str("init"),
+        host_vec![&host, admin_public_key.clone()].into(),
+    )
+    .unwrap();
+    assert_eq!(
+        host.call(
+            account_contract_id_obj.clone(),
+            Symbol::from_str("check_auth"),
+            // Just match the expected number of arguments in the call - we
+            // don't expect to get to the point where they will be decoded
+            // because the function can't be invoked in the first place.
+            host_vec![&host, admin_public_key, admin_public_key, admin_public_key].into(),
+        )
+        .err()
+        .unwrap()
+        .status,
+        ScVmErrorCode::Unknown.into()
+    );
+    // Make sure the failure happened due to invoking a special function. This
+    // is a bit ugly as it depends on the events, but currently that's the best
+    // we can do to verify the precise failure reason.
+    let events = host.get_events().unwrap();
+    if let HostEvent::Debug(debug_event) = &events.0[0] {
+        assert_eq!(
+            debug_event.msg,
+            Some("can't invoke a special function directly".into())
+        );
+    } else {
+        assert!(false, "missing a debug event for invocation failure");
+    }
 }

@@ -201,7 +201,9 @@ where
                     let sym: Symbol =
                         unsafe { <Symbol as RawValConvertible>::unchecked_from_val(val) };
                     let str: String = sym.into_iter().collect();
-                    Ok(ScVal::Symbol(str.as_bytes().try_into()?))
+                    Ok(ScVal::Symbol(stellar_xdr::ScSymbol(
+                        str.as_bytes().try_into()?,
+                    )))
                 }
                 Tag::BitSet => Ok(ScVal::Bitset(val.get_payload())),
                 Tag::Status => {

@@ -143,9 +143,7 @@ fn bytes_xdr_roundtrip() -> Result<(), HostError> {
         // TODO: add other types
     }
     // Symbol
-    roundtrip(ScVal::Symbol(
-        host.map_err("stellar".to_string().try_into())?,
-    ))?;
+    roundtrip(ScVal::Symbol("stellar".try_into().unwrap()))?;
     // bitset
     roundtrip(ScVal::Bitset(0xffffffff_u64))?;
     // status

@@ -1,3 +1,5 @@
+use soroban_env_common::xdr::ScSymbol;
+
 use crate::{
     budget::CostType,
     cost_runner::CostRunner,

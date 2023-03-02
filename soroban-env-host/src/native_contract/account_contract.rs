@@ -4,14 +4,14 @@ use crate::auth::AuthorizedInvocation;
 // to a generic smart wallet contract that supports authentication and blanket
 // context authorization.
 use crate::host::metered_clone::MeteredClone;
-use crate::host::Host;
+use crate::host::{Host, InvokedFunction};
 use crate::native_contract::{
     base_types::{BytesN, Map},
     contract_error::ContractError,
 };
 use crate::{err, HostError};
 use core::cmp::Ordering;
-use soroban_env_common::xdr::{Hash, ThresholdIndexes, Uint256};
+use soroban_env_common::xdr::{Hash, ScEnvSpecialFnType, ThresholdIndexes, Uint256};
 use soroban_env_common::{Env, EnvBase, RawVal, Symbol, TryFromVal, TryIntoVal};
 
 use crate::native_contract::base_types::Vec as HostVec;
@@ -77,7 +77,7 @@ pub(crate) fn check_account_contract_auth(
     Ok(host
         .call_n_internal(
             account_contract,
-            Symbol::from_str("check_auth"),
+            InvokedFunction::Special(ScEnvSpecialFnType::ScEnvSpecialFnTypeCustomAccountCheckAuth),
             &[
                 payload_obj.into(),
                 signature_args_vec.into(),

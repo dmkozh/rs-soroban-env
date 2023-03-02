@@ -330,7 +330,7 @@ impl TryFrom<&ScVal> for Symbol {
     type Error = ConversionError;
     fn try_from(v: &ScVal) -> Result<Self, Self::Error> {
         if let ScVal::Symbol(vec) = v {
-            vec.try_into().map_err(|_| ConversionError)
+            vec.0.clone().try_into().map_err(|_| ConversionError)
         } else {
             Err(ConversionError)
         }

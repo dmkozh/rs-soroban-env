@@ -33,7 +33,7 @@ struct MetaConstsOutput {
 
 impl MetaConstsOutput {
     pub fn to_meta_entries(&self) -> Vec<ScEnvMetaEntry> {
-        vec![ScEnvMetaEntry::ScEnvMetaKindInterfaceVersion(
+        vec![ScEnvMetaEntry::InterfaceVersion(
             self.input.interface_version,
         )]
     }

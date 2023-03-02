@@ -11,9 +11,10 @@ use soroban_env_common::{
         AccountId, Asset, ContractCodeEntry, ContractDataEntry, ContractEventType, ContractId,
         CreateContractArgs, ExtensionPoint, Hash, HashIdPreimage, HostFunction, HostFunctionType,
         InstallContractCodeArgs, Int128Parts, LedgerEntryData, LedgerKey, LedgerKeyContractCode,
-        PublicKey, ScAddress, ScContractCode, ScHostContextErrorCode, ScHostFnErrorCode,
-        ScHostObjErrorCode, ScHostStorageErrorCode, ScHostValErrorCode, ScMap, ScMapEntry,
-        ScObject, ScStatusType, ScUnknownErrorCode, ScVal, ScVec,
+        PublicKey, ScAddress, ScContractCode, ScEnvSpecialFn, ScEnvSpecialFnType,
+        ScHostContextErrorCode, ScHostFnErrorCode, ScHostObjErrorCode, ScHostStorageErrorCode,
+        ScHostValErrorCode, ScMap, ScMapEntry, ScObject, ScStatusType, ScUnknownErrorCode, ScVal,
+        ScVec,
     },
     Convert, InvokerType, Status, TryFromVal, TryIntoVal, VmCaller, VmCallerEnv,
 };
@@ -64,6 +65,7 @@ struct RollbackPoint {
 #[cfg(any(test, feature = "testutils"))]
 pub trait ContractFunctionSet {
     fn call(&self, func: &Symbol, host: &Host, args: &[RawVal]) -> Option<RawVal>;
+    fn special_functions(&self) -> Vec<ScEnvSpecialFn>;
 }
 
 #[cfg(any(test, feature = "testutils"))]
@@ -124,6 +126,11 @@ pub struct LedgerInfo {
     pub timestamp: u64,
     pub network_id: [u8; 32],
     pub base_reserve: u32,
+}
+
+pub(crate) enum InvokedFunction {
+    ByName(Symbol),
+    Special(ScEnvSpecialFnType),
 }
 
 #[derive(Clone, Default)]
@@ -836,7 +843,7 @@ impl Host {
     fn call_contract_fn(
         &self,
         id: &Hash,
-        func: &Symbol,
+        func: &InvokedFunction,
         args: &[RawVal],
     ) -> Result<RawVal, HostError> {
         // Create key for storage
@@ -850,17 +857,25 @@ impl Host {
                     id.metered_clone(&self.0.budget)?,
                     code_entry.code.as_slice(),
                 )?;
-                vm.invoke_function_raw(self, SymbolStr::from(func).as_ref(), args)
+                match func {
+                    InvokedFunction::ByName(f) => {
+                        vm.invoke_function_raw(self, f.to_str().as_ref(), args)
+                    }
+                    InvokedFunction::Special(s) => vm.invoke_special_function(self, s, args),
+                }
             }
             #[cfg(not(feature = "vm"))]
             ScContractCode::WasmRef(_) => Err(self.err_general("could not dispatch")),
-            ScContractCode::Token => self.with_frame(
-                Frame::Token(id.clone(), func.clone(), args.to_vec()),
-                || {
-                    use crate::native_contract::{NativeContract, Token};
-                    Token.call(func, self, args)
-                },
-            ),
+            ScContractCode::Token => {
+                if let InvokedFunction::ByName(f) = func {
+                    self.with_frame(Frame::Token(id.clone(), f.clone(), args.to_vec()), || {
+                        use crate::native_contract::{NativeContract, Token};
+                        Token.call(f, self, args)
+                    })
+                } else {
+                    Err(self.err_general("built-in tokens don't have special functions"))
+                }
+            }
         }
     }
 
@@ -872,14 +887,14 @@ impl Host {
         allow_reentry: bool,
     ) -> Result<RawVal, HostError> {
         let id = self.hash_from_obj_input("contract", id)?;
-        self.call_n_internal(&id, func, args, allow_reentry)
+        self.call_n_internal(&id, InvokedFunction::ByName(func), args, allow_reentry)
     }
 
     // Notes on metering: this is covered by the called components.
     pub(crate) fn call_n_internal(
         &self,
         id: &Hash,
-        func: Symbol,
+        func: InvokedFunction,
         args: &[RawVal],
         allow_reentry: bool,
     ) -> Result<RawVal, HostError> {
@@ -914,6 +929,27 @@ impl Host {
             // maintains a borrow of self.0.contracts, which can cause borrow errors.
             let cfs_option = self.0.contracts.borrow().get(&id).cloned();
             if let Some(cfs) = cfs_option {
+                let func = match func {
+                    InvokedFunction::ByName(f) => f,
+                    InvokedFunction::Special(s) => {
+                        let special_fns = cfs.special_functions();
+                        let mut res = None;
+                        for sf in &special_fns {
+                            if matches!(sf.fn_type, s) {
+                                res = Some(Symbol::from_str(sf.name.0.to_string_lossy().as_str()));
+                                break;
+                            }
+                        }
+                        if let Some(res) = res {
+                            res
+                        } else {
+                            return Err(self.err(
+                                DebugError::general()
+                                    .msg("custom_account_check_auth_fn is not defined"),
+                            ));
+                        }
+                    }
+                };
                 let frame = TestContractFrame::new(id.clone(), func.clone(), args.to_vec());
                 let panic = frame.panic.clone();
                 return self.with_frame(Frame::TestContract(frame), || {
@@ -999,7 +1035,7 @@ impl Host {
                         // RawVals into Vec is ignored. Since 1. RawVals are cheap to clone 2. the
                         // max number of args is fairly limited.
                         let object = self.to_host_obj(scobj)?;
-                        let symbol = <Symbol>::try_from(scsym)?;
+                        let symbol = Symbol::try_from_str(scsym.0.to_string_lossy().as_str())?;
                         let args = self.scvals_to_rawvals(rest)?;
                         // since the `HostFunction` frame must be the bottom of the call stack,
                         // reentry is irrelevant, we always pass in `allow_reentry = false`.

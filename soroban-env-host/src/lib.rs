@@ -44,6 +44,7 @@ pub mod storage;
 #[cfg(test)]
 mod test;
 
+#[cfg(feature = "testutils")]
 pub mod cost_runner;
 
 #[cfg(any(test, feature = "testutils"))]

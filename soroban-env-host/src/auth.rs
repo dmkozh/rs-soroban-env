@@ -145,7 +145,9 @@ impl AuthorizedInvocation {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             contract_id: xdr_invocation.contract_id.clone(),
-            function_name: Symbol::try_from(xdr_invocation.function_name)?,
+            function_name: Symbol::try_from_str(
+                xdr_invocation.function_name.0.to_string_lossy().as_str(),
+            )?,
             args: xdr_invocation.args.clone(),
             sub_invocations,
             is_exhausted: false,
@@ -159,8 +161,10 @@ impl AuthorizedInvocation {
             function_name: self
                 .function_name
                 .to_string()
+                .as_str()
                 .try_into()
                 .map_err(|_| HostError::from(ScUnknownErrorCode::General))?,
+
             args: self.args.metered_clone(budget)?,
             sub_invocations: self
                 .sub_invocations
@@ -190,7 +194,9 @@ impl AuthorizedInvocation {
             // This ideally should be infallible
             function_name: self
                 .function_name
+                .to_str()
                 .to_string()
+                .as_str()
                 .try_into()
                 .map_err(|_| HostError::from(ScUnknownErrorCode::General))?,
             args: self.args.clone(),
