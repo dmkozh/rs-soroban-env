@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use ed25519_dalek::Keypair;
 use soroban_env_common::xdr::{
     AccountId, AddressWithNonce, AuthorizedInvocation, ContractAuth, HashIdPreimage,
-    HashIdPreimageContractAuth, PublicKey, ScAddress, ScSymbol, ScVec, Uint256,
+    HashIdPreimageContractAuth, PublicKey, ScAddress, ScContractExecutable, ScSymbol, ScVec,
+    Uint256,
 };
 use soroban_native_sdk_macros::contracttype;
 use soroban_test_wasms::AUTH_TEST_CONTRACT;
@@ -32,6 +33,7 @@ struct AuthTest {
     host: Host,
     keys: Vec<Keypair>,
     contracts: Vec<BytesN<32>>,
+    wasm_hash: Hash,
     last_nonces: HashMap<(Vec<u8>, Vec<u8>), u64>,
 }
 
@@ -110,6 +112,7 @@ impl AuthTest {
             )
         }
         let mut contracts = vec![];
+        let wasm_hash = host.install_test_contract_wasm(AUTH_TEST_CONTRACT).unwrap();
         for _ in 0..contract_cnt {
             let contract_id_obj = host
                 .register_test_contract_wasm(AUTH_TEST_CONTRACT)
@@ -120,6 +123,7 @@ impl AuthTest {
             host,
             keys: accounts,
             contracts,
+            wasm_hash,
             last_nonces: Default::default(),
         }
     }
@@ -305,6 +309,7 @@ impl AuthTest {
 
         AuthorizedInvocation {
             contract_id: root.contract_id.to_vec().try_into().unwrap(),
+            contract_executable: ScContractExecutable::WasmRef(self.wasm_hash.clone()),
             function_name,
             args: root.args.clone(),
             sub_invocations: sub_invocations.try_into().unwrap(),

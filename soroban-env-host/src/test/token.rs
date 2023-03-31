@@ -20,7 +20,7 @@ use crate::{
 };
 use ed25519_dalek::Keypair;
 use soroban_env_common::{
-    xdr::{self, AccountFlags, ScAddress, ScVal, ScVec},
+    xdr::{self, AccountFlags, ScAddress, ScContractExecutable, ScVal, ScVec},
     xdr::{
         AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, Hash, HostFunctionType,
         LedgerEntryData, LedgerKey, Liabilities, PublicKey, ScStatusType, TrustLineEntry,
@@ -1504,6 +1504,7 @@ fn test_auth_rejected_for_incorrect_nonce() {
         &test.host,
         &admin,
         &token.id,
+        ScContractExecutable::Token,
         "mint",
         args.clone(),
         Some(1),
@@ -1522,6 +1523,7 @@ fn test_auth_rejected_for_incorrect_nonce() {
         &test.host,
         &admin,
         &token.id,
+        ScContractExecutable::Token,
         "mint",
         args.clone(),
         Some(0),
@@ -1539,6 +1541,7 @@ fn test_auth_rejected_for_incorrect_nonce() {
         &test.host,
         &admin,
         &token.id,
+        ScContractExecutable::Token,
         "mint",
         args.clone(),
         Some(0),
@@ -1557,6 +1560,7 @@ fn test_auth_rejected_for_incorrect_nonce() {
         &test.host,
         &admin,
         &token.id,
+        ScContractExecutable::Token,
         "mint",
         args.clone(),
         Some(1),
@@ -1587,7 +1591,50 @@ fn test_auth_rejected_for_incorrect_payload() {
     ];
 
     // Incorrect signer.
-    authorize_single_invocation(&test.host, &user, &token.id, "mint", args.clone());
+    authorize_single_invocation(
+        &test.host,
+        &user,
+        &token.id,
+        ScContractExecutable::Token,
+        "mint",
+        args.clone(),
+    );
+    assert!(test
+        .host
+        .call(
+            token.id.clone().into(),
+            Symbol::try_from_small_str("mint").unwrap().into(),
+            args.clone().into(),
+        )
+        .is_err());
+
+    // Incorrect contract.
+    authorize_single_invocation(
+        &test.host,
+        &admin,
+        &BytesN::from_slice(&test.host, &[0; 32]).unwrap(),
+        ScContractExecutable::Token,
+        "mint",
+        args.clone(),
+    );
+    assert!(test
+        .host
+        .call(
+            token.id.clone().into(),
+            Symbol::try_from_small_str("mint").unwrap().into(),
+            args.clone().into(),
+        )
+        .is_err());
+
+    // Incorrect executable.
+    authorize_single_invocation(
+        &test.host,
+        &admin,
+        &BytesN::from_slice(&test.host, &[0; 32]).unwrap(),
+        ScContractExecutable::WasmRef(Hash([0; 32])),
+        "mint",
+        args.clone(),
+    );
     assert!(test
         .host
         .call(
@@ -1598,7 +1645,14 @@ fn test_auth_rejected_for_incorrect_payload() {
         .is_err());
 
     // Incorrect function.
-    authorize_single_invocation(&test.host, &admin, &token.id, "burn", args.clone());
+    authorize_single_invocation(
+        &test.host,
+        &admin,
+        &token.id,
+        ScContractExecutable::Token,
+        "burn",
+        args.clone(),
+    );
     assert!(test
         .host
         .call(
@@ -1613,6 +1667,7 @@ fn test_auth_rejected_for_incorrect_payload() {
         &test.host,
         &admin,
         &token.id,
+        ScContractExecutable::Token,
         "mint",
         host_vec![
             &test.host,
@@ -1635,6 +1690,7 @@ fn test_auth_rejected_for_incorrect_payload() {
         &test.host,
         &admin,
         &token.id,
+        ScContractExecutable::Token,
         "mint",
         host_vec![
             &test.host,
@@ -1653,7 +1709,14 @@ fn test_auth_rejected_for_incorrect_payload() {
         .is_err());
 
     // Correct signer and payload result in success.
-    authorize_single_invocation(&test.host, &admin, &token.id, "mint", args.clone());
+    authorize_single_invocation(
+        &test.host,
+        &admin,
+        &token.id,
+        ScContractExecutable::Token,
+        "mint",
+        args.clone(),
+    );
 
     test.host
         .call(
@@ -2520,6 +2583,10 @@ fn test_custom_account_auth() {
 
     let test = TokenTest::setup();
     let admin_kp = generate_keypair();
+    let account_wasm_hash = test
+        .host
+        .install_test_contract_wasm(SIMPLE_ACCOUNT_CONTRACT)
+        .unwrap();
     let account_contract_id_obj = test
         .host
         .register_test_contract_wasm(SIMPLE_ACCOUNT_CONTRACT)
@@ -2583,6 +2650,7 @@ fn test_custom_account_auth() {
         &test.host,
         &admin,
         &account_contract_id_obj.try_into_val(&test.host).unwrap(),
+        ScContractExecutable::WasmRef(account_wasm_hash),
         "set_owner",
         host_vec![&test.host, new_admin_public_key.clone()],
     );
@@ -2639,6 +2707,7 @@ fn test_recording_auth_for_token() {
             nonce: Some(0),
             invocation: xdr::AuthorizedInvocation {
                 contract_id: Hash(token.id.to_array().unwrap()),
+                contract_executable: ScContractExecutable::Token,
                 function_name: xdr::ScSymbol("mint".try_into().unwrap()),
                 args: ScVec(
                     vec![

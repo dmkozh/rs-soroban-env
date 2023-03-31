@@ -3,7 +3,8 @@ use std::rc::Rc;
 
 use soroban_env_common::xdr::{
     ContractAuth, ContractDataEntry, HashIdPreimage, HashIdPreimageContractAuth, LedgerEntry,
-    LedgerEntryData, LedgerEntryExt, ScAddress, ScHostAuthErrorCode, ScNonceKey, ScSymbol, ScVal,
+    LedgerEntryData, LedgerEntryExt, ScAddress, ScContractExecutable, ScHostAuthErrorCode,
+    ScNonceKey, ScSymbol, ScVal,
 };
 use soroban_env_common::RawVal;
 
@@ -118,6 +119,7 @@ struct AuthorizationTracker {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ContractInvocation {
     pub(crate) contract_id: Hash,
+    pub(crate) contract_executable: ScContractExecutable,
     pub(crate) function_name: ScSymbol,
 }
 
@@ -126,6 +128,7 @@ pub(crate) struct ContractInvocation {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct AuthorizedInvocation {
     pub(crate) contract_id: Hash,
+    pub(crate) contract_executable: ScContractExecutable,
     pub(crate) function_name: ScSymbol,
     pub(crate) args: ScVec,
     pub(crate) sub_invocations: Vec<AuthorizedInvocation>,
@@ -145,6 +148,7 @@ impl AuthorizedInvocation {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             contract_id: xdr_invocation.contract_id.clone(),
+            contract_executable: xdr_invocation.contract_executable.clone(),
             function_name: xdr_invocation.function_name.clone(),
             args: xdr_invocation.args.clone(),
             sub_invocations,
@@ -155,6 +159,7 @@ impl AuthorizedInvocation {
     fn to_xdr(&self, budget: &Budget) -> Result<xdr::AuthorizedInvocation, HostError> {
         Ok(xdr::AuthorizedInvocation {
             contract_id: self.contract_id.metered_clone(budget)?,
+            contract_executable: self.contract_executable.metered_clone(budget)?,
             // This ideally should be infallible
             function_name: self.function_name.clone(),
             args: self.args.metered_clone(budget)?,
@@ -168,9 +173,15 @@ impl AuthorizedInvocation {
         })
     }
 
-    fn new_recording(contract_id: &Hash, function_name: &ScSymbol, args: ScVec) -> Self {
+    fn new_recording(
+        contract_id: &Hash,
+        contract_executable: &ScContractExecutable,
+        function_name: &ScSymbol,
+        args: ScVec,
+    ) -> Self {
         Self {
             contract_id: contract_id.clone(),
+            contract_executable: contract_executable.clone(),
             function_name: function_name.clone(),
             args,
             sub_invocations: vec![],
@@ -183,6 +194,7 @@ impl AuthorizedInvocation {
     fn to_xdr_non_metered(&self) -> Result<xdr::AuthorizedInvocation, HostError> {
         Ok(xdr::AuthorizedInvocation {
             contract_id: self.contract_id.clone(),
+            contract_executable: self.contract_executable.clone(),
             // This ideally should be infallible
             function_name: self.function_name.clone(),
             args: self.args.clone(),
@@ -363,6 +375,7 @@ impl AuthorizationManager {
                             return self.trackers[*tracker_id].record_invocation(
                                 host,
                                 &curr_invocation.contract_id,
+                                &curr_invocation.contract_executable,
                                 &curr_invocation.function_name,
                                 args,
                             );
@@ -374,6 +387,7 @@ impl AuthorizationManager {
                         host,
                         address,
                         &curr_invocation.contract_id,
+                        &curr_invocation.contract_executable,
                         &curr_invocation.function_name,
                         args,
                         self.call_stack.len(),
@@ -420,18 +434,30 @@ impl AuthorizationManager {
     // Records a new call stack frame.
     // This should be called for every `Host` `push_frame`.
     pub(crate) fn push_frame(&mut self, host: &Host, frame: &Frame) -> Result<(), HostError> {
-        let (contract_id, function_name) = match frame {
+        let (contract_id, function_name, contract_executable) = match frame {
             #[cfg(feature = "vm")]
-            Frame::ContractVM(vm, fn_name, _) => {
-                (vm.contract_id.metered_clone(&self.budget)?, fn_name.clone())
-            }
+            Frame::ContractVM(vm, fn_name, _) => (
+                vm.contract_id.metered_clone(&self.budget)?,
+                fn_name.clone(),
+                ScContractExecutable::WasmRef(vm.wasm_hash.metered_clone(&self.budget)?),
+            ),
             // Just skip the host function stack frames for now.
             // We could also make this included into the authorized stack to
             // generalize all the host function invocations.
             Frame::HostFunction(_) => return Ok(()),
-            Frame::Token(id, fn_name, _) => (id.metered_clone(&self.budget)?, fn_name.clone()),
+            Frame::Token(id, fn_name, _) => (
+                id.metered_clone(&self.budget)?,
+                fn_name.clone(),
+                ScContractExecutable::Token,
+            ),
             #[cfg(any(test, feature = "testutils"))]
-            Frame::TestContract(tc) => (tc.id.clone(), tc.func.clone()),
+            Frame::TestContract(tc) => (
+                tc.id.clone(),
+                tc.func.clone(),
+                // Use a dummy hash here - this shouldn't be actually used for
+                // the test contracts.
+                ScContractExecutable::WasmRef([0; 32].into()),
+            ),
         };
         let Ok(ScVal::Symbol(function_name)) = host.from_host_val(function_name.to_raw()) else {
             return Err(host.err_status(xdr::ScHostObjErrorCode::UnexpectedType))
@@ -439,6 +465,7 @@ impl AuthorizationManager {
         self.call_stack.push(ContractInvocation {
             contract_id,
             function_name,
+            contract_executable,
         });
         for tracker in &mut self.trackers {
             tracker.push_frame();
@@ -564,6 +591,7 @@ impl AuthorizationTracker {
         host: &Host,
         address: ScAddress,
         contract_id: &Hash,
+        contract_executable: &ScContractExecutable,
         function_name: &ScSymbol,
         args: ScVec,
         current_stack_len: usize,
@@ -595,6 +623,7 @@ impl AuthorizationTracker {
             address: Some(address),
             root_authorized_invocation: AuthorizedInvocation::new_recording(
                 contract_id,
+                contract_executable,
                 function_name,
                 args,
             ),
@@ -660,6 +689,7 @@ impl AuthorizationTracker {
         &mut self,
         host: &Host,
         contract_id: &Hash,
+        contract_executable: &ScContractExecutable,
         function_name: &ScSymbol,
         args: ScVec,
     ) -> Result<(), HostError> {
@@ -675,6 +705,7 @@ impl AuthorizationTracker {
                 .sub_invocations
                 .push(AuthorizedInvocation::new_recording(
                     contract_id,
+                    contract_executable,
                     function_name,
                     args,
                 ));

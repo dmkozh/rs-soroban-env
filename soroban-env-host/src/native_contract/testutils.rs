@@ -5,8 +5,8 @@ use soroban_env_common::xdr::{
     AccountEntry, AccountEntryExt, AccountEntryExtensionV1, AccountEntryExtensionV1Ext,
     AccountEntryExtensionV2, AccountEntryExtensionV2Ext, AccountId, AddressWithNonce,
     AuthorizedInvocation, ContractAuth, Hash, HashIdPreimage, HashIdPreimageContractAuth,
-    LedgerEntryData, LedgerKey, Liabilities, PublicKey, ScAddress, ScVec, SequenceNumber,
-    SignerKey, Thresholds, Uint256,
+    LedgerEntryData, LedgerKey, Liabilities, PublicKey, ScAddress, ScContractExecutable, ScVec,
+    SequenceNumber, SignerKey, Thresholds, Uint256,
 };
 use soroban_env_common::{EnvBase, TryFromVal, TryIntoVal};
 
@@ -139,6 +139,7 @@ pub(crate) fn authorize_single_invocation_with_nonce(
     host: &Host,
     signer: &TestSigner,
     contract_id: &BytesN<32>,
+    contract_executable: ScContractExecutable,
     function_name: &str,
     args: HostVec,
     nonce: Option<u64>,
@@ -158,6 +159,7 @@ pub(crate) fn authorize_single_invocation_with_nonce(
 
     let root_invocation = AuthorizedInvocation {
         contract_id: contract_id.to_vec().try_into().unwrap(),
+        contract_executable: contract_executable,
         function_name: crate::xdr::ScSymbol(function_name.try_into().unwrap()),
         args: host.call_args_to_scvec(args.into()).unwrap(),
         sub_invocations: Default::default(),
@@ -192,6 +194,7 @@ pub(crate) fn authorize_single_invocation(
     host: &Host,
     signer: &TestSigner,
     contract_id: &BytesN<32>,
+    contract_executable: ScContractExecutable,
     function_name: &str,
     args: HostVec,
 ) {
@@ -208,7 +211,15 @@ pub(crate) fn authorize_single_invocation(
             return;
         }
     };
-    authorize_single_invocation_with_nonce(host, signer, contract_id, function_name, args, nonce);
+    authorize_single_invocation_with_nonce(
+        host,
+        signer,
+        contract_id,
+        contract_executable,
+        function_name,
+        args,
+        nonce,
+    );
 }
 
 pub(crate) fn sign_payload_for_account(

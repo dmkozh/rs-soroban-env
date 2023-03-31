@@ -3,7 +3,7 @@ use std::rc::Rc;
 use rand::{thread_rng, RngCore};
 use soroban_env_common::{
     xdr::{
-        AccountEntry, AccountId, ContractId, CreateContractArgs, HostFunction,
+        AccountEntry, AccountId, ContractId, CreateContractArgs, Hash, HostFunction,
         InstallContractCodeArgs, LedgerEntry, LedgerEntryData, LedgerKey, PublicKey,
         ScContractExecutable, ScVal, ScVec, Uint256,
     },
@@ -140,14 +140,10 @@ impl Host {
         res.try_into().unwrap()
     }
 
-    // Registers a contract with provided WASM source and returns the registered
-    // contract ID.
-    // This relies on the host to have no footprint enforcement.
-    pub(crate) fn register_test_contract_wasm(
+    pub(crate) fn install_test_contract_wasm(
         &self,
         contract_wasm: &[u8],
-    ) -> Result<BytesObject, HostError> {
-        self.set_source_account(generate_account_id());
+    ) -> Result<Hash, HostError> {
         let wasm_id: RawVal = self
             .invoke_function(HostFunction::InstallContractCode(InstallContractCodeArgs {
                 code: contract_wasm
@@ -156,11 +152,22 @@ impl Host {
                     .map_err(|_| self.err_general("too large wasm"))?,
             }))?
             .try_into_val(self)?;
-        let wasm_id = self.hash_from_bytesobj_input("wasm_hash", wasm_id.try_into()?)?;
+        self.hash_from_bytesobj_input("wasm_hash", wasm_id.try_into()?)
+    }
+
+    // Registers a contract with provided WASM source and returns the registered
+    // contract ID.
+    // This relies on the host to have no footprint enforcement.
+    pub(crate) fn register_test_contract_wasm(
+        &self,
+        contract_wasm: &[u8],
+    ) -> Result<BytesObject, HostError> {
+        self.set_source_account(generate_account_id());
+        let wasm_hash = self.install_test_contract_wasm(contract_wasm)?;
         let id_obj: RawVal = self
             .invoke_function(HostFunction::CreateContract(CreateContractArgs {
                 contract_id: ContractId::SourceAccount(Uint256(generate_bytes_array())),
-                source: ScContractExecutable::WasmRef(wasm_id),
+                contract_executable: ScContractExecutable::WasmRef(wasm_hash),
             }))?
             .try_into_val(self)?;
         self.remove_source_account();

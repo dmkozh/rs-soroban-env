@@ -74,6 +74,7 @@ impl StepMeter for HostImpl {
 pub struct Vm {
     #[allow(dead_code)]
     pub(crate) contract_id: Hash,
+    pub(crate) wasm_hash: Hash,
     // TODO: consider moving store and possibly module to Host so they can be
     // recycled across calls. Or possibly beyond, to be recycled across txs.
     module: Module,
@@ -161,6 +162,7 @@ impl Vm {
     pub fn new(
         host: &Host,
         contract_id: Hash,
+        wasm_hash: Hash,
         module_wasm_code: &[u8],
     ) -> Result<Rc<Self>, HostError> {
         host.charge_budget(CostType::VmInstantiation, module_wasm_code.len() as u64)?;
@@ -213,6 +215,7 @@ impl Vm {
         let store = RefCell::new(store);
         Ok(Rc::new(Self {
             contract_id,
+            wasm_hash,
             module,
             store,
             instance,

@@ -19,7 +19,8 @@ impl CostRunner for VmInstantiationRun {
     type RecycledType = (Option<Rc<Vm>>, Vec<u8>);
 
     fn run_iter(host: &crate::Host, _iter: u64, sample: Self::SampleType) -> Self::RecycledType {
-        let vm = black_box(Vm::new(host, sample.id.unwrap(), &sample.wasm[..]).unwrap());
+        let vm =
+            black_box(Vm::new(host, sample.id.unwrap(), [7; 32].into(), &sample.wasm[..]).unwrap());
         (Some(vm), sample.wasm)
     }
 

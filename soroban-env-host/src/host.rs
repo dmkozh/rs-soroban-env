@@ -876,7 +876,7 @@ impl Host {
     fn create_contract_with_id(
         &self,
         contract_id: BytesObject,
-        contract_source: ScContractExecutable,
+        contract_executable: ScContractExecutable,
     ) -> Result<(), HostError> {
         let new_contract_id = self.hash_from_bytesobj_input("id_obj", contract_id)?;
         let storage_key = self.contract_executable_ledger_key(&new_contract_id)?;
@@ -891,12 +891,12 @@ impl Host {
         // Make sure the contract code exists. Without this check it would be
         // possible to accidentally create a contract that never may be invoked
         // (just by providing a bad hash).
-        if let ScContractExecutable::WasmRef(wasm_hash) = &contract_source {
+        if let ScContractExecutable::WasmRef(wasm_hash) = &contract_executable {
             if !self.contract_code_exists(wasm_hash)? {
                 return Err(self.err_general("Wasm does not exist"));
             }
         }
-        self.store_contract_executable(contract_source, new_contract_id, &storage_key)?;
+        self.store_contract_executable(contract_executable, new_contract_id, &storage_key)?;
         Ok(())
     }
 
@@ -924,12 +924,15 @@ impl Host {
 
     fn create_contract_with_id_preimage(
         &self,
-        contract_source: ScContractExecutable,
+        contract_executable: ScContractExecutable,
         id_preimage: HashIdPreimage,
     ) -> Result<BytesObject, HostError> {
         let id_arr: [u8; 32] = self.metered_hash_xdr(&id_preimage)?;
         let id_obj = self.add_host_object(self.scbytes_from_hash(&Hash(id_arr))?)?;
-        self.create_contract_with_id(id_obj, contract_source.metered_clone(self.budget_ref())?)?;
+        self.create_contract_with_id(
+            id_obj,
+            contract_executable.metered_clone(self.budget_ref())?,
+        )?;
         self.maybe_initialize_asset_token(id_obj, id_preimage)?;
         Ok(id_obj)
     }
@@ -956,6 +959,7 @@ impl Host {
                 let vm = Vm::new(
                     self,
                     id.metered_clone(&self.0.budget)?,
+                    wasm_hash,
                     code_entry.code.as_slice(),
                 )?;
                 vm.invoke_function_raw(self, func, args)
@@ -1234,7 +1238,7 @@ impl Host {
             ContractId::SourceAccount(salt) => self.id_preimage_from_source_account(salt)?,
             ContractId::Ed25519PublicKey(key_with_signature) => {
                 let signature_payload_preimage = self.create_contract_args_hash_preimage(
-                    args.source.metered_clone(&self.budget_ref())?,
+                    args.contract_executable.metered_clone(&self.budget_ref())?,
                     key_with_signature.salt.metered_clone(self.budget_ref())?,
                 )?;
                 let signature_payload = self.metered_hash_xdr(&signature_payload_preimage)?;
@@ -1249,7 +1253,7 @@ impl Host {
                 self.id_preimage_from_ed25519(key_with_signature.key, key_with_signature.salt)?
             }
         };
-        self.create_contract_with_id_preimage(args.source, id_preimage)
+        self.create_contract_with_id_preimage(args.contract_executable, id_preimage)
     }
 
     fn install_contract(&self, args: InstallContractCodeArgs) -> Result<BytesObject, HostError> {

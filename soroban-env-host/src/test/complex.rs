@@ -30,6 +30,7 @@ fn run_complex() -> Result<(), HostError> {
         base_reserve: 1,
     };
     let id: Hash = [0; 32].into();
+    let wasm_hash: Hash = [5; 32].into();
 
     // Run 1: record footprint, emulating "preflight".
     let foot = {
@@ -37,7 +38,7 @@ fn run_complex() -> Result<(), HostError> {
         let host = Host::with_storage_and_budget(store, Budget::default());
         host.set_ledger_info(info.clone());
         {
-            let vm = Vm::new(&host, id.clone(), COMPLEX)?;
+            let vm = Vm::new(&host, id.clone(), wasm_hash.clone(), COMPLEX)?;
             let args: ScVec = host.test_scvec::<i32>(&[])?;
             vm.invoke_function(&host, "go", &args)?;
         }
@@ -50,7 +51,7 @@ fn run_complex() -> Result<(), HostError> {
         let store = Storage::with_enforcing_footprint_and_map(foot, MeteredOrdMap::default());
         let host = Host::with_storage_and_budget(store, Budget::default());
         host.set_ledger_info(info);
-        let vm = Vm::new(&host, id, COMPLEX)?;
+        let vm = Vm::new(&host, id, wasm_hash, COMPLEX)?;
         let args: ScVec = host.test_scvec::<i32>(&[])?;
         vm.invoke_function(&host, "go", &args)?;
     }

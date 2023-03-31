@@ -122,7 +122,7 @@ fn test_create_contract_from_source_account(host: &Host, code: &[u8]) -> Hash {
     let created_id_sc_val = host
         .invoke_function(HostFunction::CreateContract(CreateContractArgs {
             contract_id: ContractId::SourceAccount(Uint256(salt.to_vec().try_into().unwrap())),
-            source: ScContractExecutable::WasmRef(wasm_id),
+            contract_executable: ScContractExecutable::WasmRef(wasm_id),
         }))
         .unwrap();
 

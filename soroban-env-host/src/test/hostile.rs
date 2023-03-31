@@ -11,7 +11,8 @@ fn hostile_functions_all_trap() -> Result<(), HostError> {
 
     let host = Host::default();
     let id: Hash = [0; 32].into();
-    let vm = Vm::new(&host, id, HOSTILE)?;
+    let wasm_hash: Hash = [5; 32].into();
+    let vm = Vm::new(&host, id, wasm_hash, HOSTILE)?;
     let args: ScVec = host.test_scvec::<i32>(&[])?;
 
     let res = vm.invoke_function(&host, "iloop", &args);

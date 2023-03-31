@@ -17,7 +17,8 @@ fn invoke_single_contract_function() -> Result<(), HostError> {
 
     let host = Host::default();
     let id: Hash = [0; 32].into();
-    let vm = Vm::new(&host, id, ADD_I32)?;
+    let wasm_hash: Hash = [123; 32].into();
+    let vm = Vm::new(&host, id, wasm_hash, ADD_I32)?;
     let a = 4i32;
     let b = 7i32;
     let c = 0x7fffffff_i32;

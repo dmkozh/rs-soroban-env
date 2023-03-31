@@ -24,7 +24,7 @@ impl<'a> TestToken<'a> {
         let id_obj: RawVal = host
             .invoke_function(HostFunction::CreateContract(CreateContractArgs {
                 contract_id: ContractId::Asset(asset),
-                source: ScContractExecutable::Token,
+                contract_executable: ScContractExecutable::Token,
             }))
             .unwrap()
             .try_into_val(host)
@@ -52,7 +52,14 @@ impl<'a> TestToken<'a> {
         function_name: &str,
         args: HostVec,
     ) -> Result<(), HostError> {
-        authorize_single_invocation(self.host, signer, &self.id, function_name, args.clone());
+        authorize_single_invocation(
+            self.host,
+            signer,
+            &self.id,
+            ScContractExecutable::Token,
+            function_name,
+            args.clone(),
+        );
         Ok(self
             .host
             .call(
