@@ -93,7 +93,7 @@ fn display_scval(scv: &ScVal, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Resu
         }
         ScVal::ContractExecutable(Token) => write!(f, "ContractExecutable(Token)"),
         ScVal::Address(addr) => display_address(addr, f),
-        ScVal::LedgerKeyContractExecutable => write!(f, "LedgerKeyContractExecutable"),
+        ScVal::LedgerKeyContractInstance => write!(f, "LedgerKeyContractInstance"),
         ScVal::LedgerKeyNonce(n) => {
             write!(f, "LedgerKeyNonce({})", n.nonce)
         }

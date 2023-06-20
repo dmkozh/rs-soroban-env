@@ -173,7 +173,7 @@ impl<E: Env> Compare<Val> for E {
 
                 Tag::SymbolSmall => delegate_compare_to_wrapper!(SymbolSmall, a, b, self),
 
-                Tag::LedgerKeyContractExecutable => Ok(Ordering::Equal),
+                Tag::LedgerKeyContractInstance => Ok(Ordering::Equal),
 
                 Tag::SmallCodeUpperBound => Ok(Ordering::Equal),
                 Tag::ObjectCodeLowerBound => Ok(Ordering::Equal),

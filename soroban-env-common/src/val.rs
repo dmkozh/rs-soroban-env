@@ -94,8 +94,8 @@ pub enum Tag {
     SymbolSmall = 14,
 
     /// Tag for a [Val] that corresponds to
-    /// [stellar_xdr::ScVal::LedgerKeyContractExecutable]
-    LedgerKeyContractExecutable = 15,
+    /// [stellar_xdr::ScVal::LedgerKeyContractInstance]
+    LedgerKeyContractInstance = 15,
 
     /// Tag for a [Val] that corresponds to [stellar_xdr::ScVal::StorageType]
     StorageType = 16,
@@ -212,7 +212,7 @@ impl Tag {
             Tag::U256Small => Some(ScValType::U256),
             Tag::I256Small => Some(ScValType::I256),
             Tag::SymbolSmall => Some(ScValType::Symbol),
-            Tag::LedgerKeyContractExecutable => Some(ScValType::LedgerKeyContractExecutable),
+            Tag::LedgerKeyContractInstance => Some(ScValType::LedgerKeyContractInstance),
             Tag::SmallCodeUpperBound => None,
             Tag::ObjectCodeLowerBound => None,
             Tag::U64Object => Some(ScValType::U64),
@@ -712,7 +712,7 @@ impl Debug for Val {
                 let s: &str = ss.as_ref();
                 write!(f, "Symbol({s})")
             }
-            Tag::LedgerKeyContractExecutable => write!(f, "LedgerKeyContractCode"),
+            Tag::LedgerKeyContractInstance => write!(f, "LedgerKeyContractCode"),
 
             Tag::U64Object => fmt_obj("U64", self, f),
             Tag::I64Object => fmt_obj("I64", self, f),

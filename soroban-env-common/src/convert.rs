@@ -395,7 +395,7 @@ where
                 )))
             }
 
-            Tag::LedgerKeyContractExecutable => Ok(ScVal::LedgerKeyContractExecutable),
+            Tag::LedgerKeyContractInstance => Ok(ScVal::LedgerKeyContractInstance),
 
             Tag::StorageType => Ok(ScVal::StorageType((val.get_major() as i32).try_into()?)),
 
@@ -482,8 +482,8 @@ where
                 };
                 SymbolSmall::try_from_str(ss)?.into()
             }
-            ScVal::LedgerKeyContractExecutable => unsafe {
-                Val::from_body_and_tag(0, Tag::LedgerKeyContractExecutable)
+            ScVal::LedgerKeyContractInstance => unsafe {
+                Val::from_body_and_tag(0, Tag::LedgerKeyContractInstance)
             },
             ScVal::StorageType(_storage_type) => unsafe {
                 let major: i32 = (*_storage_type).into();

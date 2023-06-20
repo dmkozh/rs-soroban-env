@@ -134,7 +134,7 @@ impl<'a> ScValObjRef<'a> {
             | ScVal::U32(_)
             | ScVal::I32(_)
             | ScVal::StorageType(_)
-            | ScVal::LedgerKeyContractExecutable => None,
+            | ScVal::LedgerKeyContractInstance => None,
 
             // Always-large values are always ScValObject
             ScVal::Bytes(_)

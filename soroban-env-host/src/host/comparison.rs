@@ -304,7 +304,7 @@ impl Compare<ScVal> for Budget {
             | (Map(_), _)
             | (ContractExecutable(_), _)
             | (Address(_), _)
-            | (LedgerKeyContractExecutable, _)
+            | (LedgerKeyContractInstance, _)
             | (StorageType(_), _)
             | (LedgerKeyNonce(_), _) => Ok(a.cmp(b)),
         }
@@ -751,8 +751,8 @@ mod tests {
                 Val::try_from_val(host, &ScVal::Symbol(xdr::ScSymbol::try_from("").unwrap()))
                     .unwrap()
             }
-            Tag::LedgerKeyContractExecutable => {
-                Val::try_from_val(host, &ScVal::LedgerKeyContractExecutable).unwrap()
+            Tag::LedgerKeyContractInstance => {
+                Val::try_from_val(host, &ScVal::LedgerKeyContractInstance).unwrap()
             }
             Tag::SmallCodeUpperBound => panic!(),
             Tag::ObjectCodeLowerBound => panic!(),

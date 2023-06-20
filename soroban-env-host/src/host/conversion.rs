@@ -198,7 +198,7 @@ impl Host {
         data_type: ContractDataType,
     ) -> Result<Rc<LedgerKey>, HostError> {
         let key_scval = self.from_host_val(k)?;
-        if let ScVal::LedgerKeyContractExecutable | ScVal::LedgerKeyNonce(_) = key_scval {
+        if let ScVal::LedgerKeyContractInstance | ScVal::LedgerKeyNonce(_) = key_scval {
             return Err(self.err(
                 ScErrorType::Storage,
                 ScErrorCode::InvalidInput,
@@ -566,7 +566,7 @@ impl Host {
             | ScVal::I32(_)
             | ScVal::StorageType(_)
             | ScVal::LedgerKeyNonce(_)
-            | ScVal::LedgerKeyContractExecutable => Err(err!(
+            | ScVal::LedgerKeyContractInstance => Err(err!(
                 self,
                 (ScErrorType::Object, ScErrorCode::InvalidInput),
                 "converting unsupported value to object",
