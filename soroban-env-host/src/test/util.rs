@@ -5,7 +5,7 @@ use soroban_env_common::{
     xdr::{
         AccountEntry, AccountId, ContractCostType, ContractIdPreimage,
         ContractIdPreimageFromAddress, CreateContractArgs, HostFunction, LedgerEntry,
-        LedgerEntryData, LedgerKey, PublicKey, ScAddress, ScContractExecutable, ScVal, ScVec,
+        LedgerEntryData, LedgerKey, PublicKey, ScAddress, ContractExecutable, ScVal, ScVec,
         Uint256,
     },
     AddressObject, BytesObject, TryIntoVal, Val, VecObject,
@@ -187,7 +187,7 @@ impl Host {
                     address: ScAddress::Contract(xdr::Hash(generate_bytes_array())),
                     salt: Uint256(generate_bytes_array()),
                 }),
-                executable: ScContractExecutable::WasmRef(wasm_id),
+                executable: ContractExecutable::Wasm(wasm_id),
             }))
             .unwrap()
             .try_into_val(self)

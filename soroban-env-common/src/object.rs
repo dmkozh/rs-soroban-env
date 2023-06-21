@@ -141,9 +141,9 @@ impl<'a> ScValObjRef<'a> {
             | ScVal::String(_)
             | ScVal::Vec(_)
             | ScVal::Map(_)
-            | ScVal::ContractExecutable(_)
             | ScVal::Address(_)
-            | ScVal::LedgerKeyNonce(_) => Some(ScValObjRef(value)),
+            | ScVal::LedgerKeyNonce(_)
+            | ScVal::ContractInstance(_) => Some(ScValObjRef(value)),
 
             // Other values are small or large depending on
             // their actual scalar value.

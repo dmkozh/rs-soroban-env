@@ -196,9 +196,7 @@ impl<E: Env> Compare<Val> for E {
                 | Tag::SymbolObject
                 | Tag::VecObject
                 | Tag::MapObject
-                | Tag::ContractExecutableObject
-                | Tag::AddressObject
-                | Tag::LedgerKeyNonceObject => unreachable!(),
+                | Tag::AddressObject => unreachable!(),
 
                 Tag::ObjectCodeUpperBound => Ok(Ordering::Equal),
                 Tag::Bad => Ok(Ordering::Equal),

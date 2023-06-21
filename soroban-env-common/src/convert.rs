@@ -412,9 +412,7 @@ where
             | Tag::SymbolObject
             | Tag::VecObject
             | Tag::MapObject
-            | Tag::ContractExecutableObject
-            | Tag::AddressObject
-            | Tag::LedgerKeyNonceObject => unreachable!(),
+            | Tag::AddressObject => unreachable!(),
             Tag::SmallCodeUpperBound
             | Tag::ObjectCodeLowerBound
             | Tag::ObjectCodeUpperBound
@@ -494,9 +492,9 @@ where
             | ScVal::String(_)
             | ScVal::Vec(_)
             | ScVal::Map(_)
-            | ScVal::ContractExecutable(_)
             | ScVal::Address(_)
-            | ScVal::LedgerKeyNonce(_) => unreachable!(),
+            | ScVal::LedgerKeyNonce(_)
+            | ScVal::ContractInstance(_) => unreachable!(),
         })
     }
 }

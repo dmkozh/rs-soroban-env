@@ -193,11 +193,11 @@ fn test_recursive_type_clone() -> Result<(), HostError> {
     v.metered_clone(host.as_budget())?;
 
     //*********************************************************************************************************************************************/
-    /* Type(size, count) | Vec(24,1) ---> Box(8,3) ----> ScMap(24,3) --> Vec(24,3) ----> ScMapEntry(80,6) --> ScVal(40, 12) --> U32(4, 12)        */
-    /* MemAlloc          |            8x3      +    24x3              +             80x6                                                    = 576 */
-    /* MemCpy            |  24    +   8x3      +    24x3              +             80x6                                                    = 600 */
+    /* Type(size, count) | Vec(24,1) ---> Box(8,3) ----> ScMap(24,3) --> Vec(24,3) ----> ScMapEntry(128,6) --> ScVal(64, 12) --> U32(4, 12)        */
+    /* MemAlloc          |            8x3      +    24x3              +             128x6                                                    = 864 */
+    /* MemCpy            |  24    +   8x3      +    24x3              +             128x6                                                    = 888 */
     //*********************************************************************************************************************************************/
-    expect!["576"].assert_eq(
+    expect!["864"].assert_eq(
         host.as_budget()
             .get_tracker(ContractCostType::HostMemAlloc)
             .1
@@ -207,7 +207,7 @@ fn test_recursive_type_clone() -> Result<(), HostError> {
     );
     // 600 = 576 + 24 is correct because we need to copy all the memory allocated, as well as the
     // memory layout of the top level type (Vec).
-    expect!["600"].assert_eq(
+    expect!["888"].assert_eq(
         host.as_budget()
             .get_tracker(ContractCostType::HostMemCpy)
             .1

@@ -472,14 +472,8 @@ impl Host {
                         HostObject::Bytes(b) => ScVal::Bytes(b.metered_clone(self.as_budget())?),
                         HostObject::String(s) => ScVal::String(s.metered_clone(self.as_budget())?),
                         HostObject::Symbol(s) => ScVal::Symbol(s.metered_clone(self.as_budget())?),
-                        HostObject::ContractExecutable(cc) => {
-                            ScVal::ContractExecutable(cc.metered_clone(self.as_budget())?)
-                        }
                         HostObject::Address(addr) => {
                             ScVal::Address(addr.metered_clone(self.as_budget())?)
-                        }
-                        HostObject::NonceKey(nk) => {
-                            ScVal::LedgerKeyNonce(nk.metered_clone(self.as_budget())?)
                         }
                     },
                 };
@@ -552,13 +546,9 @@ impl Host {
             ScVal::Symbol(s) => Ok(self
                 .add_host_object(s.metered_clone(self.as_budget())?)?
                 .into()),
-            ScVal::ContractExecutable(cc) => Ok(self
-                .add_host_object(cc.metered_clone(self.as_budget())?)?
-                .into()),
             ScVal::Address(addr) => Ok(self
                 .add_host_object(addr.metered_clone(self.as_budget())?)?
                 .into()),
-
             ScVal::Bool(_)
             | ScVal::Void
             | ScVal::Error(_)
@@ -566,6 +556,7 @@ impl Host {
             | ScVal::I32(_)
             | ScVal::StorageType(_)
             | ScVal::LedgerKeyNonce(_)
+            | ScVal::ContractInstance(_)
             | ScVal::LedgerKeyContractInstance => Err(err!(
                 self,
                 (ScErrorType::Object, ScErrorCode::InvalidInput),
