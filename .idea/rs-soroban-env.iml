@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/soroban-bench-utils/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-env-common/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-env-common/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-env-common/tests/no_std/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-env-guest/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-env-host/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-env-host/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-env-host/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-env-macros/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-native-sdk-macros/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-synth-wasm/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-test-wasms/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/soroban-builtin-sdk-macros/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

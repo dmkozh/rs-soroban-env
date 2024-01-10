@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/add_f32/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/add_i32/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/alloc/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/auth/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/complex/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/conditional_account/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contract_data/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/create_contract/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/delegated_account/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/err/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/fannkuch/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/fib/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/hostile/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/invoke_contract/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/linear_memory/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/recursive_account/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/sac_reentry_account/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/simple_account/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/update/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vec/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/write_upgrade_bytes/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>
