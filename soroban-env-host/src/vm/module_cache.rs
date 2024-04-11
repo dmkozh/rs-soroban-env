@@ -10,6 +10,7 @@ use crate::{
 };
 use std::{collections::BTreeSet, rc::Rc};
 use wasmi::Engine;
+use crate::storage::FootprintMode;
 
 /// A [ModuleCache] is a cache of a set of Wasm modules that have been parsed
 /// but not yet instantiated, along with a shared and reusable [Engine] storing
@@ -37,7 +38,25 @@ impl ModuleCache {
 
     pub fn add_stored_contracts(&mut self, host: &Host) -> Result<(), HostError> {
         use crate::xdr::{ContractCodeEntry, ContractCodeEntryExt, LedgerEntryData, LedgerKey};
-        for (k, v) in host.try_borrow_storage()?.map.iter(host.as_budget())? {
+        let storage = host.try_borrow_storage()?;
+        for (k, v) in storage.map.iter(host.as_budget())? {
+            // In recording mode we build the module cache *after* the contract invocation has
+            // finished. This means that if any new Wasm has been uploaded, then we will add it to
+            // the cache. However, in the 'real' flow we build the cache first, so any new Wasm
+            // upload won't be cached. That's why we should look at the storage in its initial
+            // state, which is conveniently provided by the recording mode snapshot.
+            #[cfg(any(test, feature="recording_mode"))]
+            let init_value = match &storage.mode {
+                FootprintMode::Recording(snapshot) => {
+                    // NB: this clone is recording-mode only and cheap, so no need for metering
+                    // here.
+                    snapshot.get(k)?.clone()
+                }
+                FootprintMode::Enforcing => v.clone()
+            };
+            #[cfg(any(test, feature="recording_mode"))]
+            let v = &init_value;
+
             if let LedgerKey::ContractCode(_) = &**k {
                 if let Some((e, _)) = v {
                     if let LedgerEntryData::ContractCode(ContractCodeEntry { code, hash, ext }) =

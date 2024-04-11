@@ -270,6 +270,7 @@ fn invoke_host_function_helper(
         prng_seed.to_vec(),
         &mut diagnostic_events,
     )?;
+    dbg!(&budget);
     Ok(InvokeHostFunctionHelperResult {
         invoke_result: res
             .encoded_invoke_result
@@ -312,6 +313,7 @@ fn invoke_host_function_recording_helper(
         prng_seed.clone(),
         &mut diagnostic_events,
     )?;
+    dbg!(&budget);
     Ok(InvokeHostFunctionRecordingHelperResult {
         invoke_result: res.invoke_result,
         resources: res.resources,
@@ -394,6 +396,7 @@ fn invoke_host_function_using_simulation_with_signers(
         recording_result.contract_events_and_return_value_size,
         recording_result_with_enforcing_auth.contract_events_and_return_value_size
     );
+    dbg!(&recording_result.resources.instructions);
 
     // Instructions are expected to be slightly different between recording and
     // enforcing modes, so just make sure that the estimation is within the small
