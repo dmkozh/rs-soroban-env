@@ -413,6 +413,35 @@ impl Storage {
             .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
     }
 
+    /// Records or enforces a write access for the given key without actually
+    /// modifying the storage map. This is used by the data cache to handle
+    /// footprint tracking when writes are deferred.
+    #[allow(dead_code)]
+    pub(crate) fn record_write_access(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        host: &Host,
+        key_val: Option<Val>,
+    ) -> Result<(), HostError> {
+        Self::check_supported_ledger_key_type(key)?;
+        #[cfg(any(test, feature = "recording_mode"))]
+        self.handle_maybe_expired_entry(&key, host)?;
+
+        let ty = AccessType::ReadWrite;
+        match &self.mode {
+            #[cfg(any(test, feature = "recording_mode"))]
+            FootprintMode::Recording(_) => {
+                self.footprint.record_access(key, ty, host.budget_ref())?;
+            }
+            FootprintMode::Enforcing => {
+                self.footprint
+                    .enforce_access(key, ty, host.budget_ref())
+                    .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))?;
+            }
+        };
+        Ok(())
+    }
+
     // Helper function `put` and `del` funnel into.
     fn put_opt_helper(
         &mut self,

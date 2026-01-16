@@ -3,14 +3,15 @@ use crate::{
     budget::AsBudget,
     err,
     host::{
-        metered_clone::{MeteredClone, MeteredContainer},
+        metered_clone::{MeteredAlloc, MeteredClone, MeteredContainer},
         prng::Prng,
     },
     storage::{ContractDataCache, InstanceStorageMap, StorageMap},
     xdr::{
-        ContractExecutable, ContractId, ContractIdPreimage, CreateContractArgsV2, Hash,
-        HostFunction, HostFunctionType, ScAddress, ScContractInstance, ScErrorCode, ScErrorType,
-        ScVal,
+        ContractDataEntry, ContractExecutable, ContractId, ContractIdPreimage,
+        CreateContractArgsV2, ExtensionPoint, Hash, HostFunction, HostFunctionType, LedgerEntry,
+        LedgerEntryData, LedgerEntryExt, LedgerKey, LedgerKeyContractData, ScAddress,
+        ScContractInstance, ScErrorCode, ScErrorType, ScVal,
     },
     AddressObject, Error, ErrorHandler, Host, HostError, Object, Symbol, SymbolStr, TryFromVal,
     TryIntoVal, Val, Vm, DEFAULT_HOST_DEPTH_LIMIT,
@@ -1264,6 +1265,71 @@ impl Host {
                 self.reload_instance_storage(ctx)?;
             }
         }
+        Ok(())
+    }
+
+    /// Flushes the data cache from the current frame to storage.
+    /// This writes all cached contract data entries to the underlying storage.
+    /// Should be called at frame exit before persist_instance_storage.
+    #[allow(dead_code)]
+    fn flush_data_cache(&self) -> Result<(), HostError> {
+        // Take the cache from the context to avoid borrowing issues
+        let cache_entries: Vec<_> = self.with_current_context_mut(|ctx| {
+            if !ctx.data_cache.is_modified {
+                return Ok(vec![]);
+            }
+            // Drain the cache into a vec
+            Ok(std::mem::take(&mut ctx.data_cache.map)
+                .into_iter()
+                .collect())
+        })?;
+
+        if cache_entries.is_empty() {
+            return Ok(());
+        }
+
+        let contract_id = self.get_current_contract_id_internal()?;
+
+        for (cache_key, cache_entry) in cache_entries {
+            // Reconstruct the LedgerKey
+            let ledger_key = Rc::metered_new(
+                LedgerKey::ContractData(LedgerKeyContractData {
+                    contract: ScAddress::Contract(contract_id.metered_clone(self)?),
+                    key: cache_key.key.metered_clone(self)?,
+                    durability: cache_key.durability,
+                }),
+                self,
+            )?;
+
+            match cache_entry.val {
+                Some(val) => {
+                    // Create the ledger entry
+                    let entry = LedgerEntry {
+                        last_modified_ledger_seq: 0,
+                        data: LedgerEntryData::ContractData(ContractDataEntry {
+                            contract: ScAddress::Contract(contract_id.metered_clone(self)?),
+                            key: cache_key.key,
+                            val,
+                            durability: cache_key.durability,
+                            ext: ExtensionPoint::V0,
+                        }),
+                        ext: LedgerEntryExt::V0,
+                    };
+                    self.try_borrow_storage_mut()?.put(
+                        &ledger_key,
+                        &Rc::metered_new(entry, self)?,
+                        cache_entry.live_until_ledger,
+                        self,
+                        None,
+                    )?;
+                }
+                None => {
+                    // Entry was deleted
+                    self.try_borrow_storage_mut()?.del(&ledger_key, self, None)?;
+                }
+            }
+        }
+
         Ok(())
     }
 
