@@ -146,6 +146,7 @@
 //! nonces to the ledger automatically, to prevent replay.
 //!
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::{
@@ -183,6 +184,20 @@ use rand::Rng;
 #[cfg(any(test, feature = "recording_mode"))]
 use std::collections::BTreeMap;
 
+/// Key for identifying a nonce in the nonce cache.
+/// Combines the address (as ScAddress) and the nonce value.
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub(crate) struct NonceKey {
+    pub address: ScAddress,
+    pub nonce: i64,
+}
+
+/// Entry in the nonce cache tracking the live_until_ledger for a consumed nonce.
+#[derive(Clone)]
+pub(crate) struct NonceCacheEntry {
+    pub live_until_ledger: u32,
+}
+
 // Authorization manager encapsulates host-based authentication & authorization
 // framework.
 // This supports enforcing authentication & authorization of the contract
@@ -209,6 +224,11 @@ pub struct AuthorizationManager {
     // Call stack of relevant host function and contract invocations, moves mostly
     // in lock step with context stack in the host.
     call_stack: RefCell<Vec<AuthStackFrame>>,
+    // Cache for nonces consumed during authorization. Nonces are written here
+    // during `consume_nonce` and flushed to storage when the root frame
+    // successfully completes. This avoids expensive writes to the immutable
+    // storage map on each nonce consumption while still supporting rollback.
+    nonce_cache: RefCell<HashMap<NonceKey, NonceCacheEntry>>,
 }
 
 macro_rules! impl_checked_borrow_helpers {
@@ -281,6 +301,8 @@ pub struct AuthorizationManagerSnapshot {
     invoker_contract_tracker_root_snapshots: Vec<AuthorizedInvocationSnapshot>,
     #[cfg(any(test, feature = "recording_mode"))]
     tracker_by_address_handle: Option<BTreeMap<u32, usize>>,
+    // Snapshot of the nonce cache for rollback support.
+    nonce_cache_snapshot: HashMap<NonceKey, NonceCacheEntry>,
 }
 
 // Snapshot of the `account_trackers` in `AuthorizationManager`.
@@ -787,6 +809,7 @@ impl AuthorizationManager {
             call_stack: RefCell::new(vec![]),
             account_trackers: RefCell::new(trackers),
             invoker_contract_trackers: RefCell::new(vec![]),
+            nonce_cache: RefCell::new(HashMap::new()),
         })
     }
 
@@ -800,6 +823,7 @@ impl AuthorizationManager {
             call_stack: RefCell::new(vec![]),
             account_trackers: RefCell::new(vec![]),
             invoker_contract_trackers: RefCell::new(vec![]),
+            nonce_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -817,6 +841,7 @@ impl AuthorizationManager {
             call_stack: RefCell::new(vec![]),
             account_trackers: RefCell::new(vec![]),
             invoker_contract_trackers: RefCell::new(vec![]),
+            nonce_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -1193,11 +1218,25 @@ impl AuthorizationManager {
                     .clone(),
             ),
         };
+        // Snapshot the nonce cache for rollback
+        let nonce_cache_snapshot = self
+            .nonce_cache
+            .try_borrow()
+            .map_err(|_| {
+                host.err(
+                    ScErrorType::Auth,
+                    ScErrorCode::InternalError,
+                    "nonce_cache.try_borrow failed",
+                    &[],
+                )
+            })?
+            .clone();
         Ok(AuthorizationManagerSnapshot {
             account_trackers_snapshot,
             invoker_contract_tracker_root_snapshots,
             #[cfg(any(test, feature = "recording_mode"))]
             tracker_by_address_handle,
+            nonce_cache_snapshot,
         })
     }
 
@@ -1282,6 +1321,17 @@ impl AuthorizationManager {
                 }
             }
         }
+
+        // Rollback the nonce cache
+        *self.nonce_cache.try_borrow_mut().map_err(|_| {
+            host.err(
+                ScErrorType::Auth,
+                ScErrorCode::InternalError,
+                "nonce_cache.try_borrow_mut failed",
+                &[],
+            )
+        })? = snapshot.nonce_cache_snapshot;
+
         Ok(())
     }
 
@@ -2256,17 +2306,46 @@ impl Host {
         nonce: i64,
         live_until_ledger: u32,
     ) -> Result<(), HostError> {
-        let nonce_key_scval = ScVal::LedgerKeyNonce(ScNonceKey { nonce });
         let sc_address = self.scaddress_from_address(address)?;
-        let nonce_key = self.storage_key_for_address(
+        let live_until_ledger = live_until_ledger
+            .max(self.get_min_live_until_ledger(xdr::ContractDataDurability::Temporary)?);
+
+        // Create the nonce cache key
+        let nonce_key = NonceKey {
+            address: sc_address.metered_clone(self)?,
+            nonce,
+        };
+
+        // First check if the nonce is already in the cache (consumed in this transaction)
+        {
+            let auth_manager = self.try_borrow_authorization_manager()?;
+            let nonce_cache = auth_manager.nonce_cache.try_borrow().map_err(|_| {
+                self.err(
+                    ScErrorType::Auth,
+                    ScErrorCode::InternalError,
+                    "nonce_cache.try_borrow failed",
+                    &[],
+                )
+            })?;
+            if nonce_cache.contains_key(&nonce_key) {
+                return Err(self.err(
+                    ScErrorType::Auth,
+                    ScErrorCode::ExistingValue,
+                    "nonce already consumed in this transaction",
+                    &[address.into()],
+                ));
+            }
+        }
+
+        // Check if the nonce exists in storage (from a previous transaction)
+        let nonce_key_scval = ScVal::LedgerKeyNonce(ScNonceKey { nonce });
+        let storage_key = self.storage_key_for_address(
             sc_address.metered_clone(self)?,
             nonce_key_scval.metered_clone(self)?,
             xdr::ContractDataDurability::Temporary,
         )?;
-        let live_until_ledger = live_until_ledger
-            .max(self.get_min_live_until_ledger(xdr::ContractDataDurability::Temporary)?);
         self.with_mut_storage(|storage| {
-            if storage.has(&nonce_key, self, None).map_err(|err| {
+            if storage.has(&storage_key, self, None).map_err(|err| {
                 if err.error.is_type(ScErrorType::Storage)
                     && err.error.is_code(ScErrorCode::ExceededLimit)
                 {
@@ -2286,26 +2365,78 @@ impl Host {
                     &[address.into()],
                 ));
             }
+            Ok(())
+        })?;
+
+        // Add to the nonce cache
+        {
+            let auth_manager = self.try_borrow_authorization_manager()?;
+            let mut nonce_cache = auth_manager.nonce_cache.try_borrow_mut().map_err(|_| {
+                self.err(
+                    ScErrorType::Auth,
+                    ScErrorCode::InternalError,
+                    "nonce_cache.try_borrow_mut failed",
+                    &[],
+                )
+            })?;
+            nonce_cache.insert(
+                nonce_key,
+                NonceCacheEntry {
+                    live_until_ledger,
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Flushes the nonce cache from the AuthorizationManager to storage.
+    /// This should be called when the root frame successfully completes.
+    pub(crate) fn flush_nonce_cache(&self) -> Result<(), HostError> {
+        let entries_to_flush: Vec<(NonceKey, NonceCacheEntry)> = {
+            let auth_manager = self.try_borrow_authorization_manager()?;
+            let nonce_cache = auth_manager.nonce_cache.try_borrow().map_err(|_| {
+                self.err(
+                    ScErrorType::Auth,
+                    ScErrorCode::InternalError,
+                    "nonce_cache.try_borrow failed",
+                    &[],
+                )
+            })?;
+            nonce_cache.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        };
+
+        for (nonce_key, entry) in entries_to_flush {
+            let nonce_key_scval = ScVal::LedgerKeyNonce(ScNonceKey { nonce: nonce_key.nonce });
+            let storage_key = self.storage_key_for_address(
+                nonce_key.address.metered_clone(self)?,
+                nonce_key_scval.metered_clone(self)?,
+                xdr::ContractDataDurability::Temporary,
+            )?;
             let data = LedgerEntryData::ContractData(ContractDataEntry {
-                contract: sc_address,
+                contract: nonce_key.address,
                 key: nonce_key_scval,
                 val: ScVal::Void,
                 durability: xdr::ContractDataDurability::Temporary,
                 ext: xdr::ExtensionPoint::V0,
             });
-            let entry = LedgerEntry {
+            let ledger_entry = LedgerEntry {
                 last_modified_ledger_seq: 0,
                 data,
                 ext: LedgerEntryExt::V0,
             };
-            storage.put(
-                &nonce_key,
-                &Rc::metered_new(entry, self)?,
-                Some(live_until_ledger),
-                self,
-                None,
-            )
-        })
+            self.with_mut_storage(|storage| {
+                storage.put(
+                    &storage_key,
+                    &Rc::metered_new(ledger_entry, self)?,
+                    Some(entry.live_until_ledger),
+                    self,
+                    None,
+                )
+            })?;
+        }
+
+        Ok(())
     }
 
     // Returns the recorded per-address authorization payloads that would cover the

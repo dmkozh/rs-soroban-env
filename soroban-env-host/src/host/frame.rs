@@ -557,6 +557,15 @@ impl Host {
             // Pop and rollback on error.
             self.pop_context(Some(rp))?
         } else {
+            // If this is the root frame (start_depth == 0) and we're succeeding,
+            // flush the nonce cache to storage before popping.
+            if start_depth == 0 {
+                if let Err(e) = self.flush_nonce_cache() {
+                    // If flushing fails, we need to rollback
+                    self.pop_context(Some(rp))?;
+                    return Err(e);
+                }
+            }
             // Just pop on success.
             self.pop_context(None)?
         };

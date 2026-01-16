@@ -79,3 +79,127 @@ impl<T: WriteXdr> MeteredHashXdr for T {
         budget.charge(HASH_COST_TYPE, Some(hasher.count as u64))
     }
 }
+
+use std::collections::HashMap;
+
+use crate::{
+    budget::AsBudget,
+    host::{declared_size::DeclaredSizeForMetering, metered_clone::MeteredClone},
+};
+
+/// A metered hash map that wraps `std::collections::HashMap` with budget charging.
+/// Used for per-frame caching during contract execution where the immutable ordered
+/// map would be too expensive due to copy-on-write semantics.
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct MeteredHashMap<K, V> {
+    pub(crate) map: HashMap<K, V>,
+}
+
+impl<K, V> Default for MeteredHashMap<K, V> {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+}
+
+impl<K, V> std::hash::Hash for MeteredHashMap<K, V>
+where
+    K: std::hash::Hash + Eq + Ord,
+    V: std::hash::Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Sort keys to ensure deterministic hashing regardless of iteration order
+        let mut entries: Vec<_> = self.map.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (k, v) in entries {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl<K, V> MeteredHashMap<K, V>
+where
+    K: Hash + Eq + DeclaredSizeForMetering + MeteredClone,
+    V: DeclaredSizeForMetering + MeteredClone,
+{
+    const ENTRY_SIZE: u64 = K::DECLARED_SIZE + V::DECLARED_SIZE;
+
+    /// Creates a new empty metered hash map.
+    pub fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    /// Returns the number of entries in the map.
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Returns true if the map is empty.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    /// Charges for hash computation based on key size.
+    fn charge_hash<B: AsBudget>(&self, budget: &B) -> Result<(), HostError> {
+        // Charge for computing the hash of the key
+        budget
+            .as_budget()
+            .charge(HASH_COST_TYPE, Some(K::DECLARED_SIZE))
+    }
+
+    /// Charges for accessing/copying entries.
+    fn charge_access<B: AsBudget>(&self, count: usize, budget: &B) -> Result<(), HostError> {
+        budget.as_budget().charge(
+            ContractCostType::MemCpy,
+            Some(Self::ENTRY_SIZE.saturating_mul(count as u64)),
+        )
+    }
+
+    /// Gets a reference to a value in the map.
+    pub fn get<B: AsBudget>(&self, key: &K, budget: &B) -> Result<Option<&V>, HostError> {
+        self.charge_hash(budget)?;
+        self.charge_access(1, budget)?;
+        Ok(self.map.get(key))
+    }
+
+    /// Checks if the map contains a key.
+    pub fn contains_key<B: AsBudget>(&self, key: &K, budget: &B) -> Result<bool, HostError> {
+        self.charge_hash(budget)?;
+        Ok(self.map.contains_key(key))
+    }
+
+    /// Inserts a key-value pair into the map. Unlike MeteredOrdMap, this mutates
+    /// in place rather than creating a new map.
+    pub fn insert<B: AsBudget>(&mut self, key: K, value: V, budget: &B) -> Result<(), HostError> {
+        self.charge_hash(budget)?;
+        self.charge_access(1, budget)?;
+        self.map.insert(key, value);
+        Ok(())
+    }
+
+    /// Removes a key from the map.
+    pub fn remove<B: AsBudget>(&mut self, key: &K, budget: &B) -> Result<Option<V>, HostError> {
+        self.charge_hash(budget)?;
+        self.charge_access(1, budget)?;
+        Ok(self.map.remove(key))
+    }
+
+    /// Returns an iterator over the map entries.
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.map.iter()
+    }
+
+    /// Clones the map with metering.
+    pub fn metered_clone<B: AsBudget>(&self, budget: &B) -> Result<Self, HostError> {
+        self.charge_access(self.map.len(), budget)?;
+        Ok(Self {
+            map: self.map.clone(),
+        })
+    }
+}
