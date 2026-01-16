@@ -6,7 +6,7 @@ use crate::{
         metered_clone::{MeteredClone, MeteredContainer},
         prng::Prng,
     },
-    storage::{InstanceStorageMap, StorageMap},
+    storage::{ContractDataCache, InstanceStorageMap, StorageMap},
     xdr::{
         ContractExecutable, ContractId, ContractIdPreimage, CreateContractArgsV2, Hash,
         HostFunction, HostFunctionType, ScAddress, ScContractInstance, ScErrorCode, ScErrorType,
@@ -95,6 +95,12 @@ pub(crate) struct Context {
     pub(crate) frame: Frame,
     pub(crate) prng: Option<Prng>,
     pub(crate) storage: Option<InstanceStorageMap>,
+    /// Per-frame cache for contract data modifications.
+    /// Uses HashMap for O(1) lookups, avoiding expensive writes to the
+    /// immutable StorageMap until the frame successfully completes.
+    /// Boxed to keep Context size within the declared size limit (512 bytes).
+    #[allow(dead_code)]
+    pub(crate) data_cache: Box<ContractDataCache>,
 }
 
 pub(crate) struct CallParams {
@@ -427,6 +433,7 @@ impl Host {
             frame,
             prng: None,
             storage: None,
+            data_cache: Box::new(ContractDataCache::new()),
         };
         let rp = self.push_context(ctx)?;
         {

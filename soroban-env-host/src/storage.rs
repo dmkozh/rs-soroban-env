@@ -8,6 +8,7 @@
 //!   - [Env::del_contract_data](crate::Env::del_contract_data)
 
 use std::rc::Rc;
+use std::collections::HashMap;
 
 use crate::budget::AsBudget;
 use crate::host::metered_clone::{MeteredClone, MeteredIterator};
@@ -63,6 +64,103 @@ impl InstanceStorageMap {
             )?,
             host,
         )
+    }
+}
+
+/// Key for the per-frame contract data cache.
+/// Uses ScVal for the key portion (cheaper than full LedgerKey) and includes
+/// durability to distinguish between persistent and temporary entries.
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub(crate) struct ContractDataCacheKey {
+    pub key: ScVal,
+    pub durability: ContractDataDurability,
+}
+
+/// Cached value for contract data entries.
+/// `None` represents a deleted entry.
+#[derive(Clone)]
+pub(crate) struct ContractDataCacheEntry {
+    /// The value stored. None means the entry was deleted.
+    pub val: Option<ScVal>,
+    /// The live_until_ledger for the entry (for TTL tracking).
+    pub live_until_ledger: Option<u32>,
+}
+
+/// Per-frame cache for contract data modifications.
+/// This cache intercepts reads and writes for the current contract,
+/// avoiding expensive writes to the immutable StorageMap until the
+/// frame successfully completes.
+#[derive(Clone, Default)]
+pub(crate) struct ContractDataCache {
+    /// Maps cache keys to cached values. Uses HashMap for O(1) lookups.
+    pub(crate) map: HashMap<ContractDataCacheKey, ContractDataCacheEntry>,
+    /// Whether any modifications have been made (for optimization).
+    pub(crate) is_modified: bool,
+}
+
+impl std::hash::Hash for ContractDataCache {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Sort keys to ensure deterministic hashing regardless of HashMap iteration order
+        let mut entries: Vec<_> = self.map.iter().collect();
+        entries.sort_by(|a, b| {
+            // Compare by durability first, then by key bytes
+            match a.0.durability.cmp(&b.0.durability) {
+                std::cmp::Ordering::Equal => {
+                    // Compare ScVal by their discriminant and content
+                    // This is a simplified comparison - in practice we'd want
+                    // proper ScVal ordering
+                    format!("{:?}", a.0.key).cmp(&format!("{:?}", b.0.key))
+                }
+                other => other,
+            }
+        });
+        for (k, v) in entries {
+            k.hash(state);
+            // Hash the value discriminant and live_until
+            v.val.is_some().hash(state);
+            v.live_until_ledger.hash(state);
+        }
+        self.is_modified.hash(state);
+    }
+}
+
+#[allow(dead_code)]
+impl ContractDataCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+            is_modified: false,
+        }
+    }
+
+    /// Gets a value from the cache if present.
+    pub(crate) fn get(&self, key: &ContractDataCacheKey) -> Option<&ContractDataCacheEntry> {
+        self.map.get(key)
+    }
+
+    /// Checks if the cache contains an entry for the key.
+    pub(crate) fn contains_key(&self, key: &ContractDataCacheKey) -> bool {
+        self.map.contains_key(key)
+    }
+
+    /// Inserts or updates a value in the cache.
+    pub(crate) fn put(&mut self, key: ContractDataCacheKey, entry: ContractDataCacheEntry) {
+        self.map.insert(key, entry);
+        self.is_modified = true;
+    }
+
+    /// Marks an entry as deleted in the cache.
+    pub(crate) fn del(&mut self, key: ContractDataCacheKey, live_until_ledger: Option<u32>) {
+        self.map.insert(key, ContractDataCacheEntry {
+            val: None,
+            live_until_ledger,
+        });
+        self.is_modified = true;
+    }
+
+    /// Returns an iterator over the cache entries.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&ContractDataCacheKey, &ContractDataCacheEntry)> {
+        self.map.iter()
     }
 }
 

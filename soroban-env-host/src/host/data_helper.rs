@@ -5,7 +5,7 @@ use crate::{
     budget::AsBudget,
     err,
     host::metered_clone::{MeteredAlloc, MeteredClone},
-    storage::{InstanceStorageMap, Storage},
+    storage::{ContractDataCache, InstanceStorageMap, Storage},
     vm::VersionedContractCodeCostInputs,
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeEntry, ContractDataDurability,
@@ -70,6 +70,24 @@ impl Host {
             storage.is_modified = true;
             f(storage)
         })
+    }
+
+    /// Immutable accessor to the data cache of the current frame.
+    #[allow(dead_code)]
+    pub(crate) fn with_data_cache<F, U>(&self, f: F) -> Result<U, HostError>
+    where
+        F: FnOnce(&ContractDataCache) -> Result<U, HostError>,
+    {
+        self.with_current_context_mut(|ctx| f(&ctx.data_cache))
+    }
+
+    /// Mutable accessor to the data cache of the current frame.
+    #[allow(dead_code)]
+    pub(crate) fn with_mut_data_cache<F, U>(&self, f: F) -> Result<U, HostError>
+    where
+        F: FnOnce(&mut ContractDataCache) -> Result<U, HostError>,
+    {
+        self.with_current_context_mut(|ctx| f(&mut ctx.data_cache))
     }
 
     pub(crate) fn contract_instance_ledger_key(
