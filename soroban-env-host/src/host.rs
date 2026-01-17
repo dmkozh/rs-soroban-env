@@ -15,7 +15,7 @@ use crate::{
     xdr::{
         int128_helpers, AccountId, Asset, ContractCostType, ContractEventType, ContractExecutable,
         ContractId, ContractIdPreimage, ContractIdPreimageFromAddress, CreateContractArgsV2,
-        Duration, Hash, LedgerEntryData, PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType,
+        Duration, Hash, PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType,
         ScString, ScSymbol, ScVal, TimePoint, Uint256,
     },
     AddressObject, Bool, BytesObject, Compare, ConversionError, EnvBase, Error, LedgerInfo,
@@ -2145,8 +2145,7 @@ impl VmCallerEnv for Host {
     ) -> Result<Bool, HostError> {
         let res = match t {
             StorageType::Temporary | StorageType::Persistent => {
-                let key = self.storage_key_from_val(k, t.try_into()?)?;
-                self.try_borrow_storage_mut()?.has(&key, self, Some(k))?
+                self.has_contract_data_in_ledger(k, t)?
             }
             StorageType::Instance => {
                 self.with_instance_storage(|s| Ok(s.map.get(&k, self)?.is_some()))?
@@ -2165,17 +2164,7 @@ impl VmCallerEnv for Host {
     ) -> Result<Val, HostError> {
         match t {
             StorageType::Temporary | StorageType::Persistent => {
-                let key = self.storage_key_from_val(k, t.try_into()?)?;
-                let entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
-                match &entry.data {
-                    LedgerEntryData::ContractData(e) => Ok(self.to_valid_host_val(&e.val)?),
-                    _ => Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "expected contract data ledger entry",
-                        &[],
-                    )),
-                }
+                self.get_contract_data_from_ledger(k, t)
             }
             StorageType::Instance => self.with_instance_storage(|s| {
                 s.map
@@ -2202,8 +2191,7 @@ impl VmCallerEnv for Host {
     ) -> Result<Void, HostError> {
         match t {
             StorageType::Temporary | StorageType::Persistent => {
-                let key = self.storage_key_from_val(k, t.try_into()?)?;
-                self.try_borrow_storage_mut()?.del(&key, self, Some(k))?;
+                self.del_contract_data_from_ledger(k, t)?;
             }
             StorageType::Instance => {
                 self.with_mut_instance_storage(|s| {
@@ -2235,14 +2223,7 @@ impl VmCallerEnv for Host {
                 &[],
             ))?;
         }
-        let key = self.storage_key_from_val(k, t.try_into()?)?;
-        self.try_borrow_storage_mut()?.extend_ttl(
-            self,
-            key,
-            threshold.into(),
-            extend_to.into(),
-            Some(k),
-        )?;
+        self.extend_contract_data_ttl_in_ledger(k, t, threshold.into(), extend_to.into())?;
         Ok(Val::VOID)
     }
 

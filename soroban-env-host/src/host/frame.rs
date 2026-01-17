@@ -532,6 +532,12 @@ impl Host {
         // fallible in a variety of ways, and if it fails we want to roll back
         // everything else.
         if res.is_ok() {
+            // First flush the data cache to storage
+            if let Err(e) = self.flush_data_cache() {
+                res = Err(e);
+            }
+        }
+        if res.is_ok() {
             let instance_storage_persisted = self.persist_instance_storage();
             match instance_storage_persisted {
                 Ok(persisted) => {

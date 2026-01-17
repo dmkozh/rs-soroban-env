@@ -1145,7 +1145,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316637,
+                instructions: 318021,
                 mem_bytes: 1134859,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1172,7 +1172,7 @@ mod test {
                     ),
                 ),
                 resources: SubInvocationResources {
-                    instructions: 316637,
+                    instructions: 318021,
                     mem_bytes: 1134859,
                     disk_read_entries: 0,
                     memory_read_entries: 3,
@@ -1206,8 +1206,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 320246,
-                mem_bytes: 1135322,
+                instructions: 324272,
+                mem_bytes: 1135409,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 1,
@@ -1232,7 +1232,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 315936,
+                instructions: 317320,
                 mem_bytes: 1134707,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1258,8 +1258,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 322157,
-                mem_bytes: 1135678,
+                instructions: 326133,
+                mem_bytes: 1135765,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 1,
@@ -1284,7 +1284,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316476,
+                instructions: 317860,
                 mem_bytes: 1134775,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1310,7 +1310,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 317701,
+                instructions: 319025,
                 mem_bytes: 1135127,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1336,7 +1336,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 318103,
+                instructions: 319427,
                 mem_bytes: 1135127,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1362,7 +1362,7 @@ mod test {
         assert!(res.is_err());
         expect![[r#"
             InvocationResources {
-                instructions: 317540,
+                instructions: 318864,
                 mem_bytes: 1135195,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1395,7 +1395,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 320711,
+                instructions: 322095,
                 mem_bytes: 1135662,
                 disk_read_entries: 2,
                 memory_read_entries: 1,
@@ -1427,7 +1427,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 323248,
+                instructions: 324632,
                 mem_bytes: 1136109,
                 disk_read_entries: 3,
                 memory_read_entries: 0,
@@ -1927,7 +1927,7 @@ mod test {
                             ),
                             data: String(
                                 ScString(
-                                    StringM(invocation resource limits are exceeded: instructions: 320964 > 10, memory bytes: 1135814 > 20, total footprint ledger entries: 5 > 4, disk read ledger entries: 2 > 1, disk read bytes: 3132 > 30, write ledger entries: 2 > 0, write bytes: 3132 > 40, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: Symbol(ScSymbol(StringM(key_1))), durability: Persistent })' size: 60 > 25, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) })' size: 3028 > 45),
+                                    StringM(invocation resource limits are exceeded: instructions: 322348 > 10, memory bytes: 1135814 > 20, total footprint ledger entries: 5 > 4, disk read ledger entries: 2 > 1, disk read bytes: 3132 > 30, write ledger entries: 2 > 0, write bytes: 3132 > 40, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: Symbol(ScSymbol(StringM(key_1))), durability: Persistent })' size: 60 > 25, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) })' size: 3028 > 45),
                                 ),
                             ),
                         },

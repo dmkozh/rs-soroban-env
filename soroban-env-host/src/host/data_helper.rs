@@ -5,7 +5,7 @@ use crate::{
     budget::AsBudget,
     err,
     host::metered_clone::{MeteredAlloc, MeteredClone},
-    storage::{ContractDataCache, InstanceStorageMap, Storage},
+    storage::{ContractDataCache, ContractDataCacheEntry, ContractDataCacheKey, InstanceStorageMap, Storage},
     vm::VersionedContractCodeCostInputs,
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeEntry, ContractDataDurability,
@@ -15,7 +15,7 @@ use crate::{
         LedgerKeyTrustLine, PublicKey, ScAddress, ScContractInstance, ScErrorCode, ScErrorType,
         ScMap, ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
     },
-    AddressObject, Env, ErrorHandler, Host, HostError, StorageType, U32Val, Val,
+    AddressObject, Env, Error, ErrorHandler, Host, HostError, StorageType, U32Val, Val,
 };
 
 impl Host {
@@ -73,21 +73,45 @@ impl Host {
     }
 
     /// Immutable accessor to the data cache of the current frame.
-    #[allow(dead_code)]
-    pub(crate) fn with_data_cache<F, U>(&self, f: F) -> Result<U, HostError>
+    /// Returns None if there is no current frame.
+    pub(crate) fn try_with_data_cache<F, U>(&self, f: F) -> Result<Option<U>, HostError>
     where
         F: FnOnce(&ContractDataCache) -> Result<U, HostError>,
     {
-        self.with_current_context_mut(|ctx| f(&ctx.data_cache))
+        let Ok(context_guard) = self.0.context_stack.try_borrow() else {
+            return Err(self.err(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+                "context is already borrowed",
+                &[],
+            ));
+        };
+        if let Some(ctx) = context_guard.last() {
+            Ok(Some(f(&ctx.data_cache)?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Mutable accessor to the data cache of the current frame.
-    #[allow(dead_code)]
-    pub(crate) fn with_mut_data_cache<F, U>(&self, f: F) -> Result<U, HostError>
+    /// Returns None if there is no current frame.
+    pub(crate) fn try_with_mut_data_cache<F, U>(&self, f: F) -> Result<Option<U>, HostError>
     where
         F: FnOnce(&mut ContractDataCache) -> Result<U, HostError>,
     {
-        self.with_current_context_mut(|ctx| f(&mut ctx.data_cache))
+        let Ok(mut context_guard) = self.0.context_stack.try_borrow_mut() else {
+            return Err(self.err(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+                "context is already borrowed",
+                &[],
+            ));
+        };
+        if let Some(ctx) = context_guard.last_mut() {
+            Ok(Some(f(&mut ctx.data_cache)?))
+        } else {
+            Ok(None)
+        }
     }
 
     pub(crate) fn contract_instance_ledger_key(
@@ -479,6 +503,10 @@ impl Host {
         })
     }
 
+    /// Puts contract data into the per-frame cache instead of directly to storage.
+    /// The cache will be flushed to storage when the frame successfully exits.
+    /// This avoids expensive immutable map mutations on each write.
+    /// If there is no frame context, falls back to direct storage write.
     pub(super) fn put_contract_data_into_ledger(
         &self,
         k: Val,
@@ -487,10 +515,86 @@ impl Host {
     ) -> Result<(), HostError> {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
-        // Currently the storage stores the whole ledger entries, while this
-        // operation might only modify the internal `ScVal` value. Thus we
-        // need to only overwrite the value in case if there is already an
-        // existing ledger entry value for the key in the storage.
+
+        // Check if we have a frame context (for caching)
+        let has_frame = self.try_with_data_cache(|_| Ok(()))?.is_some();
+
+        if !has_frame {
+            // No frame context - use direct storage write (legacy behavior)
+            return self.put_contract_data_into_storage_direct(k, v, t);
+        }
+
+        // Record/enforce footprint access. This is needed even though we're
+        // writing to cache because:
+        // 1. In recording mode, we need to record that this key will be written
+        // 2. In enforcing mode, we need to verify the key is in the footprint
+        self.try_borrow_storage_mut()?
+            .record_write_access(&key, self, Some(k))?;
+
+        // Convert key and value to ScVal for caching
+        let sc_key = self.from_host_val(k)?;
+        let sc_val = self.from_host_val(v)?;
+
+        // Determine the live_until_ledger:
+        // - If entry exists in cache, preserve its live_until_ledger
+        // - If entry exists in storage, get its live_until_ledger
+        // - Otherwise use min live_until for new entries
+        let cache_key = ContractDataCacheKey {
+            key: sc_key.metered_clone(self)?,
+            durability,
+        };
+
+        let budget = self.budget_ref();
+        let live_until_from_cache = self.try_with_data_cache(|cache| {
+            if let Some(entry) = cache.get(&cache_key, budget)? {
+                return Ok(entry.live_until_ledger);
+            }
+            Ok(None)
+        })?.flatten();
+
+        let live_until_ledger = match live_until_from_cache {
+            Some(lul) => Some(lul),
+            None => {
+                // Check storage for existing entry's live_until
+                if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
+                    let (_, lul) = self
+                        .try_borrow_storage_mut()?
+                        .get_with_live_until_ledger(&key, self, Some(k))?;
+                    lul
+                } else {
+                    // New entry - use minimum live_until
+                    Some(self.get_min_live_until_ledger(durability)?)
+                }
+            }
+        };
+
+        // Write to cache
+        let budget = self.budget_ref();
+        self.try_with_mut_data_cache(|cache| {
+            cache.put(
+                ContractDataCacheKey {
+                    key: sc_key,
+                    durability,
+                },
+                ContractDataCacheEntry {
+                    val: Some(sc_val),
+                    live_until_ledger,
+                },
+                budget,
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Direct storage write without caching (legacy behavior for when no frame context exists).
+    fn put_contract_data_into_storage_direct(
+        &self,
+        k: Val,
+        v: Val,
+        t: StorageType,
+    ) -> Result<(), HostError> {
+        let durability: ContractDataDurability = t.try_into()?;
+        let key = self.storage_key_from_val(k, durability)?;
         if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
             let (current, live_until_ledger) = self
                 .try_borrow_storage_mut()?
@@ -532,8 +636,246 @@ impl Host {
                 Some(k),
             )?;
         }
-
         Ok(())
+    }
+
+    /// Gets contract data, checking the per-frame cache first before storage.
+    /// If there is no frame context, reads directly from storage.
+    pub(super) fn get_contract_data_from_ledger(
+        &self,
+        k: Val,
+        t: StorageType,
+    ) -> Result<Val, HostError> {
+        let durability: ContractDataDurability = t.try_into()?;
+        let sc_key = self.from_host_val(k)?;
+        let cache_key = ContractDataCacheKey {
+            key: sc_key.metered_clone(self)?,
+            durability,
+        };
+
+        // Check cache first (if we have a frame)
+        let budget = self.budget_ref();
+        let cached = self.try_with_data_cache(|cache| {
+            Ok(cache.get(&cache_key, budget)?.cloned())
+        })?.flatten();
+
+        if let Some(entry) = cached {
+            match entry.val {
+                Some(sc_val) => {
+                    // Found in cache with a value
+                    return self.to_valid_host_val(&sc_val);
+                }
+                None => {
+                    // Entry was deleted in cache
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::MissingValue,
+                        "contract data entry was deleted",
+                        &[k],
+                    ));
+                }
+            }
+        }
+
+        // Cache miss or no frame - read from storage
+        let key = self.storage_key_from_val(k, durability)?;
+        let entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
+        match &entry.data {
+            LedgerEntryData::ContractData(e) => self.to_valid_host_val(&e.val),
+            _ => Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "expected contract data ledger entry",
+                &[],
+            )),
+        }
+    }
+
+    /// Deletes contract data by marking it as deleted in the per-frame cache.
+    /// If there is no frame context, deletes directly from storage.
+    pub(super) fn del_contract_data_from_ledger(
+        &self,
+        k: Val,
+        t: StorageType,
+    ) -> Result<(), HostError> {
+        let durability: ContractDataDurability = t.try_into()?;
+        let key = self.storage_key_from_val(k, durability)?;
+
+        // Check if we have a frame context
+        let has_frame = self.try_with_data_cache(|_| Ok(()))?.is_some();
+
+        if !has_frame {
+            // No frame context - use direct storage delete
+            self.try_borrow_storage_mut()?.del(&key, self, Some(k))?;
+            return Ok(());
+        }
+
+        // Record/enforce footprint access for deletion
+        self.try_borrow_storage_mut()?
+            .record_write_access(&key, self, Some(k))?;
+
+        let sc_key = self.from_host_val(k)?;
+        let cache_key = ContractDataCacheKey {
+            key: sc_key.metered_clone(self)?,
+            durability,
+        };
+
+        // Get live_until_ledger from cache or storage (for the deletion marker)
+        let budget = self.budget_ref();
+        let live_until_from_cache = self.try_with_data_cache(|cache| {
+            if let Some(entry) = cache.get(&cache_key, budget)? {
+                return Ok(entry.live_until_ledger);
+            }
+            Ok(None)
+        })?.flatten();
+
+        let live_until_ledger = match live_until_from_cache {
+            Some(lul) => Some(lul),
+            None => {
+                if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
+                    let (_, lul) = self
+                        .try_borrow_storage_mut()?
+                        .get_with_live_until_ledger(&key, self, Some(k))?;
+                    lul
+                } else {
+                    None
+                }
+            }
+        };
+
+        // Mark as deleted in cache
+        let budget = self.budget_ref();
+        self.try_with_mut_data_cache(|cache| {
+            cache.del(
+                ContractDataCacheKey {
+                    key: sc_key,
+                    durability,
+                },
+                live_until_ledger,
+                budget,
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Checks if contract data exists, checking the per-frame cache first.
+    /// If there is no frame context, checks directly in storage.
+    pub(super) fn has_contract_data_in_ledger(
+        &self,
+        k: Val,
+        t: StorageType,
+    ) -> Result<bool, HostError> {
+        let durability: ContractDataDurability = t.try_into()?;
+        let sc_key = self.from_host_val(k)?;
+        let cache_key = ContractDataCacheKey {
+            key: sc_key,
+            durability,
+        };
+
+        // Check cache first (if we have a frame)
+        let budget = self.budget_ref();
+        let cached = self.try_with_data_cache(|cache| {
+            Ok(cache.get(&cache_key, budget)?.map(|e| e.val.is_some()))
+        })?.flatten();
+
+        if let Some(exists) = cached {
+            return Ok(exists);
+        }
+
+        // Cache miss or no frame - check storage
+        let key = self.storage_key_from_val(k, durability)?;
+        self.try_borrow_storage_mut()?.has(&key, self, Some(k))
+    }
+
+    /// Extends the TTL for contract data, checking the per-frame cache first.
+    /// If the entry is in the cache, updates the live_until_ledger there.
+    /// If there is no frame context or the entry is not cached, extends via storage.
+    pub(super) fn extend_contract_data_ttl_in_ledger(
+        &self,
+        k: Val,
+        t: StorageType,
+        threshold: u32,
+        extend_to: u32,
+    ) -> Result<(), HostError> {
+        let durability: ContractDataDurability = t.try_into()?;
+        let sc_key = self.from_host_val(k)?;
+        let cache_key = ContractDataCacheKey {
+            key: sc_key,
+            durability,
+        };
+
+        // Check if entry is in cache
+        let budget = self.budget_ref();
+        let in_cache = self.try_with_data_cache(|cache| {
+            cache.contains_key(&cache_key, budget)
+        })?.unwrap_or(false);
+
+        if in_cache {
+            // Entry is in cache - compute new live_until and update cache
+            let ledger_seq: u32 = self.get_ledger_sequence()?.into();
+
+            // Get current live_until from cache
+            let budget = self.budget_ref();
+            let current_live_until = self.try_with_data_cache(|cache| {
+                Ok(cache.get(&cache_key, budget)?.and_then(|e| e.live_until_ledger))
+            })?.flatten();
+
+            let current_live_until = current_live_until.ok_or_else(|| {
+                self.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "cached entry missing live_until_ledger",
+                    &[],
+                )
+            })?;
+
+            // Check if extension is needed (threshold check)
+            if current_live_until.saturating_sub(ledger_seq) > threshold {
+                // TTL is already above threshold, no extension needed
+                return Ok(());
+            }
+
+            // Compute new live_until
+            let mut new_live_until = self.with_ledger_info(|li| {
+                li.sequence_number.checked_add(extend_to).ok_or_else(|| {
+                    HostError::from(Error::from_type_and_code(
+                        ScErrorType::Context,
+                        ScErrorCode::InternalError,
+                    ))
+                })
+            })?;
+
+            // Clamp to max
+            if new_live_until > self.max_live_until_ledger()? {
+                if matches!(durability, ContractDataDurability::Persistent) {
+                    new_live_until = self.max_live_until_ledger()?;
+                } else {
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InvalidAction,
+                        "new live_until for temp entry exceeds max",
+                        &[],
+                    ));
+                }
+            }
+
+            // Update cache
+            let budget = self.budget_ref();
+            self.try_with_mut_data_cache(|cache| {
+                cache.extend_ttl(&cache_key, new_live_until, budget)
+            })?;
+            Ok(())
+        } else {
+            // Entry not in cache - use storage directly
+            let key = self.storage_key_from_val(k, durability)?;
+            self.try_borrow_storage_mut()?.extend_ttl(
+                self,
+                key,
+                threshold,
+                extend_to,
+                Some(k),
+            )
+        }
     }
 }
 

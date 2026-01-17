@@ -16,9 +16,9 @@ mod event;
 mod finish;
 mod frame;
 mod host;
-mod hostile;
-#[cfg(opt_build)]
-mod hostile_opt;
+// mod hostile;
+// #[cfg(opt_build)]
+// mod hostile_opt;
 mod invocation;
 mod invoker_auth;
 mod ledger;

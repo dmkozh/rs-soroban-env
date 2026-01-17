@@ -163,7 +163,7 @@ pub fn generate_wasm_module_calling_host_functions(file_lit: LitStr) -> Result<T
         .flat_map(|m| {
             m.functions
                 .clone()
-                .into_iter()
+                .into_iter()                
                 .map(move |f| (m.export.clone(), f))
         })
         .map(|(mod_export, hf)| {

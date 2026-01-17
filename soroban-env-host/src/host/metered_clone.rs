@@ -24,16 +24,17 @@ use crate::{
     budget::{AsBudget, DepthLimiter},
     builtin_contracts::base_types::Address,
     host_object::MuxedScAddress,
-    storage::AccessType,
+    storage::{AccessType, ContractDataCacheEntry, ContractDataCacheKey},
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeCostInputs, ContractCodeEntry,
-        ContractCodeEntryExt, ContractCodeEntryV1, ContractCostType, ContractExecutable,
-        ContractId, ContractIdPreimage, CreateContractArgs, CreateContractArgsV2, Duration, Hash,
-        InvokeContractArgs, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
-        LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyTrustLine, PublicKey, ScAddress, ScBytes,
-        ScContractInstance, ScErrorCode, ScErrorType, ScMap, ScMapEntry, ScNonceKey, ScString,
-        ScSymbol, ScVal, ScVec, Signer, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
-        SorobanAuthorizedInvocation, StringM, TimePoint, TrustLineAsset, TrustLineEntry, Uint256,
+        ContractCodeEntryExt, ContractCodeEntryV1, ContractCostType, ContractDataDurability,
+        ContractExecutable, ContractId, ContractIdPreimage, CreateContractArgs,
+        CreateContractArgsV2, Duration, Hash, InvokeContractArgs, LedgerEntry, LedgerEntryData,
+        LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyTrustLine,
+        PublicKey, ScAddress, ScBytes, ScContractInstance, ScErrorCode, ScErrorType, ScMap,
+        ScMapEntry, ScNonceKey, ScString, ScSymbol, ScVal, ScVec, Signer,
+        SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanAuthorizedInvocation,
+        StringM, TimePoint, TrustLineAsset, TrustLineEntry, Uint256,
     },
     AddressObject, Bool, BytesObject, DurationObject, DurationSmall, DurationVal, Error, HostError,
     I128Object, I128Small, I128Val, I256Object, I256Small, I256Val, I32Val, I64Object, I64Small,
@@ -314,6 +315,7 @@ impl MeteredClone for U256 {}
 impl MeteredClone for I256 {}
 impl MeteredClone for Address {}
 impl MeteredClone for AccessType {}
+impl MeteredClone for ContractDataDurability {}
 // endregion: other env types with no substructure
 
 // region: xdr types with no substructure
@@ -431,6 +433,26 @@ impl<C: MeteredClone> MeteredClone for Option<C> {
 // endregion: Rust standard composite types
 
 // region: other env types with substructure
+
+impl MeteredClone for ContractDataCacheKey {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
+        self.key.charge_for_substructure(budget)
+    }
+}
+
+impl MeteredClone for ContractDataCacheEntry {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
+        if let Some(val) = &self.val {
+            val.charge_for_substructure(budget)?;
+        }
+        Ok(())
+    }
+}
+
 // endregion: other env types with substructure
 
 // region: xdr types with substructure

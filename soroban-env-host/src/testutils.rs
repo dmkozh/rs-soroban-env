@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::e2e_invoke::ledger_entry_to_ledger_key;
 use crate::storage::EntryWithLiveUntil;
 use crate::ErrorHandler;
@@ -225,6 +227,7 @@ impl Host {
         let host = Host::with_storage_and_budget(storage, Budget::default());
         host.set_test_ledger_info_with_current_test_protocol();
         host.set_test_prng();
+        host.enable_debug().unwrap();
         host
     }
 

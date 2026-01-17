@@ -2419,8 +2419,8 @@ fn test_require_auth_within_check_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 1435393,
-                mem_bytes: 3622155,
+                instructions: 1445357,
+                mem_bytes: 3622677,
                 disk_read_entries: 1,
                 memory_read_entries: 10,
                 write_entries: 3,
@@ -2445,8 +2445,8 @@ fn test_require_auth_within_check_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1041668,
-                        mem_bytes: 2403294,
+                        instructions: 1051632,
+                        mem_bytes: 2403816,
                         disk_read_entries: 1,
                         memory_read_entries: 7,
                         write_entries: 0,
@@ -2471,8 +2471,8 @@ fn test_require_auth_within_check_auth() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 729249,
-                                mem_bytes: 1201475,
+                                instructions: 734231,
+                                mem_bytes: 1201736,
                                 disk_read_entries: 1,
                                 memory_read_entries: 3,
                                 write_entries: 0,

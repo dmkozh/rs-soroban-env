@@ -6,16 +6,13 @@ use crate::{
 };
 use std::hash::{Hash, Hasher};
 
-// Technically we should be metering the cost of the hash function used, but
-// this codepath is used only for charging the costs of tracing against the
-// shadow budget, and we do not want to add a cost type to the protocol just
-// for this purpose (it's not protocol-visible at all).
+// We approximate the cost of Rust's default hasher (SIP-1-3) using ChaCha20DrawBytes,
+// since both are of a similar order of magnitude. This cost type is used for:
+// 1. Tracing operations charged against the shadow budget
+// 2. MeteredHashMap operations for per-frame contract data caching
 //
-// In practice, Rust's default hasher is SIP-1-3 which is of a similar order
-// of magnitude as a ChaCha20 round, so this is a reasonable approximation.
-// It's also fine if we overcharge here, since again this is only used to
-// ensure that if the hashing code is ever called _outside_ the shadow budget
-// it's not a free operation / DoS vector.
+// This approximation may slightly overcharge, which is acceptable to prevent
+// hash operations from becoming a DoS vector.
 const HASH_COST_TYPE: ContractCostType = ContractCostType::ChaCha20DrawBytes;
 
 #[derive(Default)]
@@ -168,6 +165,13 @@ where
         Ok(self.map.get(key))
     }
 
+    /// Gets a mutable reference to a value in the map.
+    pub fn get_mut<B: AsBudget>(&mut self, key: &K, budget: &B) -> Result<Option<&mut V>, HostError> {
+        self.charge_hash(budget)?;
+        self.charge_access(1, budget)?;
+        Ok(self.map.get_mut(key))
+    }
+
     /// Checks if the map contains a key.
     pub fn contains_key<B: AsBudget>(&self, key: &K, budget: &B) -> Result<bool, HostError> {
         self.charge_hash(budget)?;
@@ -193,6 +197,12 @@ where
     /// Returns an iterator over the map entries.
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.map.iter()
+    }
+
+    /// Consumes the map and returns an iterator over owned entries.
+    /// This is used for draining the cache at frame exit.
+    pub fn into_iter(self) -> impl Iterator<Item = (K, V)> {
+        self.map.into_iter()
     }
 
     /// Clones the map with metering.
