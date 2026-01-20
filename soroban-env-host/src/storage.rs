@@ -24,8 +24,48 @@ use crate::{
 };
 
 pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
+/// Entry with optional live_until ledger for snapshot source compatibility.
 pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
+/// Legacy storage map type - kept for transition period.
 pub type StorageMap = MeteredOrdMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>, Budget>;
+
+/// Unified cache entry for all ledger entry types.
+/// 
+/// This enum provides a uniform representation for cached ledger entries:
+/// - `ContractData`: Stores the value as `Val` (host value) with its TTL. The `Val` form
+///   avoids repeated ScVal<->Val conversions on each read/write from contract code.
+/// - `Entry`: Stores other entry types (ContractCode, Account, Trustline) as `Rc<LedgerEntry>`
+///   with optional TTL (only ContractCode has TTL; Account/Trustline have None).
+/// 
+/// `None` in the containing `Option<CachedEntry>` represents a deleted or non-existent entry.
+#[derive(Clone)]
+pub enum CachedEntry {
+    /// Contract data entry: (value, live_until_ledger)
+    ContractData(Val, u32),
+    /// Other entry types: (entry, optional live_until for ContractCode)
+    Entry(Rc<LedgerEntry>, Option<u32>),
+}
+
+impl std::hash::Hash for CachedEntry {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            CachedEntry::ContractData(val, live_until) => {
+                val.get_payload().hash(state);
+                live_until.hash(state);
+            }
+            CachedEntry::Entry(entry, live_until) => {
+                // Hash the Rc pointer address for determinism
+                Rc::as_ptr(entry).hash(state);
+                live_until.hash(state);
+            }
+        }
+    }
+}
+
+/// Unified storage cache type used for both global storage and per-frame caches.
+/// Maps ledger keys to optional cached entries, where `None` represents deleted/non-existent.
+pub type StorageCache = MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>>;
 
 /// The in-memory instance storage of the current running contract. Initially
 /// contains entries from the `ScMap` of the corresponding `ScContractInstance`
@@ -64,138 +104,6 @@ impl InstanceStorageMap {
             )?,
             host,
         )
-    }
-}
-
-/// Key for the per-frame contract data cache.
-/// Uses ScVal for the key portion (cheaper than full LedgerKey) and includes
-/// durability to distinguish between persistent and temporary entries.
-#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ContractDataCacheKey {
-    pub key: ScVal,
-    pub durability: ContractDataDurability,
-}
-
-/// Cached value for contract data entries.
-/// `None` represents a deleted entry.
-#[derive(Clone, Hash)]
-pub(crate) struct ContractDataCacheEntry {
-    /// The value stored. None means the entry was deleted.
-    pub val: Option<ScVal>,
-    /// The live_until_ledger for the entry (for TTL tracking).
-    pub live_until_ledger: Option<u32>,
-}
-
-/// Per-frame cache for contract data modifications.
-/// This cache intercepts reads and writes for the current contract,
-/// avoiding expensive writes to the immutable StorageMap until the
-/// frame successfully completes.
-#[derive(Clone, Default)]
-pub(crate) struct ContractDataCache {
-    /// Maps cache keys to cached values. Uses MeteredHashMap for O(1) lookups with budget tracking.
-    pub(crate) map: MeteredHashMap<ContractDataCacheKey, ContractDataCacheEntry>,
-    /// Whether any modifications have been made (for optimization).
-    pub(crate) is_modified: bool,
-}
-
-impl std::hash::Hash for ContractDataCache {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.map.hash(state);
-        self.is_modified.hash(state);
-    }
-}
-
-#[allow(dead_code)]
-impl ContractDataCache {
-    pub(crate) fn new() -> Self {
-        Self {
-            map: MeteredHashMap::new(),
-            is_modified: false,
-        }
-    }
-
-    /// Gets a value from the cache if present.
-    pub(crate) fn get<B: AsBudget>(
-        &self,
-        key: &ContractDataCacheKey,
-        budget: &B,
-    ) -> Result<Option<&ContractDataCacheEntry>, HostError> {
-        self.map.get(key, budget)
-    }
-
-    /// Checks if the cache contains an entry for the key.
-    pub(crate) fn contains_key<B: AsBudget>(
-        &self,
-        key: &ContractDataCacheKey,
-        budget: &B,
-    ) -> Result<bool, HostError> {
-        self.map.contains_key(key, budget)
-    }
-
-    /// Inserts or updates a value in the cache.
-    pub(crate) fn put<B: AsBudget>(
-        &mut self,
-        key: ContractDataCacheKey,
-        entry: ContractDataCacheEntry,
-        budget: &B,
-    ) -> Result<(), HostError> {
-        self.map.insert(key, entry, budget)?;
-        self.is_modified = true;
-        Ok(())
-    }
-
-    /// Marks an entry as deleted in the cache.
-    pub(crate) fn del<B: AsBudget>(
-        &mut self,
-        key: ContractDataCacheKey,
-        live_until_ledger: Option<u32>,
-        budget: &B,
-    ) -> Result<(), HostError> {
-        self.map.insert(
-            key,
-            ContractDataCacheEntry {
-                val: None,
-                live_until_ledger,
-            },
-            budget,
-        )?;
-        self.is_modified = true;
-        Ok(())
-    }
-
-    /// Extends the TTL for a cached entry if it exists, returning true if found.
-    pub(crate) fn extend_ttl<B: AsBudget>(
-        &mut self,
-        key: &ContractDataCacheKey,
-        new_live_until: u32,
-        budget: &B,
-    ) -> Result<bool, HostError> {
-        if let Some(entry) = self.map.get_mut(key, budget)? {
-            // Only extend if new value is greater
-            match entry.live_until_ledger {
-                Some(current) if new_live_until > current => {
-                    entry.live_until_ledger = Some(new_live_until);
-                    self.is_modified = true;
-                }
-                None => {
-                    entry.live_until_ledger = Some(new_live_until);
-                    self.is_modified = true;
-                }
-                _ => {}
-            }
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Returns an iterator over the cache entries.
-    /// Charges for accessing all entries upfront.
-    pub(crate) fn iter<B: AsBudget>(
-        &self,
-        budget: &B,
-    ) -> Result<impl Iterator<Item = (&ContractDataCacheKey, &ContractDataCacheEntry)>, HostError> {
-        self.map.iter(budget)
     }
 }
 

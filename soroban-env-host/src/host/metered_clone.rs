@@ -24,7 +24,7 @@ use crate::{
     budget::{AsBudget, DepthLimiter},
     builtin_contracts::base_types::Address,
     host_object::MuxedScAddress,
-    storage::{AccessType, ContractDataCacheEntry, ContractDataCacheKey},
+    storage::{AccessType, CachedEntry},
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeCostInputs, ContractCodeEntry,
         ContractCodeEntryExt, ContractCodeEntryV1, ContractCostType, ContractDataDurability,
@@ -434,21 +434,15 @@ impl<C: MeteredClone> MeteredClone for Option<C> {
 
 // region: other env types with substructure
 
-impl MeteredClone for ContractDataCacheKey {
-    const IS_SHALLOW: bool = false;
+impl MeteredClone for CachedEntry {
+    // CachedEntry contains either Val (shallow copy) or Rc<LedgerEntry> (shallow Rc clone)
+    // Neither requires deep cloning, so we treat it as shallow.
+    const IS_SHALLOW: bool = true;
 
-    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        self.key.charge_for_substructure(budget)
-    }
-}
-
-impl MeteredClone for ContractDataCacheEntry {
-    const IS_SHALLOW: bool = false;
-
-    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        if let Some(val) = &self.val {
-            val.charge_for_substructure(budget)?;
-        }
+    fn charge_for_substructure(&self, _budget: impl AsBudget) -> Result<(), HostError> {
+        // Val is a tagged 64-bit value (shallow)
+        // Rc<LedgerEntry> clone is just a refcount increment (shallow)
+        // No deep structure to charge for
         Ok(())
     }
 }

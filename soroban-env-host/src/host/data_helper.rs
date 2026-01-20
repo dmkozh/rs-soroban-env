@@ -5,7 +5,7 @@ use crate::{
     budget::AsBudget,
     err,
     host::metered_clone::{MeteredAlloc, MeteredClone},
-    storage::{ContractDataCache, ContractDataCacheEntry, ContractDataCacheKey, InstanceStorageMap, Storage},
+    storage::{CachedEntry, InstanceStorageMap, Storage, StorageCache},
     vm::VersionedContractCodeCostInputs,
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeEntry, ContractDataDurability,
@@ -76,7 +76,7 @@ impl Host {
     /// Returns None if there is no current frame.
     pub(crate) fn try_with_data_cache<F, U>(&self, f: F) -> Result<Option<U>, HostError>
     where
-        F: FnOnce(&ContractDataCache) -> Result<U, HostError>,
+        F: FnOnce(&StorageCache) -> Result<U, HostError>,
     {
         let Ok(context_guard) = self.0.context_stack.try_borrow() else {
             return Err(self.err(
@@ -97,7 +97,7 @@ impl Host {
     /// Returns None if there is no current frame.
     pub(crate) fn try_with_mut_data_cache<F, U>(&self, f: F) -> Result<Option<U>, HostError>
     where
-        F: FnOnce(&mut ContractDataCache) -> Result<U, HostError>,
+        F: FnOnce(&mut StorageCache) -> Result<U, HostError>,
     {
         let Ok(mut context_guard) = self.0.context_stack.try_borrow_mut() else {
             return Err(self.err(
@@ -531,55 +531,42 @@ impl Host {
         self.try_borrow_storage_mut()?
             .record_write_access(&key, self, Some(k))?;
 
-        // Convert key and value to ScVal for caching
-        let sc_key = self.from_host_val(k)?;
-        let sc_val = self.from_host_val(v)?;
-
         // Determine the live_until_ledger:
         // - If entry exists in cache, preserve its live_until_ledger
         // - If entry exists in storage, get its live_until_ledger
         // - Otherwise use min live_until for new entries
-        let cache_key = ContractDataCacheKey {
-            key: sc_key.metered_clone(self)?,
-            durability,
-        };
-
         let budget = self.budget_ref();
         let live_until_from_cache = self.try_with_data_cache(|cache| {
-            if let Some(entry) = cache.get(&cache_key, budget)? {
-                return Ok(entry.live_until_ledger);
+            if let Some(Some(entry)) = cache.get(&key, budget)? {
+                if let CachedEntry::ContractData(_, live_until) = entry {
+                    return Ok(Some(*live_until));
+                }
             }
             Ok(None)
         })?.flatten();
 
         let live_until_ledger = match live_until_from_cache {
-            Some(lul) => Some(lul),
+            Some(lul) => lul,
             None => {
                 // Check storage for existing entry's live_until
                 if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
                     let (_, lul) = self
                         .try_borrow_storage_mut()?
                         .get_with_live_until_ledger(&key, self, Some(k))?;
-                    lul
+                    lul.unwrap_or(self.get_min_live_until_ledger(durability)?)
                 } else {
                     // New entry - use minimum live_until
-                    Some(self.get_min_live_until_ledger(durability)?)
+                    self.get_min_live_until_ledger(durability)?
                 }
             }
         };
 
-        // Write to cache
+        // Write to cache - store Val directly to avoid repeated conversions
         let budget = self.budget_ref();
         self.try_with_mut_data_cache(|cache| {
-            cache.put(
-                ContractDataCacheKey {
-                    key: sc_key,
-                    durability,
-                },
-                ContractDataCacheEntry {
-                    val: Some(sc_val),
-                    live_until_ledger,
-                },
+            cache.insert(
+                key.metered_clone(budget)?,
+                Some(CachedEntry::ContractData(v, live_until_ledger)),
                 budget,
             )
         })?;
@@ -647,22 +634,28 @@ impl Host {
         t: StorageType,
     ) -> Result<Val, HostError> {
         let durability: ContractDataDurability = t.try_into()?;
-        let sc_key = self.from_host_val_for_storage(k)?;
-        let cache_key = ContractDataCacheKey {            key: sc_key,
-            durability,
-        };
+        let key = self.storage_key_from_val(k, durability)?;
 
         // Check cache first (if we have a frame)
         let budget = self.budget_ref();
         let cached = self.try_with_data_cache(|cache| {
-            Ok(cache.get(&cache_key, budget)?.cloned())
+            Ok(cache.get(&key, budget)?.cloned())
         })?.flatten();
 
         if let Some(entry) = cached {
-            match entry.val {
-                Some(sc_val) => {
-                    // Found in cache with a value
-                    return self.to_valid_host_val(&sc_val);
+            match entry {
+                Some(CachedEntry::ContractData(val, _)) => {
+                    // Found in cache with a value - Val is already in host format
+                    return Ok(val);
+                }
+                Some(CachedEntry::Entry(_, _)) => {
+                    // Wrong type in cache - should not happen
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "unexpected entry type in cache",
+                        &[],
+                    ));
                 }
                 None => {
                     // Entry was deleted in cache
@@ -677,7 +670,6 @@ impl Host {
         }
 
         // Cache miss or no frame - read from storage
-        let key = self.storage_key_from_val(k, durability)?;
         let entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
         match &entry.data {
             LedgerEntryData::ContractData(e) => self.to_valid_host_val(&e.val),
@@ -713,41 +705,12 @@ impl Host {
         self.try_borrow_storage_mut()?
             .record_write_access(&key, self, Some(k))?;
 
-        let sc_key = self.from_host_val_for_storage(k)?;
-        let cache_key = ContractDataCacheKey {
-            key: sc_key,
-            durability,
-        };
-
-        // Get live_until_ledger from cache or storage (for the deletion marker)
-        let budget = self.budget_ref();
-        let live_until_from_cache = self.try_with_data_cache(|cache| {
-            if let Some(entry) = cache.get(&cache_key, budget)? {
-                return Ok(entry.live_until_ledger);
-            }
-            Ok(None)
-        })?.flatten();
-
-        let live_until_ledger = match live_until_from_cache {
-            Some(lul) => Some(lul),
-            None => {
-                if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
-                    let (_, lul) = self
-                        .try_borrow_storage_mut()?
-                        .get_with_live_until_ledger(&key, self, Some(k))?;
-                    lul
-                } else {
-                    None
-                }
-            }
-        };
-
-        // Mark as deleted in cache
+        // Mark as deleted in cache (None value indicates deletion)
         let budget = self.budget_ref();
         self.try_with_mut_data_cache(|cache| {
-            cache.del(
-                cache_key,
-                live_until_ledger,
+            cache.insert(
+                key.metered_clone(budget)?,
+                None,  // None indicates deleted entry
                 budget,
             )
         })?;
@@ -762,16 +725,13 @@ impl Host {
         t: StorageType,
     ) -> Result<bool, HostError> {
         let durability: ContractDataDurability = t.try_into()?;
-        let sc_key = self.from_host_val_for_storage(k)?;
-        let cache_key = ContractDataCacheKey {
-            key: sc_key,
-            durability,
-        };
+        let key = self.storage_key_from_val(k, durability)?;
 
         // Check cache first (if we have a frame)
         let budget = self.budget_ref();
         let cached = self.try_with_data_cache(|cache| {
-            Ok(cache.get(&cache_key, budget)?.map(|e| e.val.is_some()))
+            // If key is in cache, return whether it has a value (Some = exists, None = deleted)
+            Ok(cache.get(&key, budget)?.map(|opt| opt.is_some()))
         })?.flatten();
 
         if let Some(exists) = cached {
@@ -779,7 +739,6 @@ impl Host {
         }
 
         // Cache miss or no frame - check storage
-        let key = self.storage_key_from_val(k, durability)?;
         self.try_borrow_storage_mut()?.has(&key, self, Some(k))
     }
 
@@ -794,36 +753,17 @@ impl Host {
         extend_to: u32,
     ) -> Result<(), HostError> {
         let durability: ContractDataDurability = t.try_into()?;
-        let sc_key = self.from_host_val_for_storage(k)?;
-        let cache_key = ContractDataCacheKey {
-            key: sc_key,
-            durability,
-        };
+        let key = self.storage_key_from_val(k, durability)?;
 
         // Check if entry is in cache
         let budget = self.budget_ref();
-        let in_cache = self.try_with_data_cache(|cache| {
-            cache.contains_key(&cache_key, budget)
-        })?.unwrap_or(false);
+        let cached_entry = self.try_with_data_cache(|cache| {
+            Ok(cache.get(&key, budget)?.cloned())
+        })?.flatten();
 
-        if in_cache {
+        if let Some(Some(CachedEntry::ContractData(val, current_live_until))) = cached_entry {
             // Entry is in cache - compute new live_until and update cache
             let ledger_seq: u32 = self.get_ledger_sequence()?.into();
-
-            // Get current live_until from cache
-            let budget = self.budget_ref();
-            let current_live_until = self.try_with_data_cache(|cache| {
-                Ok(cache.get(&cache_key, budget)?.and_then(|e| e.live_until_ledger))
-            })?.flatten();
-
-            let current_live_until = current_live_until.ok_or_else(|| {
-                self.err(
-                    ScErrorType::Storage,
-                    ScErrorCode::InternalError,
-                    "cached entry missing live_until_ledger",
-                    &[],
-                )
-            })?;
 
             // Check if extension is needed (threshold check)
             if current_live_until.saturating_sub(ledger_seq) > threshold {
@@ -855,15 +795,18 @@ impl Host {
                 }
             }
 
-            // Update cache
+            // Update cache with new TTL
             let budget = self.budget_ref();
             self.try_with_mut_data_cache(|cache| {
-                cache.extend_ttl(&cache_key, new_live_until, budget)
+                cache.insert(
+                    key.metered_clone(budget)?,
+                    Some(CachedEntry::ContractData(val, new_live_until)),
+                    budget,
+                )
             })?;
             Ok(())
         } else {
-            // Entry not in cache - use storage directly
-            let key = self.storage_key_from_val(k, durability)?;
+            // Entry not in cache or deleted - use storage directly
             self.try_borrow_storage_mut()?.extend_ttl(
                 self,
                 key,

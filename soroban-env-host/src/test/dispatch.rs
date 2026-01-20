@@ -1,5 +1,7 @@
+#[allow(unused_imports)]
 use soroban_synth_wasm::{Arity, LocalRef, ModEmitter, Operand};
 
+#[allow(unused_imports)]
 use crate::{
     budget::AsBudget,
     host_object::{HostMap, HostVec, MuxedScAddress},
@@ -15,20 +17,25 @@ use crate::{
     I256, U256,
 };
 
+#[allow(unused_imports)]
 use soroban_env_macros::generate_synth_dispatch_host_fn_tests;
 
+#[allow(dead_code)]
 trait TestVal {
     fn test_val() -> Val;
 }
 
+#[allow(dead_code)]
 trait TestValWithInitialValue {
     fn test_val_with_initial_value(i: i64) -> Val;
 }
 
+#[allow(dead_code)]
 trait TestObject {
     fn test_object(host: &Host) -> Self;
 }
 
+#[allow(dead_code)]
 trait TestObjectWithInitialLength {
     fn test_object_with_initial_length(host: &Host, len: u32) -> Self;
 }

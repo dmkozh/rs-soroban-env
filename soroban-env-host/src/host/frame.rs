@@ -6,11 +6,11 @@ use crate::{
         metered_clone::{MeteredAlloc, MeteredClone, MeteredContainer},
         prng::Prng,
     },
-    storage::{ContractDataCache, InstanceStorageMap, StorageMap},
+    storage::{CachedEntry, InstanceStorageMap, StorageCache, StorageMap},
     xdr::{
         ContractDataEntry, ContractExecutable, ContractId, ContractIdPreimage,
         CreateContractArgsV2, ExtensionPoint, Hash, HostFunction, HostFunctionType, LedgerEntry,
-        LedgerEntryData, LedgerEntryExt, LedgerKey, LedgerKeyContractData, ScAddress,
+        LedgerEntryData, LedgerEntryExt, LedgerKey, ScAddress,
         ScContractInstance, ScErrorCode, ScErrorType, ScVal,
     },
     AddressObject, Error, ErrorHandler, Host, HostError, Object, Symbol, SymbolStr, TryFromVal,
@@ -96,12 +96,10 @@ pub(crate) struct Context {
     pub(crate) frame: Frame,
     pub(crate) prng: Option<Prng>,
     pub(crate) storage: Option<InstanceStorageMap>,
-    /// Per-frame cache for contract data modifications.
-    /// Uses HashMap for O(1) lookups, avoiding expensive writes to the
-    /// immutable StorageMap until the frame successfully completes.
-    /// Boxed to keep Context size within the declared size limit (512 bytes).
-    #[allow(dead_code)]
-    pub(crate) data_cache: Box<ContractDataCache>,
+    /// Per-frame cache for storage entries.
+    /// Uses MeteredHashMap for O(1) lookups, avoiding expensive writes to
+    /// parent frames or global storage until the frame successfully completes.
+    pub(crate) data_cache: StorageCache,
 }
 
 pub(crate) struct CallParams {
@@ -434,7 +432,7 @@ impl Host {
             frame,
             prng: None,
             storage: None,
-            data_cache: Box::new(ContractDataCache::new()),
+            data_cache: StorageCache::new(),
         };
         let rp = self.push_context(ctx)?;
         {
@@ -1280,48 +1278,46 @@ impl Host {
     #[allow(dead_code)]
     fn flush_data_cache(&self) -> Result<(), HostError> {
         // Take the cache from the context to avoid borrowing issues
-        let budget = self.budget_ref();
         let cache_entries: Vec<_> = self.with_current_context_mut(|ctx| {
-            if !ctx.data_cache.is_modified {
-                return Ok(vec![]);
-            }
-            // Drain the cache into a vec with metered iteration
-            // (into_iter charges for accessing all entries upfront)
-            Ok(std::mem::take(&mut ctx.data_cache.map)
-                .into_iter(budget)?
-                .collect())
+            // Drain the cache into a vec
+            Ok(std::mem::take(&mut ctx.data_cache.map).into_iter().collect())
         })?;
 
         if cache_entries.is_empty() {
             return Ok(());
         }
 
-        let contract_id = self.get_current_contract_id_internal()?;
-
-        for (cache_key, cache_entry) in cache_entries {
-            // Clone contract_id once per iteration instead of twice
-            let contract_id_clone = contract_id.metered_clone(self)?;
-
-            // Reconstruct the LedgerKey
-            let ledger_key = Rc::metered_new(
-                LedgerKey::ContractData(LedgerKeyContractData {
-                    contract: ScAddress::Contract(contract_id_clone.metered_clone(self)?),
-                    key: cache_key.key.metered_clone(self)?,
-                    durability: cache_key.durability,
-                }),
-                self,
-            )?;
-
-            match cache_entry.val {
-                Some(val) => {
-                    // Create the ledger entry - reuse contract_id_clone
+        for (ledger_key, cached_entry) in cache_entries {
+            match cached_entry {
+                Some(CachedEntry::ContractData(val, live_until)) => {
+                    // Convert Val to ScVal for storage
+                    let sc_val = self.from_host_val(val)?;
+                    
+                    // Extract key info from the LedgerKey to build the entry
+                    let (contract, key_scval, durability) = match ledger_key.as_ref() {
+                        LedgerKey::ContractData(data) => (
+                            data.contract.metered_clone(self)?,
+                            data.key.metered_clone(self)?,
+                            data.durability,
+                        ),
+                        _ => {
+                            return Err(self.err(
+                                ScErrorType::Storage,
+                                ScErrorCode::InternalError,
+                                "expected ContractData ledger key",
+                                &[],
+                            ));
+                        }
+                    };
+                    
+                    // Create the ledger entry
                     let entry = LedgerEntry {
                         last_modified_ledger_seq: 0,
                         data: LedgerEntryData::ContractData(ContractDataEntry {
-                            contract: ScAddress::Contract(contract_id_clone),
-                            key: cache_key.key,
-                            val,
-                            durability: cache_key.durability,
+                            contract,
+                            key: key_scval,
+                            val: sc_val,
+                            durability,
                             ext: ExtensionPoint::V0,
                         }),
                         ext: LedgerEntryExt::V0,
@@ -1329,7 +1325,17 @@ impl Host {
                     self.try_borrow_storage_mut()?.put(
                         &ledger_key,
                         &Rc::metered_new(entry, self)?,
-                        cache_entry.live_until_ledger,
+                        Some(live_until),
+                        self,
+                        None,
+                    )?;
+                }
+                Some(CachedEntry::Entry(entry, live_until)) => {
+                    // Write entry directly to storage
+                    self.try_borrow_storage_mut()?.put(
+                        &ledger_key,
+                        &entry,
+                        live_until,
                         self,
                         None,
                     )?;

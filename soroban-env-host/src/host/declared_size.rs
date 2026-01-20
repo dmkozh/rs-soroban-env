@@ -10,7 +10,7 @@ use crate::{
     },
     host::{frame::Context, Events},
     host_object::{HostObject, MuxedScAddress},
-    storage::{AccessType, ContractDataCacheEntry, ContractDataCacheKey},
+    storage::{AccessType, CachedEntry},
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeCostInputs, ContractCodeEntry,
         ContractCodeEntryV1, ContractDataDurability, ContractEvent, ContractExecutable, ContractId,
@@ -115,14 +115,12 @@ impl_declared_size_type!(U256, 32);
 impl_declared_size_type!(I256, 32);
 impl_declared_size_type!(HostObject, 64);
 impl_declared_size_type!(HostError, 16);
-impl_declared_size_type!(Context, 512);
+impl_declared_size_type!(Context, 560);
 impl_declared_size_type!(Address, 16);
 
 impl_declared_size_type!(AccessType, 1);
-// ContractDataCacheKey: ScVal (64) + ContractDataDurability (4) = 68
-impl_declared_size_type!(ContractDataCacheKey, 68);
-// ContractDataCacheEntry: Option<ScVal> (72) + Option<u32> (8) = 80
-impl_declared_size_type!(ContractDataCacheEntry, 80);
+// CachedEntry: discriminant (1) + max(Val(8) + u32(4), Rc(16) + Option<u32>(8)) = 1 + 24 = 25, round to 32
+impl_declared_size_type!(CachedEntry, 32);
 impl_declared_size_type!(InternalContractEvent, 40);
 impl_declared_size_type!(HostEvent, 136);
 impl_declared_size_type!(Events, 24);
