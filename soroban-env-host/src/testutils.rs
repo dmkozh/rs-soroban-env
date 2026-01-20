@@ -227,7 +227,6 @@ impl Host {
         let host = Host::with_storage_and_budget(storage, Budget::default());
         host.set_test_ledger_info_with_current_test_protocol();
         host.set_test_prng();
-        host.enable_debug().unwrap();
         host
     }
 

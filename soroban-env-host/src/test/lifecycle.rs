@@ -1829,7 +1829,7 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 906654,
+                            instructions: 906733,
                             mem_bytes: 3470366,
                             disk_read_entries: 0,
                             memory_read_entries: 6,
@@ -1855,7 +1855,7 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 636936,
+                                    instructions: 637015,
                                     mem_bytes: 2338998,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
@@ -1987,8 +1987,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2417953,
-                            mem_bytes: 5948127,
+                            instructions: 2416980,
+                            mem_bytes: 5948089,
                             disk_read_entries: 0,
                             memory_read_entries: 8,
                             write_entries: 3,
@@ -2013,7 +2013,7 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 921252,
+                                    instructions: 921331,
                                     mem_bytes: 2387064,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
@@ -2068,8 +2068,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 552980,
-                                    mem_bytes: 1175102,
+                                    instructions: 551928,
+                                    mem_bytes: 1175064,
                                     disk_read_entries: 0,
                                     memory_read_entries: 0,
                                     write_entries: 0,

@@ -1280,13 +1280,15 @@ impl Host {
     #[allow(dead_code)]
     fn flush_data_cache(&self) -> Result<(), HostError> {
         // Take the cache from the context to avoid borrowing issues
+        let budget = self.budget_ref();
         let cache_entries: Vec<_> = self.with_current_context_mut(|ctx| {
             if !ctx.data_cache.is_modified {
                 return Ok(vec![]);
             }
-            // Drain the cache into a vec
+            // Drain the cache into a vec with metered iteration
+            // (into_iter charges for accessing all entries upfront)
             Ok(std::mem::take(&mut ctx.data_cache.map)
-                .into_iter()
+                .into_iter(budget)?
                 .collect())
         })?;
 
@@ -1297,10 +1299,13 @@ impl Host {
         let contract_id = self.get_current_contract_id_internal()?;
 
         for (cache_key, cache_entry) in cache_entries {
+            // Clone contract_id once per iteration instead of twice
+            let contract_id_clone = contract_id.metered_clone(self)?;
+
             // Reconstruct the LedgerKey
             let ledger_key = Rc::metered_new(
                 LedgerKey::ContractData(LedgerKeyContractData {
-                    contract: ScAddress::Contract(contract_id.metered_clone(self)?),
+                    contract: ScAddress::Contract(contract_id_clone.metered_clone(self)?),
                     key: cache_key.key.metered_clone(self)?,
                     durability: cache_key.durability,
                 }),
@@ -1309,11 +1314,11 @@ impl Host {
 
             match cache_entry.val {
                 Some(val) => {
-                    // Create the ledger entry
+                    // Create the ledger entry - reuse contract_id_clone
                     let entry = LedgerEntry {
                         last_modified_ledger_seq: 0,
                         data: LedgerEntryData::ContractData(ContractDataEntry {
-                            contract: ScAddress::Contract(contract_id.metered_clone(self)?),
+                            contract: ScAddress::Contract(contract_id_clone),
                             key: cache_key.key,
                             val,
                             durability: cache_key.durability,

@@ -190,10 +190,12 @@ impl ContractDataCache {
     }
 
     /// Returns an iterator over the cache entries.
-    pub(crate) fn iter(
+    /// Charges for accessing all entries upfront.
+    pub(crate) fn iter<B: AsBudget>(
         &self,
-    ) -> impl Iterator<Item = (&ContractDataCacheKey, &ContractDataCacheEntry)> {
-        self.map.iter()
+        budget: &B,
+    ) -> Result<impl Iterator<Item = (&ContractDataCacheKey, &ContractDataCacheEntry)>, HostError> {
+        self.map.iter(budget)
     }
 }
 

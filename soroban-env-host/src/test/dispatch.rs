@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use soroban_synth_wasm::{Arity, LocalRef, ModEmitter, Operand};
 
 use crate::{

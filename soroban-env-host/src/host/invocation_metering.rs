@@ -1206,7 +1206,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 324272,
+                instructions: 324332,
                 mem_bytes: 1135409,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1258,7 +1258,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 326133,
+                instructions: 326193,
                 mem_bytes: 1135765,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1310,7 +1310,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 319025,
+                instructions: 319085,
                 mem_bytes: 1135127,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1336,7 +1336,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 319427,
+                instructions: 319487,
                 mem_bytes: 1135127,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1362,7 +1362,7 @@ mod test {
         assert!(res.is_err());
         expect![[r#"
             InvocationResources {
-                instructions: 318864,
+                instructions: 318924,
                 mem_bytes: 1135195,
                 disk_read_entries: 0,
                 memory_read_entries: 3,

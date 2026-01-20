@@ -72,8 +72,7 @@ impl<T: WriteXdr> MeteredHashXdr for T {
     ) -> Result<(), HostError> {
         let mut buf = Vec::default();
         metered_write_xdr(budget, self, &mut buf)?;
-        buf.metered_hash(hasher, budget)?;
-        budget.charge(HASH_COST_TYPE, Some(hasher.count as u64))
+        buf.metered_hash(hasher, budget)
     }
 }
 
@@ -87,7 +86,6 @@ use crate::{
 /// A metered hash map that wraps `std::collections::HashMap` with budget charging.
 /// Used for per-frame caching during contract execution where the immutable ordered
 /// map would be too expensive due to copy-on-write semantics.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct MeteredHashMap<K, V> {
     pub(crate) map: HashMap<K, V>,
@@ -175,6 +173,7 @@ where
     /// Checks if the map contains a key.
     pub fn contains_key<B: AsBudget>(&self, key: &K, budget: &B) -> Result<bool, HostError> {
         self.charge_hash(budget)?;
+        self.charge_access(1, budget)?;
         Ok(self.map.contains_key(key))
     }
 
@@ -195,19 +194,29 @@ where
     }
 
     /// Returns an iterator over the map entries.
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        self.map.iter()
+    /// Charges for accessing all entries upfront.
+    pub fn iter<B: AsBudget>(&self, budget: &B) -> Result<impl Iterator<Item = (&K, &V)>, HostError> {
+        self.charge_access(self.map.len(), budget)?;
+        Ok(self.map.iter())
     }
 
     /// Consumes the map and returns an iterator over owned entries.
     /// This is used for draining the cache at frame exit.
-    pub fn into_iter(self) -> impl Iterator<Item = (K, V)> {
-        self.map.into_iter()
+    /// Charges for accessing all entries upfront.
+    pub fn into_iter<B: AsBudget>(self, budget: &B) -> Result<impl Iterator<Item = (K, V)>, HostError> {
+        self.charge_access(self.map.len(), budget)?;
+        Ok(self.map.into_iter())
     }
 
     /// Clones the map with metering.
+    /// Charges for shallow copy of all entries plus substructure of keys/values.
     pub fn metered_clone<B: AsBudget>(&self, budget: &B) -> Result<Self, HostError> {
         self.charge_access(self.map.len(), budget)?;
+        // Charge for substructure of each entry
+        for (k, v) in self.map.iter() {
+            k.charge_for_substructure(budget.as_budget())?;
+            v.charge_for_substructure(budget.as_budget())?;
+        }
         Ok(Self {
             map: self.map.clone(),
         })

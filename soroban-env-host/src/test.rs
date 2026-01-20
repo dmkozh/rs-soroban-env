@@ -16,9 +16,9 @@ mod event;
 mod finish;
 mod frame;
 mod host;
-// mod hostile;
-// #[cfg(opt_build)]
-// mod hostile_opt;
+mod hostile;
+#[cfg(opt_build)]
+mod hostile_opt;
 mod invocation;
 mod invoker_auth;
 mod ledger;
@@ -26,6 +26,7 @@ mod lifecycle;
 mod lifetime_extension;
 mod linear_memory;
 mod map;
+mod metered_hash;
 #[cfg(feature = "testutils")]
 mod metering_benchmark;
 mod num;

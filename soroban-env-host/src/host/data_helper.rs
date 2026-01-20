@@ -647,9 +647,8 @@ impl Host {
         t: StorageType,
     ) -> Result<Val, HostError> {
         let durability: ContractDataDurability = t.try_into()?;
-        let sc_key = self.from_host_val(k)?;
-        let cache_key = ContractDataCacheKey {
-            key: sc_key.metered_clone(self)?,
+        let sc_key = self.from_host_val_for_storage(k)?;
+        let cache_key = ContractDataCacheKey {            key: sc_key,
             durability,
         };
 
@@ -714,9 +713,9 @@ impl Host {
         self.try_borrow_storage_mut()?
             .record_write_access(&key, self, Some(k))?;
 
-        let sc_key = self.from_host_val(k)?;
+        let sc_key = self.from_host_val_for_storage(k)?;
         let cache_key = ContractDataCacheKey {
-            key: sc_key.metered_clone(self)?,
+            key: sc_key,
             durability,
         };
 
@@ -747,10 +746,7 @@ impl Host {
         let budget = self.budget_ref();
         self.try_with_mut_data_cache(|cache| {
             cache.del(
-                ContractDataCacheKey {
-                    key: sc_key,
-                    durability,
-                },
+                cache_key,
                 live_until_ledger,
                 budget,
             )
@@ -766,7 +762,7 @@ impl Host {
         t: StorageType,
     ) -> Result<bool, HostError> {
         let durability: ContractDataDurability = t.try_into()?;
-        let sc_key = self.from_host_val(k)?;
+        let sc_key = self.from_host_val_for_storage(k)?;
         let cache_key = ContractDataCacheKey {
             key: sc_key,
             durability,
@@ -798,7 +794,7 @@ impl Host {
         extend_to: u32,
     ) -> Result<(), HostError> {
         let durability: ContractDataDurability = t.try_into()?;
-        let sc_key = self.from_host_val(k)?;
+        let sc_key = self.from_host_val_for_storage(k)?;
         let cache_key = ContractDataCacheKey {
             key: sc_key,
             durability,
