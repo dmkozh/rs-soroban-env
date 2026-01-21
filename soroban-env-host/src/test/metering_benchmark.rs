@@ -1,8 +1,8 @@
 use crate::{
     budget::Budget,
     host_object::HostVec,
-    storage::{Footprint, Storage},
-    Host, HostError, LedgerInfo, MeteredOrdMap,
+    storage::{Footprint, Storage, StorageMap},
+    Host, HostError, LedgerInfo,
 };
 use soroban_env_common::{Env, Symbol};
 use soroban_test_wasms::{ADD_I32, COMPLEX};
@@ -67,7 +67,7 @@ fn run_add_i32() -> Result<(), HostError> {
         let _run_span = tracy_span!("add_i32 run 2: enforcing footprint");
         let store = Storage::with_enforcing_footprint_and_map(
             Footprint::default(),
-            MeteredOrdMap::default(),
+            StorageMap::default(),
         );
         let host = Host::with_storage_and_budget(store, Budget::default());
         host.set_ledger_info(LEDGER_INFO)?;
@@ -120,7 +120,7 @@ fn run_complex() -> Result<(), HostError> {
         let _run_span = tracy_span!("complex run 2: enforcing footprint");
         let store = Storage::with_enforcing_footprint_and_map(
             Footprint::default(),
-            MeteredOrdMap::default(),
+            StorageMap::default(),
         );
         let host = Host::with_storage_and_budget(store, Budget::default());
         host.set_ledger_info(LEDGER_INFO)?;

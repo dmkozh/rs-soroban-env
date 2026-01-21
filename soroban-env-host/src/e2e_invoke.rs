@@ -299,7 +299,7 @@ fn add_footprint_only_ledger_changes(
     for (key, access_type) in storage.footprint.0.iter(budget)? {
         // We have to check if the entry exists in the internal storage map
         // because `has` check on storage affects the footprint.
-        if storage.map.contains_key::<Rc<LedgerKey>>(key, budget)? {
+        if storage.map.contains_key(key, budget)? {
             continue;
         }
         let mut entry_change = LedgerEntryChange::default();
@@ -1028,13 +1028,13 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             )
             .into());
         }
-        storage_map = storage_map.insert(key, Some((le, live_until_ledger)), budget)?;
+        storage_map.insert(key, Some((le, live_until_ledger)), budget)?;
     }
 
     // Add non-existing entries from the footprint to the storage.
     for k in footprint.0.keys(budget)? {
-        if !storage_map.contains_key::<LedgerKey>(k, budget)? {
-            storage_map = storage_map.insert(Rc::clone(k), None, budget)?;
+        if !storage_map.contains_key(k, budget)? {
+            storage_map.insert(Rc::clone(k), None, budget)?;
         }
     }
     Ok((storage_map, ttl_map))
@@ -1061,7 +1061,7 @@ struct StorageMapSnapshotSource<'a> {
 impl SnapshotSource for StorageMapSnapshotSource<'_> {
     fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
         if let Some(Some((entry, live_until_ledger))) =
-            self.map.get::<Rc<LedgerKey>>(key, self.budget)?
+            self.map.get(key, self.budget)?
         {
             Ok(Some((Rc::clone(entry), *live_until_ledger)))
         } else {

@@ -7,6 +7,7 @@
 //!   - [Env::put_contract_data](crate::Env::put_contract_data)
 //!   - [Env::del_contract_data](crate::Env::del_contract_data)
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::budget::AsBudget;
@@ -26,16 +27,17 @@ use crate::{
 pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
 /// Entry with optional live_until ledger for snapshot source compatibility.
 pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
-/// Legacy storage map type - kept for transition period.
-pub type StorageMap = MeteredOrdMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>, Budget>;
+/// Storage map type using MeteredHashMap for O(1) access and in-place mutation.
+pub type StorageMap = MeteredHashMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>;
 
 /// Unified cache entry for all ledger entry types.
 /// 
 /// This enum provides a uniform representation for cached ledger entries:
 /// - `ContractData`: Stores the value as `Val` (host value) with its TTL. The `Val` form
 ///   avoids repeated ScVal<->Val conversions on each read/write from contract code.
-/// - `Entry`: Stores other entry types (ContractCode, Account, Trustline) as `Rc<LedgerEntry>`
+/// - `Entry`: Stores other entry types (ContractCode, Account, Trustline) as `Rc<RefCell<LedgerEntry>>`
 ///   with optional TTL (only ContractCode has TTL; Account/Trustline have None).
+///   The RefCell allows in-place mutation of entries, avoiding expensive clone-modify-write patterns.
 /// 
 /// `None` in the containing `Option<CachedEntry>` represents a deleted or non-existent entry.
 #[derive(Clone)]
@@ -43,7 +45,8 @@ pub enum CachedEntry {
     /// Contract data entry: (value, live_until_ledger)
     ContractData(Val, u32),
     /// Other entry types: (entry, optional live_until for ContractCode)
-    Entry(Rc<LedgerEntry>, Option<u32>),
+    /// Uses Rc<RefCell<_>> for in-place mutation and fast Rc cloning between maps.
+    Entry(Rc<RefCell<LedgerEntry>>, Option<u32>),
 }
 
 impl std::hash::Hash for CachedEntry {
@@ -285,7 +288,7 @@ impl Storage {
         let _span = tracy_span!("storage get");
         Self::check_supported_ledger_key_type(key)?;
         self.prepare_read_only_access(key, host)?;
-        match self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())? {
+        match self.map.get(key, host.budget_ref())? {
             // Key has to be in the storage map at this point due to
             // `prepare_read_only_access`.
             None => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
@@ -409,7 +412,7 @@ impl Storage {
                 self.footprint.enforce_access(key, ty, host.budget_ref())?;
             }
         };
-        self.map = self.map.insert(Rc::clone(key), val, host.budget_ref())?;
+        self.map.insert(Rc::clone(key), val, host.budget_ref())?;
         Ok(())
     }
 
@@ -584,7 +587,7 @@ impl Storage {
 
         if new_live_until > old_live_until && old_live_until.saturating_sub(ledger_seq) <= threshold
         {
-            self.map = self.map.insert(
+            self.map.insert(
                 key,
                 Some((entry.clone(), Some(new_live_until))),
                 host.budget_ref(),
@@ -635,7 +638,7 @@ impl Storage {
         key: &Rc<LedgerKey>,
         host: &Host,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        match self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())? {
+        match self.map.get(key, host.budget_ref())? {
             Some(pair_option) => Ok(pair_option.clone()),
             None => Ok(None),
         }
@@ -655,10 +658,10 @@ impl Storage {
                 // that misses read-through to the underlying src.
                 if !self
                     .map
-                    .contains_key::<Rc<LedgerKey>>(key, host.budget_ref())?
+                    .contains_key(key, host.budget_ref())?
                 {
                     let value = src.get(&key)?;
-                    self.map = self.map.insert(key.clone(), value, host.budget_ref())?;
+                    self.map.insert(key.clone(), value, host.budget_ref())?;
                 }
                 self.footprint.record_access(key, ty, host.budget_ref())?;
                 self.handle_maybe_expired_entry(key, host)?;
@@ -679,7 +682,7 @@ impl Storage {
         host.with_ledger_info(|li| {
             let budget = host.budget_ref();
             if let Some(Some((entry, live_until))) =
-                self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())?
+                self.map.get(key, host.budget_ref())?
             {
                 if let Some(durability) = get_key_durability(key.as_ref()) {
                     let live_until = live_until.ok_or_else(|| {
@@ -693,7 +696,7 @@ impl Storage {
                     if live_until < li.sequence_number {
                         match durability {
                             ContractDataDurability::Temporary => {
-                                self.map = self.map.insert(key.clone(), None, budget)?;
+                                self.map.insert(key.clone(), None, budget)?;
                             }
                             ContractDataDurability::Persistent => {
                                 self.footprint
@@ -708,7 +711,7 @@ impl Storage {
                                         "persistent entry TTL overflow, ledger is mis-configured",
                                         &[],)
                                     })?;
-                                self.map = self.map.insert(
+                                self.map.insert(
                                     key.clone(),
                                     Some((entry.clone(), Some(new_live_until))),
                                     budget,

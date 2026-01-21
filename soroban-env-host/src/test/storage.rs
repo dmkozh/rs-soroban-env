@@ -355,7 +355,7 @@ fn test_nested_bump() {
     host.with_mut_storage(|s: &mut Storage| {
         let v = s
             .map
-            .get::<Rc<LedgerKey>>(&storage_key, host.as_budget())
+            .get(&storage_key, host.as_budget())
             .unwrap()
             .unwrap()
             .clone()
@@ -384,7 +384,7 @@ fn test_nested_bump() {
     host.with_mut_storage(|s: &mut Storage| {
         let v = s
             .map
-            .get::<Rc<LedgerKey>>(&storage_key, host.as_budget())
+            .get(&storage_key, host.as_budget())
             .unwrap()
             .unwrap()
             .clone()

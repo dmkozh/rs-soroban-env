@@ -1,9 +1,9 @@
 use crate::{
     budget::Budget,
     host_object::HostVec,
-    storage::{Footprint, Storage},
+    storage::{Footprint, Storage, StorageMap},
     testutils::{generate_account_id, generate_bytes_array},
-    Host, HostError, MeteredOrdMap,
+    Host, HostError,
 };
 use soroban_env_common::{Env, Symbol};
 use soroban_test_wasms::COMPLEX;
@@ -53,7 +53,7 @@ fn run_complex() -> Result<(), HostError> {
     {
         let store = Storage::with_enforcing_footprint_and_map(
             Footprint::default(),
-            MeteredOrdMap::default(),
+            StorageMap::default(),
         );
         let host = Host::with_storage_and_budget(store, Budget::default());
         host.set_ledger_info(info)?;

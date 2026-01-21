@@ -455,11 +455,10 @@ impl Host {
                     }
                 }
             }
-            storage.map = MeteredOrdMap::from_exact_iter(
-                map.iter().map(|(k, v)| (k.clone(), v.clone())),
-                self.budget_ref(),
-            )
-            .unwrap();
+            storage.map = Default::default();
+            for (k, v) in map.iter() {
+                storage.map.insert(k.clone(), v.clone(), self.budget_ref())?;
+            }
             storage.mode = crate::storage::FootprintMode::Enforcing;
             Ok(())
         })
