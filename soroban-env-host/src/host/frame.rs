@@ -1330,8 +1330,9 @@ impl Host {
                         None,
                     )?;
                 }
-                Some(CachedEntry::Entry(entry, live_until)) => {
-                    // Write entry directly to storage
+                Some(CachedEntry::Entry(entry_refcell, live_until)) => {
+                    // Clone the entry from the RefCell and wrap in new Rc for storage
+                    let entry = Rc::metered_new(entry_refcell.borrow().clone(), self)?;
                     self.try_borrow_storage_mut()?.put(
                         &ledger_key,
                         &entry,
