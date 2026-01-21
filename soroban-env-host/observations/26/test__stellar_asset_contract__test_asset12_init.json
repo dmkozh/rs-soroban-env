@@ -155,7 +155,7 @@
   " 153 call extend_current_contract_instance_and_code_ttl(U32(103680), U32(120960))": "",
   " 154 call get_ledger_sequence()": "cpu:439570, mem:36356, store:-/-, foot:-",
   " 155 ret get_ledger_sequence -> Ok(U32(123))": "",
-  " 156 ret extend_current_contract_instance_and_code_ttl -> Ok(Void)": "cpu:454076, mem:38130, store:-/3@c46fdaa9, foot:3@1edd6cf7",
+  " 156 ret extend_current_contract_instance_and_code_ttl -> Ok(Void)": "cpu:454076, mem:38130, store:-/3@da4064e7, foot:3@1edd6cf7",
   " 157 call vec_new_from_slice(1)": "cpu:454185",
   " 158 ret vec_new_from_slice -> Ok(Vec(obj#111))": "cpu:455150, mem:38234, objs:-/56@e5c6ae48",
   " 159 call get_contract_data(Vec(obj#111), Instance)": "",
@@ -169,7 +169,7 @@
   " 167 ret obj_cmp -> Ok(-1)": "cpu:467980",
   " 168 call obj_cmp(Vec(obj#123), Vec(obj#111))": "",
   " 169 ret obj_cmp -> Ok(0)": "cpu:468267",
-  " 170 ret get_contract_data -> Ok(Vec(obj#135))": "cpu:468373, store:3@a308e204/3@c46fdaa9, stk:1@7273845e",
+  " 170 ret get_contract_data -> Ok(Vec(obj#135))": "cpu:468373, store:3@a308e204/3@da4064e7, stk:1@7273845e",
   " 171 call vec_get(Vec(obj#135), U32(0))": "",
   " 172 ret vec_get -> Ok(Symbol(obj#125))": "cpu:468599",
   " 173 call symbol_index_in_strs(Symbol(obj#125), 3)": "",
@@ -184,7 +184,7 @@
   " 182 ret string_len -> Ok(U32(12))": "cpu:469844",
   " 183 call string_copy_to_slice(String(obj#129), U32(0), 12)": "",
   " 184 ret string_copy_to_slice -> Ok(())": "cpu:469948",
-  " 185 pop SAC:3a8de7cb:balance -> Ok(I128(10000000))": "cpu:479583, mem:40211",
-  " 186 ret call -> Ok(I128(10000000))": " store:-/3@c46fdaa9, stk:-, auth:-/-",
-  " 187 end": "cpu:479583, mem:40211, prngs:-/9b4a753, objs:-/68@fc9d71f4, vm:-/-, evt:-, store:-/3@c46fdaa9, foot:3@1edd6cf7, stk:-, auth:-/-"
+  " 185 pop SAC:3a8de7cb:balance -> Ok(I128(10000000))": "cpu:479117, mem:39939",
+  " 186 ret call -> Ok(I128(10000000))": " store:-/3@da4064e7, stk:-, auth:-/-",
+  " 187 end": "cpu:479117, mem:39939, prngs:-/9b4a753, objs:-/68@fc9d71f4, vm:-/-, evt:-, store:-/3@da4064e7, foot:3@1edd6cf7, stk:-, auth:-/-"
 }

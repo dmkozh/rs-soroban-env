@@ -146,7 +146,7 @@
   " 144 ret string_len -> Ok(U32(62))": "cpu:384626",
   " 145 call string_copy_to_slice(String(obj#81), U32(0), 62)": "",
   " 146 ret string_copy_to_slice -> Ok(())": "cpu:384736",
-  " 147 call vec_new_from_slice(1)": "cpu:396016, mem:31340, objs:-/53@b143d367, store:-/3@da8b1fdf, foot:3@f4432e24",
+  " 147 call vec_new_from_slice(1)": "cpu:396016, mem:31340, objs:-/53@b143d367, store:-/3@e927c3ab, foot:3@f4432e24",
   " 148 ret vec_new_from_slice -> Ok(Vec(obj#107))": "cpu:397042, mem:31444, objs:-/54@f4deeca6",
   " 149 call call(Address(obj#41), Symbol(balance), Vec(obj#107))": "",
   " 150 push SAC:859a7811:balance(Address(obj#105))": "cpu:433131, mem:36052, objs:-/55@3b24daa6, stk:1@bc465be, auth:1@3b4be25f/-",
@@ -155,7 +155,7 @@
   " 153 call extend_current_contract_instance_and_code_ttl(U32(103680), U32(120960))": "",
   " 154 call get_ledger_sequence()": "cpu:439520, mem:36188, store:-/-, foot:-",
   " 155 ret get_ledger_sequence -> Ok(U32(123))": "",
-  " 156 ret extend_current_contract_instance_and_code_ttl -> Ok(Void)": "cpu:454022, mem:37948, store:-/3@89501035, foot:3@f4432e24",
+  " 156 ret extend_current_contract_instance_and_code_ttl -> Ok(Void)": "cpu:454022, mem:37948, store:-/3@8509fbeb, foot:3@f4432e24",
   " 157 call vec_new_from_slice(1)": "cpu:454131",
   " 158 ret vec_new_from_slice -> Ok(Vec(obj#111))": "cpu:455096, mem:38052, objs:-/56@d94c19eb",
   " 159 call get_contract_data(Vec(obj#111), Instance)": "",
@@ -169,7 +169,7 @@
   " 167 ret obj_cmp -> Ok(-1)": "cpu:467922",
   " 168 call obj_cmp(Vec(obj#123), Vec(obj#111))": "",
   " 169 ret obj_cmp -> Ok(0)": "cpu:468209",
-  " 170 ret get_contract_data -> Ok(Vec(obj#135))": "cpu:468315, store:3@a308e204/3@89501035, stk:1@372c3306",
+  " 170 ret get_contract_data -> Ok(Vec(obj#135))": "cpu:468315, store:3@a308e204/3@8509fbeb, stk:1@372c3306",
   " 171 call vec_get(Vec(obj#135), U32(0))": "",
   " 172 ret vec_get -> Ok(Symbol(obj#125))": "cpu:468541",
   " 173 call symbol_index_in_strs(Symbol(obj#125), 3)": "",
@@ -184,7 +184,7 @@
   " 182 ret string_len -> Ok(U32(12))": "cpu:469786",
   " 183 call string_copy_to_slice(String(obj#129), U32(0), 12)": "",
   " 184 ret string_copy_to_slice -> Ok(())": "cpu:469890",
-  " 185 pop SAC:859a7811:balance -> Ok(I128(10000000))": "cpu:479525, mem:40015",
-  " 186 ret call -> Ok(I128(10000000))": " store:-/3@89501035, stk:-, auth:-/-",
-  " 187 end": "cpu:479525, mem:40015, prngs:-/9b4a753, objs:-/68@2727f320, vm:-/-, evt:-, store:-/3@89501035, foot:3@f4432e24, stk:-, auth:-/-"
+  " 185 pop SAC:859a7811:balance -> Ok(I128(10000000))": "cpu:479059, mem:39743",
+  " 186 ret call -> Ok(I128(10000000))": " store:-/3@8509fbeb, stk:-, auth:-/-",
+  " 187 end": "cpu:479059, mem:39743, prngs:-/9b4a753, objs:-/68@2727f320, vm:-/-, evt:-, store:-/3@8509fbeb, foot:3@f4432e24, stk:-, auth:-/-"
 }

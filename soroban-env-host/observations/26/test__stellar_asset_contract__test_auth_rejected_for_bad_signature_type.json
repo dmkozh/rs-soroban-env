@@ -86,7 +86,7 @@
   "  84 ret put_contract_data -> Ok(Void)": " store:3@4e633378/2@a498c579, stk:1@cfd279db",
   "  85 pop SAC:2e378f80:sym#5 -> Ok(Void)": "cpu:234250, mem:11442, store:3@4e633378/2@c9572fdf",
   "  86 ret create_asset_contract -> Ok(Address(obj#39))": "cpu:234753, mem:11522, objs:-/20@5fdefccc, store:-/2@c9572fdf, stk:-, auth:-/-",
-  "  87 call vec_new_from_slice(2)": "cpu:242444, mem:12081, objs:-/21@9d9f1b16, store:-/4@a110b53, foot:4@28eb6bd9",
+  "  87 call vec_new_from_slice(2)": "cpu:242444, mem:12081, objs:-/21@9d9f1b16, store:-/4@fc428d69, foot:4@28eb6bd9",
   "  88 ret vec_new_from_slice -> Ok(Vec(obj#43))": "cpu:243472, mem:12193, objs:-/22@adbaa2f1",
   "  89 call call(Address(obj#39), Symbol(mint), Vec(obj#43))": "cpu:265546, mem:18013, objs:-/27@da589a9c, auth:-/1@594f8c23",
   "  90 push SAC:2e378f80:mint(Address(obj#41), I128(100))": "cpu:302713, mem:22703, objs:-/28@a6bde994, stk:1@c30e2090, auth:1@6b61a7ed/1@cbc9849e",
@@ -105,7 +105,7 @@
   " 103 ret obj_cmp -> Ok(-1)": "cpu:316285",
   " 104 call obj_cmp(Vec(obj#69), Vec(obj#57))": "",
   " 105 ret obj_cmp -> Ok(0)": "cpu:316572",
-  " 106 ret get_contract_data -> Ok(Vec(obj#79))": "cpu:316678, store:3@fd86f485/4@a110b53, stk:1@6ddfa0c",
+  " 106 ret get_contract_data -> Ok(Vec(obj#79))": "cpu:316678, store:3@fd86f485/4@fc428d69, stk:1@6ddfa0c",
   " 107 call vec_get(Vec(obj#79), U32(0))": "",
   " 108 ret vec_get -> Ok(Symbol(AlphaNum4))": "cpu:316843",
   " 109 call symbol_index_in_strs(Symbol(AlphaNum4), 3)": "",
@@ -121,9 +121,9 @@
   " 119 call vec_new_from_slice(1)": "",
   " 120 ret vec_new_from_slice -> Ok(Vec(obj#83))": "cpu:319530, mem:24430, objs:-/42@d0addd90",
   " 121 call get_contract_data(Vec(obj#83), Instance)": "",
-  " 122 call obj_cmp(Vec(obj#65), Vec(obj#83))": "cpu:319642, store:-/4@a110b53, stk:-",
+  " 122 call obj_cmp(Vec(obj#65), Vec(obj#83))": "cpu:319642, store:-/4@fc428d69, stk:-",
   " 123 ret obj_cmp -> Ok(0)": "cpu:319929",
-  " 124 ret get_contract_data -> Ok(Address(obj#67))": "cpu:320035, store:3@fd86f485/4@a110b53, stk:1@6ddfa0c",
+  " 124 ret get_contract_data -> Ok(Address(obj#67))": "cpu:320035, store:3@fd86f485/4@fc428d69, stk:1@6ddfa0c",
   " 125 call require_auth(Address(obj#67))": "",
   " 126 call obj_cmp(Address(obj#49), Address(obj#67))": "cpu:320664, mem:24462",
   " 127 ret obj_cmp -> Ok(0)": "cpu:320958",
@@ -135,6 +135,6 @@
   " 133 ret obj_cmp -> Ok(0)": "cpu:321840",
   " 134 ret require_auth -> Err(Error(Auth, InvalidAction))": "cpu:340404, mem:29514, auth:1@6b61a7ed/1@4821cad3",
   " 135 pop SAC:2e378f80:mint -> Err(Error(Auth, InvalidAction))": "",
-  " 136 ret call -> Err(Error(Auth, InvalidAction))": " store:-/4@a110b53, stk:-, auth:-/-",
-  " 137 end": "cpu:340404, mem:29514, prngs:-/9b4a753, objs:-/42@d0addd90, vm:-/-, evt:-, store:-/4@a110b53, foot:4@28eb6bd9, stk:-, auth:-/-"
+  " 136 ret call -> Err(Error(Auth, InvalidAction))": " store:-/4@fc428d69, stk:-, auth:-/-",
+  " 137 end": "cpu:340404, mem:29514, prngs:-/9b4a753, objs:-/42@d0addd90, vm:-/-, evt:-, store:-/4@fc428d69, foot:4@28eb6bd9, stk:-, auth:-/-"
 }

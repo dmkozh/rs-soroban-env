@@ -35,9 +35,8 @@ pub type StorageMap = MeteredHashMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>;
 /// This enum provides a uniform representation for cached ledger entries:
 /// - `ContractData`: Stores the value as `Val` (host value) with its TTL. The `Val` form
 ///   avoids repeated ScVal<->Val conversions on each read/write from contract code.
-/// - `Entry`: Stores other entry types (ContractCode, Account, Trustline) as `Rc<RefCell<LedgerEntry>>`
-///   with optional TTL (only ContractCode has TTL; Account/Trustline have None).
-///   The RefCell allows in-place mutation of entries, avoiding expensive clone-modify-write patterns.
+/// - `Entry`: Stores other entry types (ContractCode, Account, Trustline) as a RefCell
+///   for in-place mutation, with optional live_until for ContractCode entries.
 /// 
 /// `None` in the containing `Option<CachedEntry>` represents a deleted or non-existent entry.
 #[derive(Clone)]
@@ -322,6 +321,7 @@ impl Storage {
 
     // Like `get`, but distinguishes between missing values (return `Ok(None)`)
     // and out-of-footprint values or errors (`Err(...)`).
+    #[allow(dead_code)]
     pub(crate) fn try_get(
         &mut self,
         key: &Rc<LedgerKey>,

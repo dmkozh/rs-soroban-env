@@ -31,7 +31,7 @@
   "  29 call bytes_copy_to_slice(Bytes(obj#19), U32(0), 32)": "cpu:4145478",
   "  30 ret bytes_copy_to_slice -> Ok(())": "cpu:4145585",
   "  31 push UploadContractWasm:()": "cpu:4147347, mem:4094761, stk:1@41146a5",
-  "  32 pop UploadContractWasm: -> Ok(Bytes(obj#23))": "cpu:5688743, mem:5525673, objs:-/12@cc086b41, store:-/3@b3fd50c6, foot:3@61912b5d",
+  "  32 pop UploadContractWasm: -> Ok(Bytes(obj#23))": "cpu:5688743, mem:5525673, objs:-/12@cc086b41, store:-/3@a7959f, foot:3@61912b5d",
   "  33 call vec_new_from_slice(2)": "cpu:5690304, mem:5525849, objs:-/13@55480677, stk:-",
   "  34 ret vec_new_from_slice -> Ok(Vec(obj#27))": "cpu:5691332, mem:5525961, objs:-/14@3be8c1f1",
   "  35 call call(Address(obj#17), Symbol(update), Vec(obj#27))": "",
@@ -39,7 +39,7 @@
   "  37 call bytes_len(Bytes(obj#25))": "cpu:6163209, mem:6690838, objs:1@41a7e6e3/15@7f3a0c81, vm:-/-, stk:1@cdf78c6c",
   "  38 ret bytes_len -> Ok(U32(32))": "cpu:6164985",
   "  39 call put_contract_data(Symbol(foo), I32(111), Instance)": "",
-  "  40 ret put_contract_data -> Ok(Void)": "cpu:6165999, mem:6690878, store:1@f369ddeb/3@b3fd50c6, stk:1@76fcb7eb",
+  "  40 ret put_contract_data -> Ok(Void)": "cpu:6165999, mem:6690878, store:1@f369ddeb/3@a7959f, stk:1@76fcb7eb",
   "  41 call update_current_contract_wasm(Bytes(obj#25))": "",
   "  42 call symbol_new_from_slice(17)": "cpu:6175245, mem:6691150",
   "  43 ret symbol_new_from_slice -> Ok(Symbol(obj#31))": "cpu:6176258, mem:6691263, objs:1@41a7e6e3/16@ea3a1514",
@@ -55,9 +55,9 @@
   "  53 ret vec_new_from_slice -> Ok(Vec(obj#41))": "cpu:6181408, mem:6691863, objs:1@41a7e6e3/21@dbd941f2",
   "  54 call vec_new_from_slice(0)": "",
   "  55 ret vec_new_from_slice -> Ok(Vec(obj#43))": "cpu:6182371, mem:6691959, objs:1@41a7e6e3/22@691b7f43",
-  "  56 ret update_current_contract_wasm -> Ok(Void)": "cpu:6194763, mem:6692424, objs:1@41a7e6e3/23@75259a7, evt:1@3146a5e8, store:1@f369ddeb/3@895eb55e",
-  "  57 pop VM:7013ae53:update -> Ok(I32(123))": "cpu:6206744, mem:6692976, vm:1048576@740599e7/6@c559546a, store:1@f369ddeb/3@316c2025",
-  "  58 ret call -> Ok(I32(123))": " objs:-/23@75259a7, vm:-/-, store:-/3@316c2025, stk:-, auth:-/-",
+  "  56 ret update_current_contract_wasm -> Ok(Void)": "cpu:6194763, mem:6692424, objs:1@41a7e6e3/23@75259a7, evt:1@3146a5e8, store:1@f369ddeb/3@16d9a29a",
+  "  57 pop VM:7013ae53:update -> Ok(I32(123))": "cpu:6206744, mem:6692976, vm:1048576@740599e7/6@c559546a, store:1@f369ddeb/3@35d7f509",
+  "  58 ret call -> Ok(I32(123))": " objs:-/23@75259a7, vm:-/-, store:-/3@35d7f509, stk:-, auth:-/-",
   "  59 call get_address_executable(Address(obj#17))": "",
   "  60 call bytes_new_from_slice(32)": "cpu:6212330, mem:6693275",
   "  61 ret bytes_new_from_slice -> Ok(Bytes(obj#47))": "cpu:6213301, mem:6693403, objs:-/24@29d17e9c",
@@ -74,5 +74,5 @@
   "  72 ret bytes_len -> Ok(U32(32))": "cpu:6215035",
   "  73 call bytes_copy_to_slice(Bytes(obj#47), U32(0), 32)": "cpu:6215142",
   "  74 ret bytes_copy_to_slice -> Ok(())": "cpu:6215249",
-  "  75 end": "cpu:6215249, mem:6693515, prngs:-/9b4a753, objs:-/25@2c8acd1c, vm:-/-, evt:1@3146a5e8, store:-/3@316c2025, foot:3@61912b5d, stk:-, auth:-/-"
+  "  75 end": "cpu:6215249, mem:6693515, prngs:-/9b4a753, objs:-/25@2c8acd1c, vm:-/-, evt:1@3146a5e8, store:-/3@35d7f509, foot:3@61912b5d, stk:-, auth:-/-"
 }

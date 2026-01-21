@@ -1,4 +1,4 @@
 {
-  "   0 begin": "cpu:3674, mem:107, prngs:-/-, objs:-/-, vm:-/-, evt:-, store:-/2@513c91bc, foot:2@adc0a3b, stk:-, auth:-/-",
-  "   1 end": "cpu:1471111, mem:453561, prngs:-/-, objs:-/1@65f531b2, vm:-/-, evt:-, store:-/2@513c91bc, foot:2@adc0a3b, stk:-, auth:-/-"
+  "   0 begin": "cpu:3674, mem:107, prngs:-/-, objs:-/-, vm:-/-, evt:-, store:-/2@26037809, foot:2@adc0a3b, stk:-, auth:-/-",
+  "   1 end": "cpu:1471111, mem:453561, prngs:-/-, objs:-/1@65f531b2, vm:-/-, evt:-, store:-/2@26037809, foot:2@adc0a3b, stk:-, auth:-/-"
 }

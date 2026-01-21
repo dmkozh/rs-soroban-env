@@ -176,7 +176,7 @@
   " 174 ret vec_get -> Ok(Symbol(Native))": "cpu:497022",
   " 175 call symbol_index_in_strs(Symbol(Native), 3)": "",
   " 176 ret symbol_index_in_strs -> Ok(U32(0))": "cpu:497154",
-  " 177 pop SAC:9d2afd13:balance -> Ok(I128(100000000))": "cpu:506728, mem:40041",
+  " 177 pop SAC:9d2afd13:balance -> Ok(I128(100000000))": "cpu:506262, mem:39769",
   " 178 ret call -> Ok(I128(100000000))": " store:-/2@3384be15, stk:-, auth:-/-",
-  " 179 end": "cpu:506728, mem:40041, prngs:-/9b4a753, objs:-/71@f3755685, vm:-/-, evt:-, store:-/2@3384be15, foot:2@3473482a, stk:-, auth:-/-"
+  " 179 end": "cpu:506262, mem:39769, prngs:-/9b4a753, objs:-/71@f3755685, vm:-/-, evt:-, store:-/2@3384be15, foot:2@3473482a, stk:-, auth:-/-"
 }

@@ -278,6 +278,9 @@ fn get_ledger_changes(
         }
         changes.push(entry_change);
     }
+    // Sort by encoded_key for deterministic ordering since storage.map is a
+    // HashMap with arbitrary iteration order.
+    changes.sort_by(|a, b| a.encoded_key.cmp(&b.encoded_key));
     Ok(changes)
 }
 

@@ -1822,8 +1822,8 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 950981,
-                            mem_bytes: 3466996,
+                            instructions: 950049,
+                            mem_bytes: 3466452,
                             disk_read_entries: 0,
                             memory_read_entries: 6,
                             write_entries: 3,
@@ -1848,8 +1848,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 663963,
-                                    mem_bytes: 2336156,
+                                    instructions: 663031,
+                                    mem_bytes: 2335612,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
                                     write_entries: 2,
@@ -1980,8 +1980,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2493522,
-                            mem_bytes: 5942319,
+                            instructions: 2492590,
+                            mem_bytes: 5941775,
                             disk_read_entries: 0,
                             memory_read_entries: 8,
                             write_entries: 3,
@@ -2006,8 +2006,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 950087,
-                                    mem_bytes: 2383270,
+                                    instructions: 949155,
+                                    mem_bytes: 2382726,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
                                     write_entries: 2,

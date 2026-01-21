@@ -782,7 +782,7 @@ impl Host {
                     // Found in cache with a value - Val is already in host format
                     return Ok(val);
                 }
-                Some(CachedEntry::Entry(_, _)) => {
+                Some(CachedEntry::Entry(..)) => {
                     // Wrong type in cache - should not happen
                     return Err(self.err(
                         ScErrorType::Storage,

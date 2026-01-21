@@ -3,7 +3,7 @@ use crate::{
     budget::AsBudget,
     err,
     host::{
-        metered_clone::{MeteredAlloc, MeteredClone, MeteredContainer},
+        metered_clone::{MeteredClone, MeteredContainer},
         prng::Prng,
     },
     storage::{CachedEntry, InstanceStorageMap, StorageCache, StorageMap},
@@ -1273,7 +1273,7 @@ impl Host {
     }
 
     /// Flushes the data cache from the current frame to storage.
-    /// This writes all cached contract data entries to the underlying storage.
+    /// This writes all cached entries to the underlying storage.
     /// Should be called at frame exit before persist_instance_storage.
     #[allow(dead_code)]
     fn flush_data_cache(&self) -> Result<(), HostError> {
@@ -1287,12 +1287,21 @@ impl Host {
             return Ok(());
         }
 
+        // Always flush directly to storage
+        self.flush_cache_to_storage(cache_entries)
+    }
+
+    /// Flushes cache entries to global storage.
+    fn flush_cache_to_storage(
+        &self,
+        cache_entries: Vec<(Rc<LedgerKey>, Option<CachedEntry>)>,
+    ) -> Result<(), HostError> {
         for (ledger_key, cached_entry) in cache_entries {
             match cached_entry {
                 Some(CachedEntry::ContractData(val, live_until)) => {
                     // Convert Val to ScVal for storage
                     let sc_val = self.from_host_val(val)?;
-                    
+
                     // Extract key info from the LedgerKey to build the entry
                     let (contract, key_scval, durability) = match ledger_key.as_ref() {
                         LedgerKey::ContractData(data) => (
@@ -1309,7 +1318,7 @@ impl Host {
                             ));
                         }
                     };
-                    
+
                     // Create the ledger entry
                     let entry = LedgerEntry {
                         last_modified_ledger_seq: 0,
@@ -1324,7 +1333,7 @@ impl Host {
                     };
                     self.try_borrow_storage_mut()?.put(
                         &ledger_key,
-                        &Rc::metered_new(entry, self)?,
+                        &Rc::new(entry),
                         Some(live_until),
                         self,
                         None,
@@ -1332,7 +1341,7 @@ impl Host {
                 }
                 Some(CachedEntry::Entry(entry_refcell, live_until)) => {
                     // Clone the entry from the RefCell and wrap in new Rc for storage
-                    let entry = Rc::metered_new(entry_refcell.borrow().clone(), self)?;
+                    let entry = Rc::new(entry_refcell.borrow().clone());
                     self.try_borrow_storage_mut()?.put(
                         &ledger_key,
                         &entry,

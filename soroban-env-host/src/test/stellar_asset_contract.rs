@@ -3462,8 +3462,8 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 865008,
-                mem_bytes: 1213435,
+                instructions: 864542,
+                mem_bytes: 1213163,
                 disk_read_entries: 1,
                 memory_read_entries: 5,
                 write_entries: 2,
