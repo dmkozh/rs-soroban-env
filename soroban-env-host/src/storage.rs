@@ -399,6 +399,31 @@ impl Storage {
             .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
     }
 
+    /// Returns the Rc<RefCell<LedgerEntry>> for an entry, allowing direct
+    /// in-place modification. Only works for entries stored as CachedEntry::Entry.
+    /// Returns None if the key is not found or if it's a ContractData entry.
+    /// Returns an error if the entry was deleted.
+    pub(crate) fn get_entry_rc(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        host: &Host,
+        key_val: Option<Val>,
+    ) -> Result<(Rc<RefCell<LedgerEntry>>, Option<u32>), HostError> {
+        let cached = self.try_get_cached(key, host, key_val)?
+            .ok_or_else(|| (ScErrorType::Storage, ScErrorCode::MissingValue).into())
+            .map_err(|e: HostError| host.decorate_storage_error(e, key.as_ref(), key_val))?;
+
+        match cached {
+            CachedEntry::Entry(entry_rc, live_until) => Ok((entry_rc, live_until)),
+            CachedEntry::ContractData(_, _) => Err(host.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "get_entry_rc called on ContractData entry",
+                &[],
+            )),
+        }
+    }
+
     // Helper to convert CachedEntry to EntryWithLiveUntil for legacy interface.
     // This requires materializing ContractData entries back to LedgerEntry.
     fn cached_entry_to_entry_with_live_until(

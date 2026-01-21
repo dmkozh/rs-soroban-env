@@ -544,7 +544,8 @@ impl Host {
     }
 
     /// Provides read-only access to a ledger entry via a callback.
-    /// The entry is loaded into the per-frame cache if not already present.
+    /// Checks the write cache first (in case entry was modified), then
+    /// borrows directly from storage without caching.
     /// Use this for read-only access to Account/Trustline/ContractCode entries.
     /// Returns an error if called with a ContractData key.
     #[allow(dead_code)]
@@ -557,11 +558,10 @@ impl Host {
         F: FnOnce(&LedgerEntry) -> Result<R, HostError>,
     {
         use crate::storage::CachedEntry;
-        use std::cell::RefCell;
 
         let budget = self.budget_ref();
 
-        // Try to get from per-frame cache first
+        // Check write cache first (in case entry was previously modified)
         if let Some(cached) = self
             .try_with_data_cache(|cache| Ok(cache.get(key, budget)?.cloned()))?
             .flatten()
@@ -589,31 +589,21 @@ impl Host {
             }
         }
 
-        // Cache miss - read from storage and cache it
-        let (entry, live_until) = self
+        // Borrow directly from storage without caching (read-only)
+        let (entry_rc, _live_until) = self
             .try_borrow_storage_mut()?
-            .get_with_live_until_ledger(key, self, None)?;
+            .get_entry_rc(key, self, None)?;
 
-        // Cache the entry for future access
-        let entry_refcell = Rc::new(RefCell::new((*entry).clone()));
-        self.try_with_mut_data_cache(|cache| {
-            cache.insert(
-                key.metered_clone(budget)?,
-                Some(CachedEntry::Entry(entry_refcell.clone(), live_until)),
-                budget,
-            )
-        })?;
-
-        let result = f(&entry_refcell.borrow());
-        result
+        let borrowed = entry_rc.borrow();
+        f(&borrowed)
     }
 
     /// Provides mutable access to a ledger entry via a callback.
-    /// The entry is loaded into the per-frame cache if not already present.
-    /// Modifications made through the callback will be persisted when the frame exits.
-    /// If there is no frame context, modifications are written directly to storage.
+    /// On cache hit, modifies the cached entry in-place.
+    /// On cache miss, deep clones from storage into the cache (copy-on-write).
+    /// If there is no frame context, modifies storage directly in-place.
     /// Use this for in-place mutation of Account/Trustline/ContractCode entries.
-    /// Returns an error if called with a ContractData key.
+    /// Returns an error if called with a ContractData key (except contract instance).
     pub(crate) fn modify_ledger_entry<F, R>(
         &self,
         key: &Rc<LedgerKey>,
@@ -647,7 +637,7 @@ impl Host {
         let has_frame = self.try_with_data_cache(|_| Ok(()))?.is_some();
 
         if has_frame {
-            // Try to get from per-frame cache first
+            // Try to get from per-frame cache first (already modified entry)
             if let Some(cached) = self
                 .try_with_data_cache(|cache| Ok(cache.get(key, budget)?.cloned()))?
                 .flatten()
@@ -675,41 +665,35 @@ impl Host {
                 }
             }
 
-            // Cache miss - read from storage and cache it
-            let (entry, live_until) = self
+            // Cache miss - deep clone from storage and insert into cache (copy-on-write)
+            let (entry_rc, live_until) = self
                 .try_borrow_storage_mut()?
-                .get_with_live_until_ledger(key, self, None)?;
+                .get_entry_rc(key, self, None)?;
 
-            // Cache the entry for future access
-            let entry_refcell = Rc::new(RefCell::new((*entry).clone()));
+            // Deep clone the entry for copy-on-write semantics
+            let cloned_entry = entry_rc.borrow().metered_clone(self)?;
+            let new_entry_rc = Rc::new(RefCell::new(cloned_entry));
+
+            // Insert into cache using get_or_insert_with to avoid key clone if already present
+            // We need to clone new_entry_rc before moving into closure
+            let entry_rc_for_cache = new_entry_rc.clone();
             self.try_with_mut_data_cache(|cache| {
-                cache.insert(
-                    key.metered_clone(budget)?,
-                    Some(CachedEntry::Entry(entry_refcell.clone(), live_until)),
-                    budget,
-                )
+                let _ = cache.get_or_insert_with(key, budget, move || {
+                    Ok(Some(CachedEntry::Entry(entry_rc_for_cache, live_until)))
+                })?;
+                Ok(())
             })?;
 
-            let result = f(&mut entry_refcell.borrow_mut());
-            result
+            let mut borrowed = new_entry_rc.borrow_mut();
+            f(&mut borrowed)
         } else {
-            // No frame context - read from storage, modify, write back
-            let (entry, live_until) = self
+            // No frame context - modify storage directly in-place
+            let (entry_rc, _live_until) = self
                 .try_borrow_storage_mut()?
-                .get_with_live_until_ledger(key, self, None)?;
+                .get_entry_rc(key, self, None)?;
 
-            let mut modified_entry = (*entry).metered_clone(self)?;
-            let result = f(&mut modified_entry)?;
-
-            self.try_borrow_storage_mut()?.put(
-                key,
-                &Rc::metered_new(modified_entry, self)?,
-                live_until,
-                self,
-                None,
-            )?;
-
-            Ok(result)
+            let mut borrowed = entry_rc.borrow_mut();
+            f(&mut borrowed)
         }
     }
 
@@ -798,8 +782,8 @@ impl Host {
         // Write to cache - store Val directly to avoid repeated conversions
         let budget = self.budget_ref();
         self.try_with_mut_data_cache(|cache| {
-            cache.insert(
-                key.metered_clone(budget)?,
+            cache.upsert(
+                &key,
                 Some(CachedEntry::ContractData(v, live_until_ledger)),
                 budget,
             )
@@ -937,8 +921,8 @@ impl Host {
         // Mark as deleted in cache (None value indicates deletion)
         let budget = self.budget_ref();
         self.try_with_mut_data_cache(|cache| {
-            cache.insert(
-                key.metered_clone(budget)?,
+            cache.upsert(
+                &key,
                 None,  // None indicates deleted entry
                 budget,
             )
@@ -1019,8 +1003,8 @@ impl Host {
             // Update current frame's cache with new TTL
             let budget = self.budget_ref();
             self.try_with_mut_data_cache(|cache| {
-                cache.insert(
-                    key.metered_clone(budget)?,
+                cache.upsert(
+                    &key,
                     Some(CachedEntry::ContractData(val, new_live_until)),
                     budget,
                 )

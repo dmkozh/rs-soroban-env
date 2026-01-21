@@ -221,4 +221,53 @@ where
             map: self.map.clone(),
         })
     }
+
+    /// Returns a mutable reference to an entry in the map, inserting a default
+    /// value if the key is not present. Unlike `insert`, this avoids cloning
+    /// the key when the entry already exists.
+    ///
+    /// The `default_fn` closure is only called (and the key is only cloned)
+    /// if the key is not already in the map.
+    pub fn get_or_insert_with<B, F>(
+        &mut self,
+        key: &K,
+        budget: &B,
+        default_fn: F,
+    ) -> Result<&mut V, HostError>
+    where
+        B: AsBudget,
+        F: FnOnce() -> Result<V, HostError>,
+        K: Clone,
+    {
+        self.charge_hash(budget)?;
+        self.charge_access(1, budget)?;
+        
+        // Check if key exists first to avoid unnecessary clone
+        if self.map.contains_key(key) {
+            // Key exists - get mutable reference without cloning key
+            Ok(self.map.get_mut(key).expect("key just checked"))
+        } else {
+            // Key doesn't exist - clone key and insert
+            let value = default_fn()?;
+            Ok(self.map.entry(key.clone()).or_insert(value))
+        }
+    }
+
+    /// Inserts or updates a value in the map. Unlike `insert`, this only
+    /// clones the key when inserting a new entry.
+    pub fn upsert<B: AsBudget>(&mut self, key: &K, value: V, budget: &B) -> Result<(), HostError>
+    where
+        K: Clone,
+    {
+        self.charge_hash(budget)?;
+        self.charge_access(1, budget)?;
+        
+        // Check if key exists first to avoid unnecessary clone
+        if let Some(v) = self.map.get_mut(key) {
+            *v = value;
+        } else {
+            self.map.insert(key.clone(), value);
+        }
+        Ok(())
+    }
 }
