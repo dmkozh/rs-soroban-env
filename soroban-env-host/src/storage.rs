@@ -26,9 +26,11 @@ use crate::{
 
 pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
 /// Entry with optional live_until ledger for snapshot source compatibility.
+/// Used by the SnapshotSource trait at the external interface boundary.
 pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
-/// Storage map type using MeteredHashMap for O(1) access and in-place mutation.
-pub type StorageMap = MeteredHashMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>;
+/// Storage map type using CachedEntry for unified format with per-frame caches.
+/// This enables zero-copy frame-to-frame cache propagation.
+pub type StorageMap = MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>>;
 
 /// Unified cache entry for all ledger entry types.
 /// 
@@ -46,6 +48,84 @@ pub enum CachedEntry {
     /// Other entry types: (entry, optional live_until for ContractCode)
     /// Uses Rc<RefCell<_>> for in-place mutation and fast Rc cloning between maps.
     Entry(Rc<RefCell<LedgerEntry>>, Option<u32>),
+}
+
+impl CachedEntry {
+    /// Returns the live_until ledger for this entry.
+    pub fn live_until(&self) -> Option<u32> {
+        match self {
+            CachedEntry::ContractData(_, live_until) => Some(*live_until),
+            CachedEntry::Entry(_, live_until) => *live_until,
+        }
+    }
+
+    /// Returns a reference to the entry if this is an Entry variant.
+    /// Returns None for ContractData variant.
+    pub fn get_entry(&self) -> Option<Rc<RefCell<LedgerEntry>>> {
+        match self {
+            CachedEntry::ContractData(_, _) => None,
+            CachedEntry::Entry(entry, _) => Some(Rc::clone(entry)),
+        }
+    }
+
+    /// Reconstructs a LedgerEntry from this CachedEntry given the key.
+    /// For Entry variant, clones the inner entry.
+    /// For ContractData variant, builds a new LedgerEntry from the key and value.
+    pub fn to_ledger_entry(
+        &self,
+        key: &LedgerKey,
+        host: &Host,
+    ) -> Result<LedgerEntry, HostError> {
+        use crate::xdr::{ContractDataEntry, LedgerEntryData, LedgerEntryExt, LedgerKeyContractData};
+        match self {
+            CachedEntry::Entry(entry, _) => Ok(entry.borrow().clone()),
+            CachedEntry::ContractData(val, _) => {
+                // Reconstruct the LedgerEntry from key and value
+                if let LedgerKey::ContractData(LedgerKeyContractData {
+                    contract,
+                    key: data_key,
+                    durability,
+                }) = key
+                {
+                    let sc_val = host.from_host_val(*val)?;
+                    Ok(LedgerEntry {
+                        last_modified_ledger_seq: 0,
+                        data: LedgerEntryData::ContractData(ContractDataEntry {
+                            ext: crate::xdr::ExtensionPoint::V0,
+                            contract: contract.clone(),
+                            key: data_key.clone(),
+                            durability: *durability,
+                            val: sc_val,
+                        }),
+                        ext: LedgerEntryExt::V0,
+                    })
+                } else {
+                    Err(host.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "ContractData cached entry has non-ContractData key",
+                        &[],
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Creates a CachedEntry from an EntryWithLiveUntil.
+    /// For Commit 1, all entries are stored as CachedEntry::Entry.
+    /// Later commits will convert ContractData to CachedEntry::ContractData with Val.
+    pub fn from_entry_with_live_until(
+        entry: &Rc<LedgerEntry>,
+        live_until: Option<u32>,
+        _host: &Host,
+    ) -> Result<Self, HostError> {
+        // For now, store all entries as Entry variant.
+        // Commit 5 will convert regular ContractData to ContractData variant with Val.
+        Ok(CachedEntry::Entry(
+            Rc::new(RefCell::new((*entry.as_ref()).clone())),
+            live_until,
+        ))
+    }
 }
 
 impl std::hash::Hash for CachedEntry {
@@ -279,11 +359,12 @@ impl Storage {
     }
 
     // Helper function the next 3 `get`-variants funnel into.
-    fn try_get_full_helper(
+    // Returns the raw CachedEntry from the map.
+    fn try_get_cached_entry(
         &mut self,
         key: &Rc<LedgerKey>,
         host: &Host,
-    ) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    ) -> Result<Option<CachedEntry>, HostError> {
         let _span = tracy_span!("storage get");
         Self::check_supported_ledger_key_type(key)?;
         self.prepare_read_only_access(key, host)?;
@@ -291,7 +372,96 @@ impl Storage {
             // Key has to be in the storage map at this point due to
             // `prepare_read_only_access`.
             None => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
-            Some(pair_option) => Ok(pair_option.clone()),
+            Some(entry_option) => Ok(entry_option.clone()),
+        }
+    }
+
+    /// Internal helper to get a CachedEntry with error decoration.
+    pub(crate) fn try_get_cached(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        host: &Host,
+        key_val: Option<Val>,
+    ) -> Result<Option<CachedEntry>, HostError> {
+        self.try_get_cached_entry(key, host)
+            .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
+    }
+
+    /// Returns the cached entry, or an error if not found.
+    pub(crate) fn get_cached(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        host: &Host,
+        key_val: Option<Val>,
+    ) -> Result<CachedEntry, HostError> {
+        self.try_get_cached(key, host, key_val)?
+            .ok_or_else(|| (ScErrorType::Storage, ScErrorCode::MissingValue).into())
+            .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
+    }
+
+    // Helper to convert CachedEntry to EntryWithLiveUntil for legacy interface.
+    // This requires materializing ContractData entries back to LedgerEntry.
+    fn cached_entry_to_entry_with_live_until(
+        &self,
+        cached: &CachedEntry,
+        key: &Rc<LedgerKey>,
+        host: &Host,
+    ) -> Result<EntryWithLiveUntil, HostError> {
+        match cached {
+            CachedEntry::ContractData(val, live_until) => {
+                // Convert Val back to ScVal and build LedgerEntry
+                let sc_val = host.from_host_val(*val)?;
+                let (contract, key_scval, durability) = match key.as_ref() {
+                    LedgerKey::ContractData(data) => (
+                        data.contract.metered_clone(host)?,
+                        data.key.metered_clone(host)?,
+                        data.durability,
+                    ),
+                    _ => {
+                        return Err(host.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                            "expected ContractData ledger key",
+                            &[],
+                        ));
+                    }
+                };
+                let entry = LedgerEntry {
+                    last_modified_ledger_seq: 0,
+                    data: crate::xdr::LedgerEntryData::ContractData(
+                        crate::xdr::ContractDataEntry {
+                            contract,
+                            key: key_scval,
+                            val: sc_val,
+                            durability,
+                            ext: crate::xdr::ExtensionPoint::V0,
+                        },
+                    ),
+                    ext: crate::xdr::LedgerEntryExt::V0,
+                };
+                Ok((Rc::new(entry), Some(*live_until)))
+            }
+            CachedEntry::Entry(entry_rc, live_until) => {
+                // Clone the entry from the RefCell
+                let entry = Rc::new(entry_rc.borrow().clone());
+                Ok((entry, *live_until))
+            }
+        }
+    }
+
+    // Legacy helper for backward compatibility during refactor.
+    fn try_get_full_helper(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        host: &Host,
+    ) -> Result<Option<EntryWithLiveUntil>, HostError> {
+        let cached = self.try_get_cached_entry(key, host)?;
+        match cached {
+            Some(entry) => {
+                let result = self.cached_entry_to_entry_with_live_until(&entry, key, host)?;
+                Ok(Some(result))
+            }
+            None => Ok(None),
         }
     }
 
@@ -388,17 +558,14 @@ impl Storage {
         Ok(())
     }
 
-    // Helper function `put` and `del` funnel into.
-    fn put_opt_helper(
+    // Helper function for putting CachedEntry directly into the map.
+    fn put_cached_entry_helper(
         &mut self,
         key: &Rc<LedgerKey>,
-        val: Option<EntryWithLiveUntil>,
+        val: Option<CachedEntry>,
         host: &Host,
     ) -> Result<(), HostError> {
         Self::check_supported_ledger_key_type(key)?;
-        if let Some(le) = &val {
-            Self::check_supported_ledger_entry_type(&le.0)?;
-        }
         #[cfg(any(test, feature = "recording_mode"))]
         self.handle_maybe_expired_entry(&key, host)?;
 
@@ -414,6 +581,35 @@ impl Storage {
         };
         self.map.insert(Rc::clone(key), val, host.budget_ref())?;
         Ok(())
+    }
+
+    /// Puts a CachedEntry directly into the storage map.
+    pub(crate) fn put_cached(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        val: Option<CachedEntry>,
+        host: &Host,
+        key_val: Option<Val>,
+    ) -> Result<(), HostError> {
+        self.put_cached_entry_helper(key, val, host)
+            .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
+    }
+
+    // Legacy helper that converts EntryWithLiveUntil to CachedEntry.
+    fn put_opt_helper(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        val: Option<EntryWithLiveUntil>,
+        host: &Host,
+    ) -> Result<(), HostError> {
+        let cached = match val {
+            Some((entry, live_until)) => {
+                Self::check_supported_ledger_entry_type(&entry)?;
+                Some(CachedEntry::from_entry_with_live_until(&entry, live_until, host)?)
+            }
+            None => None,
+        };
+        self.put_cached_entry_helper(key, cached, host)
     }
 
     fn put_opt(
@@ -525,7 +721,7 @@ impl Storage {
 
         // Extending deleted/non-existing/out-of-footprint entries will result in
         // an error.
-        let (entry, old_live_until) = self.get_with_live_until_ledger(&key, &host, key_val)?;
+        let (_entry, old_live_until) = self.get_with_live_until_ledger(&key, &host, key_val)?;
         let old_live_until = old_live_until.ok_or_else(|| {
             host.err(
                 ScErrorType::Storage,
@@ -587,9 +783,19 @@ impl Storage {
 
         if new_live_until > old_live_until && old_live_until.saturating_sub(ledger_seq) <= threshold
         {
+            // Get the current cached entry and update its live_until
+            let cached = self.get_cached(&key, host, key_val)?;
+            let updated_cached = match cached {
+                CachedEntry::ContractData(val, _) => {
+                    CachedEntry::ContractData(val, new_live_until)
+                }
+                CachedEntry::Entry(entry_rc, _) => {
+                    CachedEntry::Entry(entry_rc, Some(new_live_until))
+                }
+            };
             self.map.insert(
                 key,
-                Some((entry.clone(), Some(new_live_until))),
+                Some(updated_cached),
                 host.budget_ref(),
             )?;
         }
@@ -630,16 +836,16 @@ impl Storage {
         }
     }
 
-    // Test-only helper for getting the value directly from the storage map,
+    // Test-only helper for getting the cached entry directly from the storage map,
     // without the footprint management and autorestoration.
     #[cfg(any(test, feature = "testutils"))]
     pub(crate) fn get_from_map(
         &self,
         key: &Rc<LedgerKey>,
         host: &Host,
-    ) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    ) -> Result<Option<CachedEntry>, HostError> {
         match self.map.get(key, host.budget_ref())? {
-            Some(pair_option) => Ok(pair_option.clone()),
+            Some(entry_option) => Ok(entry_option.clone()),
             None => Ok(None),
         }
     }
@@ -660,8 +866,15 @@ impl Storage {
                     .map
                     .contains_key(key, host.budget_ref())?
                 {
+                    // Get from snapshot and convert to CachedEntry
                     let value = src.get(&key)?;
-                    self.map.insert(key.clone(), value, host.budget_ref())?;
+                    let cached = match value {
+                        Some((entry, live_until)) => {
+                            Some(CachedEntry::from_entry_with_live_until(&entry, live_until, host)?)
+                        }
+                        None => None,
+                    };
+                    self.map.insert(key.clone(), cached, host.budget_ref())?;
                 }
                 self.footprint.record_access(key, ty, host.budget_ref())?;
                 self.handle_maybe_expired_entry(key, host)?;
@@ -681,9 +894,8 @@ impl Storage {
     ) -> Result<(), HostError> {
         host.with_ledger_info(|li| {
             let budget = host.budget_ref();
-            if let Some(Some((entry, live_until))) =
-                self.map.get(key, host.budget_ref())?
-            {
+            if let Some(Some(cached_entry)) = self.map.get(key, host.budget_ref())? {
+                let live_until = cached_entry.live_until();
                 if let Some(durability) = get_key_durability(key.as_ref()) {
                     let live_until = live_until.ok_or_else(|| {
                         host.err(
@@ -711,11 +923,16 @@ impl Storage {
                                         "persistent entry TTL overflow, ledger is mis-configured",
                                         &[],)
                                     })?;
-                                self.map.insert(
-                                    key.clone(),
-                                    Some((entry.clone(), Some(new_live_until))),
-                                    budget,
-                                )?;
+                                // Update the live_until in the cached entry
+                                let updated = match cached_entry.clone() {
+                                    CachedEntry::ContractData(val, _) => {
+                                        CachedEntry::ContractData(val, new_live_until)
+                                    }
+                                    CachedEntry::Entry(entry_rc, _) => {
+                                        CachedEntry::Entry(entry_rc, Some(new_live_until))
+                                    }
+                                };
+                                self.map.insert(key.clone(), Some(updated), budget)?;
                             }
                         };
                     }
@@ -728,6 +945,24 @@ impl Storage {
     #[cfg(any(test, feature = "testutils"))]
     pub(crate) fn reset_footprint(&mut self) {
         self.footprint = Footprint::default();
+    }
+
+    /// Merges entries from a source cache into this storage's map.
+    /// This is used for zero-copy propagation of cache entries between frames.
+    /// Each entry is moved (not cloned) from the source iterator.
+    #[allow(dead_code)]
+    pub(crate) fn merge_from_cache<I>(
+        &mut self,
+        entries: I,
+        budget: &Budget,
+    ) -> Result<(), HostError>
+    where
+        I: Iterator<Item = (Rc<LedgerKey>, Option<CachedEntry>)>,
+    {
+        for (key, cached_entry) in entries {
+            self.map.insert(key, cached_entry, budget)?;
+        }
+        Ok(())
     }
 }
 

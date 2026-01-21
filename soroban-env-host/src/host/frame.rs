@@ -8,9 +8,8 @@ use crate::{
     },
     storage::{CachedEntry, InstanceStorageMap, StorageCache, StorageMap},
     xdr::{
-        ContractDataEntry, ContractExecutable, ContractId, ContractIdPreimage,
-        CreateContractArgsV2, ExtensionPoint, Hash, HostFunction, HostFunctionType, LedgerEntry,
-        LedgerEntryData, LedgerEntryExt, LedgerKey, ScAddress,
+        ContractExecutable, ContractId, ContractIdPreimage,
+        CreateContractArgsV2, Hash, HostFunction, HostFunctionType, LedgerKey, ScAddress,
         ScContractInstance, ScErrorCode, ScErrorType, ScVal,
     },
     AddressObject, Error, ErrorHandler, Host, HostError, Object, Symbol, SymbolStr, TryFromVal,
@@ -1292,69 +1291,62 @@ impl Host {
     }
 
     /// Flushes cache entries to global storage.
+    /// 
+    /// TODO: When parent-frame propagation is implemented, the conversion from
+    /// CachedEntry::ContractData to CachedEntry::Entry should only happen here
+    /// (final flush to global storage), not when flushing to parent frame's cache.
     fn flush_cache_to_storage(
         &self,
         cache_entries: Vec<(Rc<LedgerKey>, Option<CachedEntry>)>,
     ) -> Result<(), HostError> {
+        use crate::storage::CachedEntry;
+        use crate::xdr::{ContractDataEntry, LedgerEntryData, LedgerEntryExt, LedgerKeyContractData};
+        
         for (ledger_key, cached_entry) in cache_entries {
-            match cached_entry {
+            // Convert ContractData to Entry for compatibility with get_ledger_changes
+            let converted_entry = match cached_entry {
                 Some(CachedEntry::ContractData(val, live_until)) => {
-                    // Convert Val to ScVal for storage
-                    let sc_val = self.from_host_val(val)?;
-
-                    // Extract key info from the LedgerKey to build the entry
-                    let (contract, key_scval, durability) = match ledger_key.as_ref() {
-                        LedgerKey::ContractData(data) => (
-                            data.contract.metered_clone(self)?,
-                            data.key.metered_clone(self)?,
-                            data.durability,
-                        ),
-                        _ => {
-                            return Err(self.err(
-                                ScErrorType::Storage,
-                                ScErrorCode::InternalError,
-                                "expected ContractData ledger key",
-                                &[],
-                            ));
-                        }
-                    };
-
-                    // Create the ledger entry
-                    let entry = LedgerEntry {
-                        last_modified_ledger_seq: 0,
-                        data: LedgerEntryData::ContractData(ContractDataEntry {
-                            contract,
-                            key: key_scval,
-                            val: sc_val,
-                            durability,
-                            ext: ExtensionPoint::V0,
-                        }),
-                        ext: LedgerEntryExt::V0,
-                    };
-                    self.try_borrow_storage_mut()?.put(
-                        &ledger_key,
-                        &Rc::new(entry),
-                        Some(live_until),
-                        self,
-                        None,
-                    )?;
+                    // Reconstruct the full LedgerEntry from key and val
+                    if let crate::xdr::LedgerKey::ContractData(LedgerKeyContractData {
+                        contract,
+                        key: data_key,
+                        durability,
+                    }) = ledger_key.as_ref()
+                    {
+                        let sc_val = self.from_host_val(val)?;
+                        let entry = crate::xdr::LedgerEntry {
+                            last_modified_ledger_seq: 0,
+                            data: LedgerEntryData::ContractData(ContractDataEntry {
+                                ext: crate::xdr::ExtensionPoint::V0,
+                                contract: contract.clone(),
+                                key: data_key.clone(),
+                                durability: *durability,
+                                val: sc_val,
+                            }),
+                            ext: LedgerEntryExt::V0,
+                        };
+                        Some(CachedEntry::Entry(
+                            std::rc::Rc::new(std::cell::RefCell::new(entry)),
+                            Some(live_until),
+                        ))
+                    } else {
+                        return Err(self.err(
+                            crate::xdr::ScErrorType::Storage,
+                            crate::xdr::ScErrorCode::InternalError,
+                            "ContractData entry has non-ContractData key",
+                            &[],
+                        ));
+                    }
                 }
-                Some(CachedEntry::Entry(entry_refcell, live_until)) => {
-                    // Clone the entry from the RefCell and wrap in new Rc for storage
-                    let entry = Rc::new(entry_refcell.borrow().clone());
-                    self.try_borrow_storage_mut()?.put(
-                        &ledger_key,
-                        &entry,
-                        live_until,
-                        self,
-                        None,
-                    )?;
-                }
-                None => {
-                    // Entry was deleted
-                    self.try_borrow_storage_mut()?.del(&ledger_key, self, None)?;
-                }
-            }
+                other => other,
+            };
+            
+            self.try_borrow_storage_mut()?.put_cached(
+                &ledger_key,
+                converted_entry,
+                self,
+                None,
+            )?;
         }
 
         Ok(())

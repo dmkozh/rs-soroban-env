@@ -6,6 +6,7 @@ use crate::{
         metered_hash::{CountingHasher, MeteredHash, MeteredHashXdr},
         Context, Frame,
     },
+    storage::CachedEntry,
     Host, HostError, Val,
 };
 use std::{fmt::Debug, hash::Hasher, rc::Rc};
@@ -296,10 +297,19 @@ impl Host {
                 for (k, v) in store.map.iter(budget)? {
                     k.metered_hash_xdr(&mut state, budget)?;
                     match v {
-                        Some((entry, ttl)) => {
+                        Some(cached_entry) => {
                             0.metered_hash(&mut state, budget)?;
-                            entry.metered_hash_xdr(&mut state, budget)?;
-                            ttl.metered_hash(&mut state, budget)?;
+                            match cached_entry {
+                                CachedEntry::ContractData(val, live_until) => {
+                                    // Hash the Val payload and live_until
+                                    val.get_payload().metered_hash(&mut state, budget)?;
+                                    live_until.metered_hash(&mut state, budget)?;
+                                }
+                                CachedEntry::Entry(entry_rc, live_until) => {
+                                    entry_rc.borrow().metered_hash_xdr(&mut state, budget)?;
+                                    live_until.metered_hash(&mut state, budget)?;
+                                }
+                            }
                         }
                         None => {
                             1.metered_hash(&mut state, budget)?;

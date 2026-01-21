@@ -98,12 +98,13 @@ impl ModuleCache {
     #[cfg(any(test, feature = "testutils"))]
     pub fn add_stored_contracts(&self, host: &Host) -> Result<(), HostError> {
         use crate::xdr::{ContractCodeEntry, ContractCodeEntryExt, LedgerEntryData, LedgerKey};
+        use crate::storage::CachedEntry;
         let storage = host.try_borrow_storage()?;
         for (k, v) in storage.map.iter(host.as_budget())? {
             if let LedgerKey::ContractCode(_) = &**k {
-                if let Some((e, _)) = v {
+                if let Some(CachedEntry::Entry(e, _)) = v {
                     if let LedgerEntryData::ContractCode(ContractCodeEntry { code, hash, ext }) =
-                        &e.data
+                        &e.borrow().data
                     {
                         // We allow empty contracts in testing mode; they exist
                         // to exercise as much of the contract-code-storage

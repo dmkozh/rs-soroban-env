@@ -983,7 +983,7 @@ impl Host {
     #[allow(clippy::type_complexity)]
     pub fn get_stored_entries(
         &self,
-    ) -> Result<Vec<(Rc<LedgerKey>, Option<EntryWithLiveUntil>)>, HostError> {
+    ) -> Result<Vec<(Rc<LedgerKey>, Option<CachedEntry>)>, HostError> {
         self.with_mut_storage(|storage| {
             Ok(storage
                 .map
@@ -1005,7 +1005,14 @@ impl Host {
             storage
                 .footprint
                 .record_access(&key, access_type, self.as_budget())?;
-            storage.map.insert(key, val, self.as_budget())?;
+            // Convert to CachedEntry format
+            let cached = match val {
+                Some((entry, live_until)) => {
+                    Some(CachedEntry::from_entry_with_live_until(&entry, live_until, self)?)
+                }
+                None => None,
+            };
+            storage.map.insert(key, cached, self.as_budget())?;
             Ok(())
         })
     }

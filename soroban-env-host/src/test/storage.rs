@@ -360,7 +360,7 @@ fn test_nested_bump() {
             .unwrap()
             .clone()
             .unwrap()
-            .1
+            .live_until()
             .unwrap();
         assert_eq!(v, 4095);
         Ok(())
@@ -389,7 +389,7 @@ fn test_nested_bump() {
             .unwrap()
             .clone()
             .unwrap()
-            .1
+            .live_until()
             .unwrap();
         // The inner call adds 10 to the extend_to parameter
         assert_eq!(v, 5010);

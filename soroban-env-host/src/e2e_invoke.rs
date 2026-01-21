@@ -21,7 +21,7 @@ use crate::{
         metered_xdr::{metered_from_xdr_with_budget, metered_write_xdr},
         TraceHook,
     },
-    storage::{AccessType, Footprint, FootprintMap, SnapshotSource, Storage, StorageMap},
+    storage::{AccessType, CachedEntry, Footprint, FootprintMap, SnapshotSource, Storage, StorageMap},
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
         LedgerEntry, LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey,
@@ -195,10 +195,24 @@ fn get_ledger_changes(
             ScErrorCode::InternalError,
         ))
     };
-    for (key, entry_with_live_until_ledger) in storage.map.iter(budget)? {
+    for (key, cached_entry_opt) in storage.map.iter(budget)? {
         let mut entry_change = LedgerEntryChange::default();
         metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
         let durability = get_key_durability(key);
+
+        // Extract entry and live_until from CachedEntry
+        let entry_with_live_until_ledger: Option<(Rc<LedgerEntry>, Option<u32>)> =
+            match cached_entry_opt {
+                Some(CachedEntry::ContractData(_, _)) => {
+                    // ContractData entries shouldn't appear in final storage yet
+                    // (they will be converted in Commit 5). For now, treat as error.
+                    return Err(internal_error());
+                }
+                Some(CachedEntry::Entry(entry_rc, live_until)) => {
+                    Some((Rc::new(entry_rc.borrow().clone()), *live_until))
+                }
+                None => None,
+            };
 
         if let Some(durability) = durability {
             let key_hash = match init_ttl_entries.get::<Rc<LedgerKey>>(key, budget)? {
@@ -237,7 +251,7 @@ fn get_ledger_changes(
                 }
             }
         }
-        if let Some((_, new_live_until_ledger)) = entry_with_live_until_ledger {
+        if let Some((_, new_live_until_ledger)) = &entry_with_live_until_ledger {
             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
                 // Never reduce the final live until ledger.
                 ttl_change.new_live_until_ledger = max(
@@ -253,7 +267,7 @@ fn get_ledger_changes(
                 entry_change.read_only = true;
             }
             Some(AccessType::ReadWrite) => {
-                if let Some((entry, _)) = entry_with_live_until_ledger {
+                if let Some((entry, _)) = &entry_with_live_until_ledger {
                     let mut entry_buf = vec![];
                     metered_write_xdr(budget, entry.as_ref(), &mut entry_buf)?;
                     entry_change.new_entry_size_bytes_for_rent =
@@ -1031,7 +1045,13 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             )
             .into());
         }
-        storage_map.insert(key, Some((le, live_until_ledger)), budget)?;
+        // For now, store all entries as CachedEntry::Entry.
+        // Commit 5 will convert ContractData to CachedEntry::ContractData with Val.
+        let cached = CachedEntry::Entry(
+            Rc::new(std::cell::RefCell::new((*le).clone())),
+            live_until_ledger,
+        );
+        storage_map.insert(key, Some(cached), budget)?;
     }
 
     // Add non-existing entries from the footprint to the storage.
@@ -1063,10 +1083,22 @@ struct StorageMapSnapshotSource<'a> {
 
 impl SnapshotSource for StorageMapSnapshotSource<'_> {
     fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        if let Some(Some((entry, live_until_ledger))) =
-            self.map.get(key, self.budget)?
-        {
-            Ok(Some((Rc::clone(entry), *live_until_ledger)))
+        if let Some(Some(cached)) = self.map.get(key, self.budget)? {
+            match cached {
+                CachedEntry::ContractData(_, _) => {
+                    // This shouldn't happen in the initial storage map since we store
+                    // all entries as CachedEntry::Entry. If it does, it's an internal error.
+                    Err(Error::from_type_and_code(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                    )
+                    .into())
+                }
+                CachedEntry::Entry(entry_rc, live_until) => {
+                    let entry = Rc::new(entry_rc.borrow().clone());
+                    Ok(Some((entry, *live_until)))
+                }
+            }
         } else {
             Ok(None)
         }
