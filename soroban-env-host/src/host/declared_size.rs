@@ -439,7 +439,7 @@ mod test {
 
         expect!["16"].assert_eq(size_of::<HostError>().to_string().as_str());
         #[cfg(target_arch = "x86_64")]
-        expect!["512"].assert_eq(size_of::<Context>().to_string().as_str());
+        expect!["560"].assert_eq(size_of::<Context>().to_string().as_str());
 
         #[rustversion::before(1.79)]
         #[cfg(target_arch = "aarch64")]
