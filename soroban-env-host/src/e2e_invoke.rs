@@ -204,8 +204,8 @@ fn get_ledger_changes(
         let entry_with_live_until_ledger: Option<(Rc<LedgerEntry>, Option<u32>)> =
             match cached_entry_opt {
                 Some(CachedEntry::ContractData(_, _)) => {
-                    // ContractData entries shouldn't appear in final storage yet
-                    // (they will be converted in Commit 5). For now, treat as error.
+                    // ContractData entries are converted to Entry when flushed to
+                    // global storage (see flush_cache_to_storage), so this shouldn't happen.
                     return Err(internal_error());
                 }
                 Some(CachedEntry::Entry(entry_rc, live_until)) => {
@@ -1045,8 +1045,10 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             )
             .into());
         }
-        // For now, store all entries as CachedEntry::Entry.
-        // Commit 5 will convert ContractData to CachedEntry::ContractData with Val.
+        // Store entries as CachedEntry::Entry in the initial storage map.
+        // ContractData entries will be converted to CachedEntry::ContractData
+        // (with Val) when accessed by contracts, enabling efficient in-memory caching.
+        // We can't use ContractData here because Host doesn't exist yet for ScVal→Val conversion.
         let cached = CachedEntry::Entry(
             Rc::new(std::cell::RefCell::new((*le).clone())),
             live_until_ledger,
@@ -1086,8 +1088,9 @@ impl SnapshotSource for StorageMapSnapshotSource<'_> {
         if let Some(Some(cached)) = self.map.get(key, self.budget)? {
             match cached {
                 CachedEntry::ContractData(_, _) => {
-                    // This shouldn't happen in the initial storage map since we store
-                    // all entries as CachedEntry::Entry. If it does, it's an internal error.
+                    // ContractData entries are used in per-frame caches, but global storage
+                    // should only contain Entry variants after flush. If we see ContractData
+                    // in the initial storage map, it's an internal error.
                     Err(Error::from_type_and_code(
                         ScErrorType::Storage,
                         ScErrorCode::InternalError,
