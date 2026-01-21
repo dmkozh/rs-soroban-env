@@ -153,7 +153,7 @@ pub(crate) enum Frame {
 }
 
 impl Frame {
-    fn contract_id(&self) -> Option<&ContractId> {
+    pub(crate) fn contract_id(&self) -> Option<&ContractId> {
         match self {
             Frame::ContractVM { vm, .. } => Some(&vm.contract_id),
             Frame::HostFunction(_) => None,

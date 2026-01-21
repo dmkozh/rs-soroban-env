@@ -114,6 +114,58 @@ impl Host {
         }
     }
 
+    /// Looks up a key in the cache chain: current frame → parent frame (if same contract) → None.
+    /// Returns:
+    /// - `Ok(Some(Some(entry)))` if found with a value
+    /// - `Ok(Some(None))` if found but marked as deleted
+    /// - `Ok(None)` if not found in any cache (should fall through to storage)
+    pub(crate) fn lookup_in_cache_chain(
+        &self,
+        key: &Rc<LedgerKey>,
+    ) -> Result<Option<Option<CachedEntry>>, HostError> {
+        let budget = self.budget_ref();
+
+        let Ok(context_guard) = self.0.context_stack.try_borrow() else {
+            return Err(self.err(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+                "context is already borrowed",
+                &[],
+            ));
+        };
+
+        let stack = &*context_guard;
+        let len = stack.len();
+
+        if len == 0 {
+            return Ok(None);
+        }
+
+        // Check current frame's cache
+        let current_ctx = &stack[len - 1];
+        if let Some(entry) = current_ctx.data_cache.get(key, budget)? {
+            return Ok(Some(entry.clone()));
+        }
+
+        // Check parent frame's cache if it's the same contract
+        if len >= 2 {
+            let parent_ctx = &stack[len - 2];
+            let current_contract_id = current_ctx.frame.contract_id();
+            let parent_contract_id = parent_ctx.frame.contract_id();
+
+            // Only check parent cache if same contract (e.g., internal call or recursion)
+            if current_contract_id.is_some()
+                && current_contract_id == parent_contract_id
+            {
+                if let Some(entry) = parent_ctx.data_cache.get(key, budget)? {
+                    return Ok(Some(entry.clone()));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     pub(crate) fn contract_instance_ledger_key(
         &self,
         contract_id: &ContractId,
@@ -760,8 +812,8 @@ impl Host {
         Ok(())
     }
 
-    /// Gets contract data, checking the per-frame cache first before storage.
-    /// If there is no frame context, reads directly from storage.
+    /// Gets contract data, checking the cache chain (current frame → parent frame
+    /// if same contract → global storage).
     pub(super) fn get_contract_data_from_ledger(
         &self,
         k: Val,
@@ -770,20 +822,15 @@ impl Host {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
 
-        // Check cache first (if we have a frame)
-        let budget = self.budget_ref();
-        let cached = self.try_with_data_cache(|cache| {
-            Ok(cache.get(&key, budget)?.cloned())
-        })?.flatten();
-
-        if let Some(entry) = cached {
+        // Check cache chain: current frame → parent frame (if same contract)
+        if let Some(entry) = self.lookup_in_cache_chain(&key)? {
             match entry {
                 Some(CachedEntry::ContractData(val, _)) => {
                     // Found in cache with a value - Val is already in host format
                     return Ok(val);
                 }
                 Some(CachedEntry::Entry(..)) => {
-                    // Wrong type in cache - should not happen
+                    // Wrong type in cache - should not happen for contract data
                     return Err(self.err(
                         ScErrorType::Storage,
                         ScErrorCode::InternalError,
@@ -803,7 +850,7 @@ impl Host {
             }
         }
 
-        // Cache miss or no frame - read from storage
+        // Cache miss - read from storage
         let entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
         match &entry.data {
             LedgerEntryData::ContractData(e) => self.to_valid_host_val(&e.val),
@@ -851,8 +898,8 @@ impl Host {
         Ok(())
     }
 
-    /// Checks if contract data exists, checking the per-frame cache first.
-    /// If there is no frame context, checks directly in storage.
+    /// Checks if contract data exists, checking the cache chain (current frame →
+    /// parent frame if same contract → global storage).
     pub(super) fn has_contract_data_in_ledger(
         &self,
         k: Val,
@@ -861,23 +908,18 @@ impl Host {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
 
-        // Check cache first (if we have a frame)
-        let budget = self.budget_ref();
-        let cached = self.try_with_data_cache(|cache| {
-            // If key is in cache, return whether it has a value (Some = exists, None = deleted)
-            Ok(cache.get(&key, budget)?.map(|opt| opt.is_some()))
-        })?.flatten();
-
-        if let Some(exists) = cached {
-            return Ok(exists);
+        // Check cache chain: current frame → parent frame (if same contract)
+        if let Some(entry) = self.lookup_in_cache_chain(&key)? {
+            // Found in cache - check if it has a value (Some = exists, None = deleted)
+            return Ok(entry.is_some());
         }
 
-        // Cache miss or no frame - check storage
+        // Cache miss - check storage
         self.try_borrow_storage_mut()?.has(&key, self, Some(k))
     }
 
-    /// Extends the TTL for contract data, checking the per-frame cache first.
-    /// If the entry is in the cache, updates the live_until_ledger there.
+    /// Extends the TTL for contract data, checking the cache chain first.
+    /// If the entry is found in the cache chain, updates the current frame's cache.
     /// If there is no frame context or the entry is not cached, extends via storage.
     pub(super) fn extend_contract_data_ttl_in_ledger(
         &self,
@@ -889,14 +931,11 @@ impl Host {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
 
-        // Check if entry is in cache
-        let budget = self.budget_ref();
-        let cached_entry = self.try_with_data_cache(|cache| {
-            Ok(cache.get(&key, budget)?.cloned())
-        })?.flatten();
+        // Check cache chain for the entry
+        let cached_entry = self.lookup_in_cache_chain(&key)?;
 
         if let Some(Some(CachedEntry::ContractData(val, current_live_until))) = cached_entry {
-            // Entry is in cache - compute new live_until and update cache
+            // Entry is in cache chain - compute new live_until and update current frame's cache
             let ledger_seq: u32 = self.get_ledger_sequence()?.into();
 
             // Check if extension is needed (threshold check)
@@ -929,7 +968,7 @@ impl Host {
                 }
             }
 
-            // Update cache with new TTL
+            // Update current frame's cache with new TTL
             let budget = self.budget_ref();
             self.try_with_mut_data_cache(|cache| {
                 cache.insert(
