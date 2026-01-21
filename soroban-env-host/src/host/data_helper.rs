@@ -514,27 +514,10 @@ impl Host {
         )
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn modify_ledger_entry_data(
-        &self,
-        original_entry: &LedgerEntry,
-        new_data: LedgerEntryData,
-    ) -> Result<Rc<LedgerEntry>, HostError> {
-        Rc::metered_new(
-            LedgerEntry {
-                // This is modified to the appropriate value on the core side during
-                // commiting the ledger transaction.
-                last_modified_ledger_seq: 0,
-                data: new_data,
-                ext: original_entry.ext.metered_clone(self)?,
-            },
-            self,
-        )
-    }
-
     /// Provides read-only access to a ledger entry via a callback.
     /// The entry is loaded into the per-frame cache if not already present.
     /// Use this for read-only access to Account/Trustline/ContractCode entries.
+    /// Returns an error if called with a ContractData key.
     #[allow(dead_code)]
     pub(crate) fn with_ledger_entry<F, R>(
         &self,
@@ -599,8 +582,9 @@ impl Host {
     /// Provides mutable access to a ledger entry via a callback.
     /// The entry is loaded into the per-frame cache if not already present.
     /// Modifications made through the callback will be persisted when the frame exits.
+    /// If there is no frame context, modifications are written directly to storage.
     /// Use this for in-place mutation of Account/Trustline/ContractCode entries.
-    #[allow(dead_code)]
+    /// Returns an error if called with a ContractData key.
     pub(crate) fn modify_ledger_entry<F, R>(
         &self,
         key: &Rc<LedgerKey>,
@@ -612,57 +596,90 @@ impl Host {
         use crate::storage::CachedEntry;
         use std::cell::RefCell;
 
+        // Guard: this method is for non-contract-data entries only
+        if matches!(key.as_ref(), LedgerKey::ContractData(_)) {
+            return Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "modify_ledger_entry should not be used for ContractData",
+                &[],
+            ));
+        }
+
         let budget = self.budget_ref();
 
         // Record write access to footprint
         self.try_borrow_storage_mut()?
             .record_write_access(key, self, None)?;
 
-        // Try to get from per-frame cache first
-        if let Some(cached) = self
-            .try_with_data_cache(|cache| Ok(cache.get(key, budget)?.cloned()))?
-            .flatten()
-        {
-            match cached {
-                Some(CachedEntry::Entry(entry_rc, _)) => {
-                    return f(&mut entry_rc.borrow_mut());
-                }
-                Some(CachedEntry::ContractData(_, _)) => {
-                    return Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "expected Entry, got ContractData in cache",
-                        &[],
-                    ));
-                }
-                None => {
-                    return Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::MissingValue,
-                        "entry was deleted",
-                        &[],
-                    ));
+        // Check if we have a frame context
+        let has_frame = self.try_with_data_cache(|_| Ok(()))?.is_some();
+
+        if has_frame {
+            // Try to get from per-frame cache first
+            if let Some(cached) = self
+                .try_with_data_cache(|cache| Ok(cache.get(key, budget)?.cloned()))?
+                .flatten()
+            {
+                match cached {
+                    Some(CachedEntry::Entry(entry_rc, _)) => {
+                        return f(&mut entry_rc.borrow_mut());
+                    }
+                    Some(CachedEntry::ContractData(_, _)) => {
+                        return Err(self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                            "expected Entry, got ContractData in cache",
+                            &[],
+                        ));
+                    }
+                    None => {
+                        return Err(self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::MissingValue,
+                            "entry was deleted",
+                            &[],
+                        ));
+                    }
                 }
             }
+
+            // Cache miss - read from storage and cache it
+            let (entry, live_until) = self
+                .try_borrow_storage_mut()?
+                .get_with_live_until_ledger(key, self, None)?;
+
+            // Cache the entry for future access
+            let entry_refcell = Rc::new(RefCell::new((*entry).clone()));
+            self.try_with_mut_data_cache(|cache| {
+                cache.insert(
+                    key.metered_clone(budget)?,
+                    Some(CachedEntry::Entry(entry_refcell.clone(), live_until)),
+                    budget,
+                )
+            })?;
+
+            let result = f(&mut entry_refcell.borrow_mut());
+            result
+        } else {
+            // No frame context - read from storage, modify, write back
+            let (entry, live_until) = self
+                .try_borrow_storage_mut()?
+                .get_with_live_until_ledger(key, self, None)?;
+
+            let mut modified_entry = (*entry).metered_clone(self)?;
+            let result = f(&mut modified_entry)?;
+
+            self.try_borrow_storage_mut()?.put(
+                key,
+                &Rc::metered_new(modified_entry, self)?,
+                live_until,
+                self,
+                None,
+            )?;
+
+            Ok(result)
         }
-
-        // Cache miss - read from storage and cache it
-        let (entry, live_until) = self
-            .try_borrow_storage_mut()?
-            .get_with_live_until_ledger(key, self, None)?;
-
-        // Cache the entry for future access
-        let entry_refcell = Rc::new(RefCell::new((*entry).clone()));
-        self.try_with_mut_data_cache(|cache| {
-            cache.insert(
-                key.metered_clone(budget)?,
-                Some(CachedEntry::Entry(entry_refcell.clone(), live_until)),
-                budget,
-            )
-        })?;
-
-        let result = f(&mut entry_refcell.borrow_mut());
-        result
     }
 
     pub(crate) fn contract_id_from_scaddress(

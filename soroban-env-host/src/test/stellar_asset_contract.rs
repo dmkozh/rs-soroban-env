@@ -182,17 +182,11 @@ impl StellarAssetContractTest {
 
     fn update_account_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
         self.host
-            .with_mut_storage(|s| {
-                let entry = s.get(key, &self.host, None).unwrap();
-                match entry.data.clone() {
-                    LedgerEntryData::Account(mut account) => {
+            .modify_ledger_entry(key, |entry| {
+                match &mut entry.data {
+                    LedgerEntryData::Account(ref mut account) => {
                         account.flags = new_flags;
-                        let update = Host::modify_ledger_entry_data(
-                            &self.host,
-                            &entry,
-                            LedgerEntryData::Account(account),
-                        )?;
-                        s.put(key, &update, None, &self.host, None)
+                        Ok(())
                     }
                     _ => unreachable!(),
                 }
@@ -260,17 +254,11 @@ impl StellarAssetContractTest {
 
     fn update_trustline_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
         self.host
-            .with_mut_storage(|s| {
-                let entry = s.get(key, &self.host, None).unwrap();
-                match entry.data.clone() {
-                    LedgerEntryData::Trustline(mut trustline) => {
+            .modify_ledger_entry(key, |entry| {
+                match &mut entry.data {
+                    LedgerEntryData::Trustline(ref mut trustline) => {
                         trustline.flags = new_flags;
-                        let update = Host::modify_ledger_entry_data(
-                            &self.host,
-                            &entry,
-                            LedgerEntryData::Trustline(trustline),
-                        )?;
-                        s.put(key, &update, None, &self.host, None)
+                        Ok(())
                     }
                     _ => unreachable!(),
                 }
