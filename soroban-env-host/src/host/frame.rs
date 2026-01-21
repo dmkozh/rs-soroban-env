@@ -1271,14 +1271,32 @@ impl Host {
         Ok(())
     }
 
-    /// Flushes the data cache from the current frame to storage.
-    /// This writes all cached entries to the underlying storage.
+    /// Flushes the data cache from the current frame to parent or storage.
+    /// 
+    /// If the parent frame has the same contract ID, the cache entries are
+    /// merged into the parent frame's cache (efficient Rc moves, no cloning).
+    /// Otherwise, entries are flushed to global storage (with ContractData→Entry
+    /// conversion for final materialization).
+    /// 
     /// Should be called at frame exit before persist_instance_storage.
-    #[allow(dead_code)]
     fn flush_data_cache(&self) -> Result<(), HostError> {
-        // Take the cache from the context to avoid borrowing issues
+        // First, determine if we should flush to parent or storage
+        let flush_to_parent = {
+            let contexts = self.try_borrow_context_stack()?;
+            let len = contexts.len();
+            
+            if len < 2 {
+                false
+            } else {
+                let current_contract_id = contexts[len - 1].frame.contract_id();
+                let parent_contract_id = contexts[len - 2].frame.contract_id();
+                
+                current_contract_id.is_some() && current_contract_id == parent_contract_id
+            }
+        };
+        
+        // Take the cache from the current context
         let cache_entries: Vec<_> = self.with_current_context_mut(|ctx| {
-            // Drain the cache into a vec
             Ok(std::mem::take(&mut ctx.data_cache.map).into_iter().collect())
         })?;
 
@@ -1286,15 +1304,51 @@ impl Host {
             return Ok(());
         }
 
-        // Always flush directly to storage
-        self.flush_cache_to_storage(cache_entries)
+        if flush_to_parent {
+            // Flush to parent frame's cache - no conversion needed, just move Rc entries
+            self.flush_cache_to_parent(cache_entries)
+        } else {
+            // Flush to global storage with ContractData→Entry conversion
+            self.flush_cache_to_storage(cache_entries)
+        }
+    }
+
+    /// Flushes cache entries to the parent frame's cache.
+    /// This is a cheap operation - just moves Rc entries without cloning.
+    fn flush_cache_to_parent(
+        &self,
+        cache_entries: Vec<(Rc<LedgerKey>, Option<CachedEntry>)>,
+    ) -> Result<(), HostError> {
+        let budget = self.budget_ref();
+        
+        let mut contexts = self.try_borrow_context_stack_mut()?;
+        let len = contexts.len();
+        
+        if len < 2 {
+            return Err(self.err(
+                ScErrorType::Context,
+                ScErrorCode::InternalError,
+                "flush_cache_to_parent called without parent frame",
+                &[],
+            ));
+        }
+        
+        let parent_cache = &mut contexts[len - 2].data_cache;
+        
+        for (key, entry) in cache_entries {
+            // Simply insert into parent cache - Rc entries are moved, not cloned
+            parent_cache.insert(key, entry, budget)?;
+        }
+        
+        Ok(())
     }
 
     /// Flushes cache entries to global storage.
     /// 
-    /// TODO: When parent-frame propagation is implemented, the conversion from
-    /// CachedEntry::ContractData to CachedEntry::Entry should only happen here
-    /// (final flush to global storage), not when flushing to parent frame's cache.
+    /// This is called for final flush when there's no same-contract parent frame.
+    /// ContractData entries are converted to Entry format for get_ledger_changes
+    /// compatibility - the conversion only happens here (final storage flush),
+    /// not when flushing to a parent frame's cache.
     fn flush_cache_to_storage(
         &self,
         cache_entries: Vec<(Rc<LedgerKey>, Option<CachedEntry>)>,
