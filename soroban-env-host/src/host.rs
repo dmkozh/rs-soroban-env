@@ -2402,10 +2402,12 @@ impl VmCallerEnv for Host {
         }
         let curr_contract_id = self.get_current_contract_id_internal()?;
         let key = self.contract_instance_ledger_key(&curr_contract_id)?;
-        let old_instance = self.retrieve_contract_instance_from_storage(&key)?;
         let new_executable = ContractExecutable::Wasm(wasm_hash);
-        self.emit_update_contract_event(&old_instance.executable, &new_executable)?;
-        self.store_contract_instance(Some(new_executable), None, curr_contract_id, &key)?;
+        self.modify_contract_instance(&key, |instance| {
+            self.emit_update_contract_event(&instance.executable, &new_executable)?;
+            instance.executable = new_executable.metered_clone(self)?;
+            Ok(())
+        })?;
         Ok(Val::VOID)
     }
 

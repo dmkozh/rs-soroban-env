@@ -528,29 +528,33 @@ impl Host {
         // else failed. Unfortunately flushing instance storage is _itself_
         // fallible in a variety of ways, and if it fails we want to roll back
         // everything else.
+        //
+        // IMPORTANT: persist_instance_storage must be called BEFORE flush_data_cache
+        // because it writes to the data cache via modify_contract_instance.
+        let mut instance_storage_persisted = false;
         if res.is_ok() {
-            // First flush the data cache to storage
-            if let Err(e) = self.flush_data_cache() {
-                res = Err(e);
-            }
-        }
-        if res.is_ok() {
-            let instance_storage_persisted = self.persist_instance_storage();
-            match instance_storage_persisted {
+            match self.persist_instance_storage() {
                 Ok(persisted) => {
-                    // If we did persist instance storage, we may need to reload
-                    // it into the re-entrant parent frames.
-                    if persisted {
-                        // Similarly to above, if reloading instance storage, if
-                        // this fails we need to roll back everything.
-                        if let Err(e) = self.maybe_reload_instance_storage_on_frame_pop() {
-                            res = Err(e);
-                        }
-                    }
+                    instance_storage_persisted = persisted;
                 }
                 Err(e) => {
                     res = Err(e);
                 }
+            }
+        }
+        if res.is_ok() {
+            // Now flush the data cache to storage (includes instance storage if modified)
+            if let Err(e) = self.flush_data_cache() {
+                res = Err(e);
+            }
+        }
+        if res.is_ok() && instance_storage_persisted {
+            // If we did persist instance storage, we may need to reload
+            // it into the re-entrant parent frames.
+            // Similarly to above, if reloading instance storage, if
+            // this fails we need to roll back everything.
+            if let Err(e) = self.maybe_reload_instance_storage_on_frame_pop() {
+                res = Err(e);
             }
         }
         {
@@ -1232,6 +1236,8 @@ impl Host {
     }
 
     fn reload_instance_storage(&self, ctx: &mut Context) -> Result<(), HostError> {
+        use crate::storage::CachedEntry;
+
         let Some(contract_id) = ctx.frame.contract_id() else {
             return Err(self.err(
                 ScErrorType::Context,
@@ -1241,7 +1247,31 @@ impl Host {
             ));
         };
         let instance_key = self.contract_instance_ledger_key(&contract_id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&instance_key)?;
+
+        // First, check if the instance is in the context's data_cache.
+        // This is important for reentrant calls where the child frame's
+        // changes were flushed to the parent's cache (not to global storage).
+        let budget = self.budget_ref();
+        let instance = if let Some(Some(cached)) = ctx.data_cache.get(&instance_key, budget)? {
+            match cached {
+                CachedEntry::Entry(entry_rc, _) => {
+                    let entry = entry_rc.borrow();
+                    self.extract_contract_instance_from_ledger_entry(&*entry)?
+                }
+                CachedEntry::ContractData(_, _) => {
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected Entry, got ContractData in cache for instance",
+                        &[],
+                    ));
+                }
+            }
+        } else {
+            // Not in cache, read from global storage
+            self.retrieve_contract_instance_from_storage(&instance_key)?
+        };
+
         ctx.storage = Some(InstanceStorageMap::from_instance_xdr(&instance, self)?);
         Ok(())
     }
@@ -1421,11 +1451,14 @@ impl Host {
                 Ok(None)
             }
         })?;
-        if updated_instance_storage.is_some() {
+        if let Some(storage) = updated_instance_storage {
             let contract_id = self.get_current_contract_id_internal()?;
             let key = self.contract_instance_ledger_key(&contract_id)?;
 
-            self.store_contract_instance(None, updated_instance_storage, contract_id, &key)?;
+            self.modify_contract_instance(&key, |instance| {
+                instance.storage = Some(storage);
+                Ok(())
+            })?;
             Ok(true)
         } else {
             Ok(false)

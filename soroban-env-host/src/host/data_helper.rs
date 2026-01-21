@@ -209,6 +209,43 @@ impl Host {
         &self,
         key: &Rc<LedgerKey>,
     ) -> Result<ScContractInstance, HostError> {
+        use crate::storage::CachedEntry;
+
+        let budget = self.budget_ref();
+
+        // First check the current frame's data_cache. This is important for
+        // reentrant calls where the parent frame has persisted instance storage
+        // to its cache (not to global storage) before the child frame starts.
+        if let Some(cache_result) = self
+            .try_with_data_cache(|cache| Ok(cache.get(key, budget)?.cloned()))?
+            .flatten()
+        {
+            // cache_result is Option<CachedEntry> where None means deleted
+            match cache_result {
+                Some(CachedEntry::Entry(entry_rc, _)) => {
+                    let entry = entry_rc.borrow();
+                    return self.extract_contract_instance_from_ledger_entry(&*entry);
+                }
+                Some(CachedEntry::ContractData(_, _)) => {
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected Entry, got ContractData in cache for instance",
+                        &[],
+                    ));
+                }
+                None => {
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::MissingValue,
+                        "contract instance was deleted",
+                        &[],
+                    ));
+                }
+            }
+        }
+
+        // Fall back to global storage
         let entry = self.try_borrow_storage_mut()?.get(key, self, None)?;
         self.extract_contract_instance_from_ledger_entry(&entry)
     }
@@ -258,84 +295,76 @@ impl Host {
         self.try_borrow_storage_mut()?.has(&key, self, None)
     }
 
-    // Stores the contract instance specified with its parts (executable and
-    // storage).
-    // When either of parts is `None`, the old value is preserved (when
-    // existent).
-    // `executable` has to be present for newly created contract instances.
-    // Notes on metering: `from_host_obj` and `put` to storage covered, rest are free.
-    pub(crate) fn store_contract_instance(
+    /// Creates a new contract instance in the ledger.
+    /// Returns an internal error if the contract already exists.
+    /// Notes on metering: `put` to storage covered, rest are free.
+    pub(crate) fn create_contract_instance(
         &self,
-        executable: Option<ContractExecutable>,
+        executable: ContractExecutable,
         instance_storage: Option<ScMap>,
         contract_id: ContractId,
         key: &Rc<LedgerKey>,
     ) -> Result<(), HostError> {
         if self.try_borrow_storage_mut()?.has(key, self, None)? {
-            let (current, live_until_ledger) = self
-                .try_borrow_storage_mut()?
-                .get_with_live_until_ledger(key, self, None)?;
-            let mut current = (*current).metered_clone(self)?;
+            return Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "contract instance already exists",
+                &[],
+            ));
+        }
+        let data = ContractDataEntry {
+            contract: ScAddress::Contract(contract_id.metered_clone(self)?),
+            key: ScVal::LedgerKeyContractInstance,
+            val: ScVal::ContractInstance(ScContractInstance {
+                executable,
+                storage: instance_storage,
+            }),
+            durability: ContractDataDurability::Persistent,
+            ext: ExtensionPoint::V0,
+        };
+        self.try_borrow_storage_mut()?.put(
+            key,
+            &Host::new_contract_data(self, data)?,
+            Some(self.get_min_live_until_ledger(ContractDataDurability::Persistent)?),
+            self,
+            None,
+        )?;
+        Ok(())
+    }
 
-            if let LedgerEntryData::ContractData(ref mut entry) = current.data {
-                if let ScVal::ContractInstance(ref mut instance) = entry.val {
-                    if let Some(executable) = executable {
-                        instance.executable = executable;
-                    }
-                    if let Some(storage) = instance_storage {
-                        instance.storage = Some(storage);
-                    }
+    /// Provides mutable access to a contract instance via a callback.
+    /// Uses modify_ledger_entry for in-place mutation.
+    /// Notes on metering: covered by modify_ledger_entry.
+    pub(crate) fn modify_contract_instance<F, R>(
+        &self,
+        key: &Rc<LedgerKey>,
+        f: F,
+    ) -> Result<R, HostError>
+    where
+        F: FnOnce(&mut ScContractInstance) -> Result<R, HostError>,
+    {
+        self.modify_ledger_entry(key, |entry| {
+            if let LedgerEntryData::ContractData(ref mut data_entry) = entry.data {
+                if let ScVal::ContractInstance(ref mut instance) = data_entry.val {
+                    f(instance)
                 } else {
-                    return Err(self.err(
+                    Err(self.err(
                         ScErrorType::Storage,
                         ScErrorCode::InternalError,
                         "expected ScVal::ContractInstance for contract instance",
                         &[],
-                    ));
+                    ))
                 }
             } else {
-                return Err(self.err(
+                Err(self.err(
                     ScErrorType::Storage,
                     ScErrorCode::InternalError,
-                    "expected DataEntry for contract instance",
+                    "expected ContractData ledger entry",
                     &[],
-                ));
+                ))
             }
-
-            self.try_borrow_storage_mut()?.put(
-                &key,
-                &Rc::metered_new(current, self)?,
-                live_until_ledger,
-                self,
-                None,
-            )?;
-        } else {
-            let data = ContractDataEntry {
-                contract: ScAddress::Contract(contract_id.metered_clone(self)?),
-                key: ScVal::LedgerKeyContractInstance,
-                val: ScVal::ContractInstance(ScContractInstance {
-                    executable: executable.ok_or_else(|| {
-                        self.err(
-                            ScErrorType::Context,
-                            ScErrorCode::InternalError,
-                            "can't initialize contract without executable",
-                            &[],
-                        )
-                    })?,
-                    storage: instance_storage,
-                }),
-                durability: ContractDataDurability::Persistent,
-                ext: ExtensionPoint::V0,
-            };
-            self.try_borrow_storage_mut()?.put(
-                key,
-                &Host::new_contract_data(self, data)?,
-                Some(self.get_min_live_until_ledger(ContractDataDurability::Persistent)?),
-                self,
-                None,
-            )?;
-        }
-        Ok(())
+        })
     }
 
     pub(crate) fn extend_contract_code_ttl_from_contract_id(
@@ -596,14 +625,16 @@ impl Host {
         use crate::storage::CachedEntry;
         use std::cell::RefCell;
 
-        // Guard: this method is for non-contract-data entries only
-        if matches!(key.as_ref(), LedgerKey::ContractData(_)) {
-            return Err(self.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "modify_ledger_entry should not be used for ContractData",
-                &[],
-            ));
+        // Guard: only allow ContractData keys for contract instance entries
+        if let LedgerKey::ContractData(data_key) = key.as_ref() {
+            if !matches!(data_key.key, ScVal::LedgerKeyContractInstance) {
+                return Err(self.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "modify_ledger_entry should not be used for ContractData (use contract data helpers instead)",
+                    &[],
+                ));
+            }
         }
 
         let budget = self.budget_ref();

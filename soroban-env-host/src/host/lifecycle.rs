@@ -25,19 +25,6 @@ impl Host {
         contract_executable: ContractExecutable,
     ) -> Result<(), HostError> {
         let storage_key = self.contract_instance_ledger_key(&contract_id)?;
-        if self
-            .try_borrow_storage_mut()?
-            .has(&storage_key, self, None)?
-        {
-            return Err(self.err(
-                ScErrorType::Storage,
-                ScErrorCode::ExistingValue,
-                "contract already exists",
-                &[self
-                    .add_host_object(self.scbytes_from_hash(&contract_id.0)?)?
-                    .into()],
-            ));
-        }
         // Make sure the contract code exists. Without this check it would be
         // possible to accidentally create a contract that never may be invoked
         // (just by providing a bad hash).
@@ -51,7 +38,7 @@ impl Host {
                 ));
             }
         }
-        self.store_contract_instance(Some(contract_executable), None, contract_id, &storage_key)?;
+        self.create_contract_instance(contract_executable, None, contract_id, &storage_key)?;
         Ok(())
     }
 
@@ -345,6 +332,18 @@ impl Host {
 
         let contract_id = self.contract_id_from_address(contract_address)?;
         let instance_key = self.contract_instance_ledger_key(&contract_id)?;
+        // Check if contract already exists - preserve test semantics with descriptive error
+        if self
+            .try_borrow_storage_mut()?
+            .has(&instance_key, self, None)?
+        {
+            return Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::ExistingValue,
+                "contract already exists",
+                &[],
+            ));
+        }
         let wasm_hash_obj = self.upload_contract_wasm(vec![])?;
         let wasm_hash = self.hash_from_bytesobj_input("wasm_hash", wasm_hash_obj)?;
         // Use the empty Wasm as an executable to a) mark that the contract
@@ -352,8 +351,8 @@ impl Host {
         // the same ledger entries as for 'real' contracts that consist of Wasm
         // entry and the instance entry, so that instance-related host functions
         // work properly.
-        self.store_contract_instance(
-            Some(ContractExecutable::Wasm(wasm_hash)),
+        self.create_contract_instance(
+            ContractExecutable::Wasm(wasm_hash),
             None,
             contract_id.clone(),
             &instance_key,
