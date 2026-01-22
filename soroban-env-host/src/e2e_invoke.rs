@@ -183,9 +183,9 @@ fn get_ledger_changes(
 ) -> Result<Vec<LedgerEntryChange>, HostError> {
     // Skip allocation metering for this for the sake of simplicity - the
     // bounding factor here is XDR decoding which is metered.
-    let mut changes = Vec::with_capacity(storage.map.len());
-
     let footprint_map = &storage.footprint.0;
+    let mut changes = Vec::with_capacity(footprint_map.len());
+
     // We return any invariant errors here as internal errors, as they would
     // typically mean inconsistency between storage and snapshot that shouldn't
     // happen in embedder environments, or simply fundamental invariant bugs.
@@ -195,7 +195,11 @@ fn get_ledger_changes(
             ScErrorCode::InternalError,
         ))
     };
-    for (key, cached_entry_opt) in storage.map.iter(budget)? {
+    // Iterate footprint_map to ensure consistent ordering of changes
+    for (key, access_type) in footprint_map.iter(budget)? {
+        // Look up the cached entry from storage map
+        let cached_entry_opt = storage.map.get(key, budget)?;
+        
         let mut entry_change = LedgerEntryChange::default();
         metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
         let durability = get_key_durability(key);
@@ -203,15 +207,25 @@ fn get_ledger_changes(
         // Extract entry and live_until from CachedEntry
         let entry_with_live_until_ledger: Option<(Rc<LedgerEntry>, Option<u32>)> =
             match cached_entry_opt {
-                Some(CachedEntry::ContractData(_, _)) => {
+                Some(Some(CachedEntry::ContractData(_, _))) => {
                     // ContractData entries are converted to Entry when flushed to
                     // global storage (see flush_cache_to_storage), so this shouldn't happen.
                     return Err(internal_error());
                 }
-                Some(CachedEntry::Entry(entry_rc, live_until)) => {
+                Some(Some(CachedEntry::Entry(entry_rc, live_until))) => {
                     Some((Rc::new(entry_rc.borrow().clone()), *live_until))
                 }
-                None => None,
+                Some(None) => None,
+                None => {
+                    // Key in footprint but not in storage map. This can happen in
+                    // recording mode when a try_call accesses a non-existent entry
+                    // and fails gracefully - the storage map gets rolled back but
+                    // the access is still recorded in the footprint.
+                    // Create a minimal entry change and continue.
+                    entry_change.read_only = matches!(*access_type, AccessType::ReadOnly);
+                    changes.push(entry_change);
+                    continue;
+                }
             };
 
         if let Some(durability) = durability {
@@ -260,13 +274,12 @@ fn get_ledger_changes(
                 );
             }
         }
-        let maybe_access_type: Option<AccessType> =
-            footprint_map.get::<Rc<LedgerKey>>(key, budget)?.copied();
-        match maybe_access_type {
-            Some(AccessType::ReadOnly) => {
+        // access_type comes from iterating footprint_map
+        match *access_type {
+            AccessType::ReadOnly => {
                 entry_change.read_only = true;
             }
-            Some(AccessType::ReadWrite) => {
+            AccessType::ReadWrite => {
                 if let Some((entry, _)) = &entry_with_live_until_ledger {
                     let mut entry_buf = vec![];
                     metered_write_xdr(budget, entry.as_ref(), &mut entry_buf)?;
@@ -286,15 +299,9 @@ fn get_ledger_changes(
                     }
                 }
             }
-            None => {
-                return Err(internal_error());
-            }
         }
         changes.push(entry_change);
     }
-    // Sort by encoded_key for deterministic ordering since storage.map is a
-    // HashMap with arbitrary iteration order.
-    changes.sort_by(|a, b| a.encoded_key.cmp(&b.encoded_key));
     Ok(changes)
 }
 
