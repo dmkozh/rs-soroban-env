@@ -85,7 +85,7 @@ pub struct CoverageScoreboard {
 }
 
 // The soroban 26.x host only supports protocol 26 and later.
-pub(crate) const MIN_LEDGER_PROTOCOL_VERSION: u32 = 26;
+pub(crate) const MIN_LEDGER_PROTOCOL_VERSION: u32 = 25;
 
 #[derive(Clone, Default)]
 struct HostImpl {
