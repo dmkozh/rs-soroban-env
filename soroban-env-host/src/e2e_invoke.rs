@@ -22,8 +22,8 @@ use crate::{
         TraceHook,
     },
     storage::{
-        AccessType, CachedEntry, EntryWithLiveUntil, Footprint, FootprintMap, SnapshotSource,
-        Storage, StorageMap,
+        AccessType, CachedEntry, EntryWithLiveUntil, Footprint, FootprintMap, LedgerEntryMap,
+        Storage,
     },
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
@@ -35,6 +35,8 @@ use crate::{
 };
 use crate::{ledger_info::get_key_durability, ModuleCache};
 use crate::vm::wasm_module_memory_cost;
+#[cfg(any(test, feature = "recording_mode"))]
+use crate::storage::{SnapshotSource, StorageMap};
 #[cfg(any(test, feature = "recording_mode"))]
 use sha2::{Digest, Sha256};
 
@@ -172,13 +174,33 @@ fn build_restored_key_set(
     Ok(Some(key_set))
 }
 
-/// Returns the difference between the `storage` and its initial snapshot as
+/// Builds a LedgerEntryMap from a SnapshotSource for the keys in the footprint.
+/// This is used by recording mode to build the initial entries for diffing.
+#[cfg(any(test, feature = "recording_mode"))]
+fn build_init_entries_from_snapshot(
+    budget: &Budget,
+    footprint: &Footprint,
+    snapshot: &dyn SnapshotSource,
+) -> Result<LedgerEntryMap, HostError> {
+    let mut init_entries = LedgerEntryMap::new();
+    for (key, _access_type) in footprint.0.iter(budget)? {
+        let entry_with_live_until = snapshot.get(key)?;
+        init_entries.insert(Rc::clone(key), entry_with_live_until, budget)?;
+    }
+    Ok(init_entries)
+}
+
+/// Returns the difference between the final and initial ledger entries as
 /// `LedgerEntryChanges`.
-/// Returns an entry for every item in `storage` footprint.
+/// Returns an entry for every item in the footprint.
+///
+/// Both `init_entries` and `final_entries` are `LedgerEntryMap` which contains
+/// raw `LedgerEntry` values (no Val conversion needed).
 fn get_ledger_changes(
     budget: &Budget,
-    storage: &Storage,
-    init_storage_snapshot: &(impl SnapshotSource + ?Sized),
+    footprint: &Footprint,
+    init_entries: &LedgerEntryMap,
+    final_entries: &LedgerEntryMap,
     init_ttl_entries: TtlEntryMap,
     min_live_until_ledger: u32,
     restored_keys: &Option<RestoredKeySet>,
@@ -186,7 +208,7 @@ fn get_ledger_changes(
 ) -> Result<Vec<LedgerEntryChange>, HostError> {
     // Skip allocation metering for this for the sake of simplicity - the
     // bounding factor here is XDR decoding which is metered.
-    let footprint_map = &storage.footprint.0;
+    let footprint_map = &footprint.0;
     let mut changes = Vec::with_capacity(footprint_map.len());
 
     // We return any invariant errors here as internal errors, as they would
@@ -200,27 +222,20 @@ fn get_ledger_changes(
     };
     // Iterate footprint_map to ensure consistent ordering of changes
     for (key, access_type) in footprint_map.iter(budget)? {
-        // Look up the cached entry from storage map
-        let cached_entry_opt = storage.map.get(key, budget)?;
+        // Look up the final entry from final_entries map
+        let final_entry_opt = final_entries.get(key, budget)?;
         
         let mut entry_change = LedgerEntryChange::default();
         metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
         let durability = get_key_durability(key);
 
-        // Extract entry and live_until from CachedEntry
-        let entry_with_live_until_ledger: Option<(Rc<LedgerEntry>, Option<u32>)> =
-            match cached_entry_opt {
-                Some(Some(CachedEntry::ContractData(_, _))) => {
-                    // ContractData entries are converted to Entry when flushed to
-                    // global storage (see flush_cache_to_storage), so this shouldn't happen.
-                    return Err(internal_error());
-                }
-                Some(Some(CachedEntry::Entry(entry_rc, live_until))) => {
-                    Some((Rc::new(entry_rc.borrow().clone()), *live_until))
-                }
+        // Extract entry and live_until from final LedgerEntryMap
+        let entry_with_live_until_ledger: Option<EntryWithLiveUntil> =
+            match final_entry_opt {
+                Some(Some(entry_with_live_until)) => Some(entry_with_live_until.clone()),
                 Some(None) => None,
                 None => {
-                    // Key in footprint but not in storage map. This can happen in
+                    // Key in footprint but not in entries map. This can happen in
                     // recording mode when a try_call accesses a non-existent entry
                     // and fails gracefully - the storage map gets rolled back but
                     // the access is still recorded in the footprint.
@@ -245,8 +260,13 @@ fn get_ledger_changes(
                 new_live_until_ledger: 0,
             });
         }
-        let entry_with_live_until = init_storage_snapshot.get(key)?;
-        if let Some((old_entry, old_live_until_ledger)) = entry_with_live_until {
+        // Get initial entry from init_entries map
+        let init_entry_with_live_until: Option<EntryWithLiveUntil> =
+            match init_entries.get(key, budget)? {
+                Some(Some(entry_with_live_until)) => Some(entry_with_live_until.clone()),
+                Some(None) | None => None,
+            };
+        if let Some((old_entry, old_live_until_ledger)) = init_entry_with_live_until {
             let mut buf = vec![];
             metered_write_xdr(budget, old_entry.as_ref(), &mut buf)?;
 
@@ -424,9 +444,15 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
                 ScErrorCode::InternalError,
             ))
         })?;
-    let (storage_map, init_ttl_map) = build_storage_map_from_xdr_ledger_entries(
-        &budget,
-        &footprint,
+
+    // Two-phase initialization: create Host with footprint-only storage,
+    // then populate storage while Host is alive for Val conversion.
+    let storage = Storage::with_enforcing_footprint_only(footprint);
+    let host = Host::with_storage_and_budget(storage, budget.clone());
+
+    // Populate storage from XDR, performing ScVal→Val conversion for ContractData entries.
+    // This also stores raw LedgerEntry copies in init_ledger_entries for diff computation.
+    let init_ttl_map = host.populate_storage_from_xdr(
         encoded_ledger_entries,
         encoded_ttl_entries,
         current_ledger_seq,
@@ -434,10 +460,6 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         false,
     )?;
 
-    let init_storage_map = storage_map.metered_clone(budget)?;
-
-    let storage = Storage::with_enforcing_footprint_and_map(footprint, storage_map);
-    let host = Host::with_storage_and_budget(storage, budget.clone());
     let have_trace_hook = trace_hook.is_some();
     if let Some(th) = trace_hook {
         host.set_trace_hook(Some(th))?;
@@ -470,7 +492,13 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     if have_trace_hook {
         host.set_trace_hook(None)?;
     }
-    let (storage, events) = host.try_finish()?;
+
+    // Build final ledger entries while Host is still alive (for Val→ScVal conversion)
+    let final_entries = host.build_final_ledger_entries()?;
+
+    // Now consume the Host and get init entries, footprint, and events
+    let (init_entries, footprint, events) = host.try_finish_with_entries()?;
+
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
     }
@@ -479,14 +507,11 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         metered_write_xdr(&budget, &res, &mut encoded_result_sc_val).map(|_| encoded_result_sc_val)
     });
     if encoded_invoke_result.is_ok() {
-        let init_storage_snapshot = StorageMapSnapshotSource {
-            budget: &budget,
-            map: &init_storage_map,
-        };
         let ledger_changes = get_ledger_changes(
             &budget,
-            &storage,
-            &init_storage_snapshot,
+            &footprint,
+            &init_entries,
+            &final_entries,
             init_ttl_map,
             min_live_until_ledger,
             &restored_keys,
@@ -795,7 +820,18 @@ pub fn invoke_host_function_in_recording_mode(
     };
     let _resources_roundtrip: SorobanResources =
         host.metered_from_xdr(host.to_xdr_non_metered(&resources)?.as_slice())?;
-    let (storage, events) = host.try_finish()?;
+
+    // Build final ledger entries while Host is still alive (for Val→ScVal conversion)
+    let final_entries = host.build_final_ledger_entries()?;
+
+    // Get footprint from storage before finishing
+    let footprint = host.with_mut_storage(|storage| Ok(storage.footprint.clone()))?;
+
+    // Build init entries from the snapshot source
+    let init_entries = build_init_entries_from_snapshot(&budget, &footprint, &*ledger_snapshot)?;
+
+    let (_, events) = host.try_finish()?;
+
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
     }
@@ -804,11 +840,13 @@ pub fn invoke_host_function_in_recording_mode(
     } else {
         Some(restored_keys)
     };
+
     let (ledger_changes, contract_events) = if invoke_result.is_ok() {
         let ledger_changes = get_ledger_changes(
             &budget,
-            &storage,
-            &*ledger_snapshot,
+            &footprint,
+            &init_entries,
+            &final_entries,
             init_ttl_map,
             min_live_until_ledger,
             &restored_keys,
@@ -937,13 +975,16 @@ fn build_storage_footprint_from_xdr(
     Ok(Footprint(footprint_map))
 }
 
+/// Builds a storage map from XDR-encoded ledger entries.
+/// This is used by recording mode to recreate init state from encoded entries.
+#[cfg(any(test, feature = "recording_mode"))]
 fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     budget: &Budget,
     footprint: &Footprint,
     encoded_ledger_entries: I,
     encoded_ttl_entries: I,
     ledger_num: u32,
-    #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
+    is_recording_mode: bool,
 ) -> Result<(StorageMap, TtlEntryMap), HostError> {
     let mut storage_map = StorageMap::new();
     let mut ttl_map = TtlEntryMap::new();
@@ -1179,32 +1220,3 @@ impl Host {
     }
 }
 
-struct StorageMapSnapshotSource<'a> {
-    budget: &'a Budget,
-    map: &'a StorageMap,
-}
-
-impl SnapshotSource for StorageMapSnapshotSource<'_> {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        if let Some(Some(cached)) = self.map.get(key, self.budget)? {
-            match cached {
-                CachedEntry::ContractData(_, _) => {
-                    // ContractData entries are used in per-frame caches, but global storage
-                    // should only contain Entry variants after flush. If we see ContractData
-                    // in the initial storage map, it's an internal error.
-                    Err(Error::from_type_and_code(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                    )
-                    .into())
-                }
-                CachedEntry::Entry(entry_rc, live_until) => {
-                    let entry = Rc::new(entry_rc.borrow().clone());
-                    Ok(Some((entry, *live_until)))
-                }
-            }
-        } else {
-            Ok(None)
-        }
-    }
-}

@@ -383,6 +383,17 @@ impl Storage {
         }
     }
 
+    /// Constructs a new [Storage] in [FootprintMode::Enforcing] with an empty
+    /// storage map. Used for two-phase initialization where the map is
+    /// populated later via Host::populate_storage_from_xdr.
+    pub fn with_enforcing_footprint_only(footprint: Footprint) -> Self {
+        Self {
+            mode: FootprintMode::Enforcing,
+            footprint,
+            map: Default::default(),
+        }
+    }
+
     /// Constructs a new [Storage] in [FootprintMode::Recording] using a
     /// given [SnapshotSource].
     #[cfg(any(test, feature = "recording_mode"))]
