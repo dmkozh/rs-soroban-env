@@ -94,6 +94,9 @@ struct HostImpl {
     ledger: RefCell<Option<LedgerInfo>>,
     objects: RefCell<Vec<HostObject>>,
     storage: RefCell<Storage>,
+    /// Initial ledger entries at the start of execution.
+    /// Used to compute ledger changes without requiring Host for Val→ScVal conversion.
+    init_ledger_entries: RefCell<crate::storage::LedgerEntryMap>,
     context_stack: RefCell<Vec<Context>>,
     // Note: budget is refcounted and is _not_ deep-cloned when you call HostImpl::deep_clone,
     // mainly because it's not really possible to achieve (the same budget is connected to many
@@ -302,6 +305,13 @@ impl_checked_borrow_helpers!(
     try_borrow_storage_key_conversion_active_mut
 );
 
+impl_checked_borrow_helpers!(
+    init_ledger_entries,
+    crate::storage::LedgerEntryMap,
+    try_borrow_init_ledger_entries,
+    try_borrow_init_ledger_entries_mut
+);
+
 #[cfg(any(test, feature = "testutils"))]
 impl_checked_borrow_helpers!(
     top_contract_invocation_hook,
@@ -359,6 +369,7 @@ impl Host {
             ledger: RefCell::new(None),
             objects: Default::default(),
             storage: RefCell::new(storage),
+            init_ledger_entries: Default::default(),
             context_stack: Default::default(),
             budget,
             events: Default::default(),
@@ -736,12 +747,65 @@ impl Host {
         Rc::strong_count(&self.0) == 1
     }
 
+    /// Builds a LedgerEntryMap from the current storage, converting CachedEntry
+    /// variants back to LedgerEntry. This must be called before try_finish()
+    /// consumes the Host, as Val→ScVal conversion requires a live Host.
+    pub fn build_final_ledger_entries(
+        &self,
+    ) -> Result<crate::storage::LedgerEntryMap, HostError> {
+        use crate::storage::LedgerEntryMap;
+        let storage = self.try_borrow_storage()?;
+        let mut result = LedgerEntryMap::new();
+        for (key, cached_opt) in storage.map.iter(self.budget_ref())? {
+            let entry_with_live_until = match cached_opt {
+                Some(cached) => {
+                    let entry = cached.to_ledger_entry(key.as_ref(), self)?;
+                    let live_until = cached.live_until();
+                    Some((Rc::new(entry), live_until))
+                }
+                None => None,
+            };
+            result.insert(Rc::clone(key), entry_with_live_until, self.budget_ref())?;
+        }
+        Ok(result)
+    }
+
     /// Accept a _unique_ (refcount = 1) host reference and destroy the
     /// underlying [`HostImpl`], returning its finalized components containing
-    /// processing side effects  to the caller as a tuple wrapped in `Ok(...)`.
+    /// processing side effects to the caller as a tuple wrapped in `Ok(...)`.
+    ///
+    /// Returns (init_ledger_entries, final_ledger_entries, footprint, events).
     ///
     /// Use [`Host::can_finish`] to determine before calling the function if it
     /// will succeed.
+    ///
+    /// Note: `build_final_ledger_entries` must be called before this method
+    /// to obtain the final ledger entries, as Val→ScVal conversion requires
+    /// a live Host.
+    pub fn try_finish_with_entries(
+        self,
+    ) -> Result<
+        (
+            crate::storage::LedgerEntryMap,
+            crate::storage::Footprint,
+            Events,
+        ),
+        HostError,
+    > {
+        let events = self.try_borrow_events()?.externalize(&self)?;
+        Rc::try_unwrap(self.0)
+            .map(|host_impl| {
+                let storage = host_impl.storage.into_inner();
+                let init_entries = host_impl.init_ledger_entries.into_inner();
+                (init_entries, storage.footprint, events)
+            })
+            .map_err(|_| {
+                Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InternalError).into()
+            })
+    }
+
+    /// Legacy version of try_finish that returns Storage.
+    /// Will be marked test-only in a future commit.
     pub fn try_finish(self) -> Result<(Storage, Events), HostError> {
         let events = self.try_borrow_events()?.externalize(&self)?;
         Rc::try_unwrap(self.0)

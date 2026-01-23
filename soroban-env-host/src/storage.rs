@@ -31,6 +31,10 @@ pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
 /// Storage map type using CachedEntry for unified format with per-frame caches.
 /// This enables zero-copy frame-to-frame cache propagation.
 pub type StorageMap = MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>>;
+/// Map from LedgerKey to optional LedgerEntry with live_until.
+/// Used to track initial and final ledger state for computing ledger changes.
+/// This avoids the need for Val<->ScVal conversions in get_ledger_changes.
+pub type LedgerEntryMap = MeteredHashMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>;
 
 /// Unified cache entry for all ledger entry types.
 /// 
@@ -210,6 +214,22 @@ pub trait SnapshotSource {
     /// Returns the ledger entry for the key and its live_until ledger if entry
     /// exists, or `None` otherwise.
     fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError>;
+}
+
+/// A wrapper around LedgerEntryMap that implements SnapshotSource.
+/// Used for providing init/final ledger entries to get_ledger_changes.
+pub struct LedgerEntryMapSnapshotSource<'a> {
+    pub budget: &'a Budget,
+    pub map: &'a LedgerEntryMap,
+}
+
+impl SnapshotSource for LedgerEntryMapSnapshotSource<'_> {
+    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+        match self.map.get(key, self.budget)? {
+            Some(Some(entry_with_live_until)) => Ok(Some(entry_with_live_until.clone())),
+            Some(None) | None => Ok(None),
+        }
+    }
 }
 
 /// Describes the total set of [LedgerKey]s that a given transaction
