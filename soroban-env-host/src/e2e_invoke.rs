@@ -21,7 +21,10 @@ use crate::{
         metered_xdr::{metered_from_xdr_with_budget, metered_write_xdr},
         TraceHook,
     },
-    storage::{AccessType, CachedEntry, Footprint, FootprintMap, SnapshotSource, Storage, StorageMap},
+    storage::{
+        AccessType, CachedEntry, EntryWithLiveUntil, Footprint, FootprintMap, SnapshotSource,
+        Storage, StorageMap,
+    },
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
         LedgerEntry, LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey,
@@ -31,7 +34,7 @@ use crate::{
     DiagnosticLevel, Error, Host, HostError, LedgerInfo, MeteredOrdMap,
 };
 use crate::{ledger_info::get_key_durability, ModuleCache};
-use crate::{storage::EntryWithLiveUntil, vm::wasm_module_memory_cost};
+use crate::vm::wasm_module_memory_cost;
 #[cfg(any(test, feature = "recording_mode"))]
 use sha2::{Digest, Sha256};
 
@@ -1048,6 +1051,131 @@ impl Host {
             .metered_collect::<Result<Vec<SorobanAuthorizationEntry>, HostError>>(
                 self.as_budget(),
             )?
+    }
+
+    /// Populates the Host's storage from XDR-encoded ledger entries.
+    ///
+    /// This method:
+    /// 1. Decodes XDR entries and TTL entries
+    /// 2. Converts ContractData entries to Val using `CachedEntry::from_entry_with_live_until`
+    /// 3. Populates the storage map with converted entries
+    /// 4. Stores raw LedgerEntry copies in `init_ledger_entries` for later diff computation
+    /// 5. Returns `TtlEntryMap` for TTL tracking
+    ///
+    /// The Host's storage must already have a footprint set before calling this method.
+    pub fn populate_storage_from_xdr<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
+        &self,
+        encoded_ledger_entries: I,
+        encoded_ttl_entries: I,
+        ledger_num: u32,
+        #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
+    ) -> Result<TtlEntryMap, HostError> {
+        let budget = self.as_budget();
+        let mut ttl_map = TtlEntryMap::new();
+
+        if encoded_ledger_entries.len() != encoded_ttl_entries.len() {
+            return Err(
+                Error::from_type_and_code(ScErrorType::Storage, ScErrorCode::InternalError).into(),
+            );
+        }
+
+        let mut storage = self.try_borrow_storage_mut()?;
+        let mut init_entries = self.try_borrow_init_ledger_entries_mut()?;
+
+        for (entry_buf, ttl_buf) in encoded_ledger_entries.zip(encoded_ttl_entries) {
+            let mut live_until_ledger: Option<u32> = None;
+
+            let le = Rc::metered_new(
+                metered_from_xdr_with_budget::<LedgerEntry>(entry_buf.as_ref(), budget)?,
+                budget,
+            )?;
+            let key = Rc::metered_new(ledger_entry_to_ledger_key(&le, budget)?, budget)?;
+
+            if !ttl_buf.as_ref().is_empty() {
+                let ttl_entry = Rc::metered_new(
+                    metered_from_xdr_with_budget::<TtlEntry>(ttl_buf.as_ref(), budget)?,
+                    budget,
+                )?;
+                // In the default host flow (i.e. enforcing storage only) we don't
+                // expect expired entries to ever appear in the storage map, so
+                // that's always an internal error.
+                #[cfg(not(any(test, feature = "recording_mode")))]
+                if ttl_entry.live_until_ledger_seq < ledger_num {
+                    return Err(Error::from_type_and_code(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                    )
+                    .into());
+                }
+                // In the recording mode we still compile both recording and
+                // enforcing functions, and we do allow expired entries in the
+                // recording mode when allow_expired_entries is true.
+                #[cfg(any(test, feature = "recording_mode"))]
+                if ttl_entry.live_until_ledger_seq < ledger_num {
+                    if !is_recording_mode {
+                        return Err(Error::from_type_and_code(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                        )
+                        .into());
+                    }
+                    // Skip expired temp entries, as these can't actually appear in
+                    // storage.
+                    if !crate::storage::is_persistent_key(key.as_ref()) {
+                        continue;
+                    }
+                }
+
+                live_until_ledger = Some(ttl_entry.live_until_ledger_seq);
+
+                ttl_map = ttl_map.insert(key.clone(), ttl_entry, budget)?;
+            } else if matches!(le.as_ref().data, LedgerEntryData::ContractData(_))
+                || matches!(le.as_ref().data, LedgerEntryData::ContractCode(_))
+            {
+                return Err(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                )
+                .into());
+            }
+
+            if !storage.footprint.0.contains_key::<LedgerKey>(&key, budget)? {
+                return Err(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                )
+                .into());
+            }
+
+            // Store raw LedgerEntry in init_ledger_entries for later diff computation
+            // This avoids needing Val→ScVal conversion in get_ledger_changes
+            let init_entry: Option<EntryWithLiveUntil> = Some((le.clone(), live_until_ledger));
+            init_entries.insert(key.clone(), init_entry, budget)?;
+
+            // Convert entry to CachedEntry using from_entry_with_live_until.
+            // For ContractData entries, this performs ScVal→Val conversion.
+            // For other entry types, this creates CachedEntry::Entry.
+            let cached = CachedEntry::from_entry_with_live_until(&le, live_until_ledger, self)?;
+            storage.map.insert(key, Some(cached), budget)?;
+        }
+
+        // Collect footprint keys first to avoid borrow issues
+        let footprint_keys: Vec<Rc<LedgerKey>> = storage
+            .footprint
+            .0
+            .keys(budget)?
+            .cloned()
+            .collect();
+
+        // Add non-existing entries from the footprint to storage and init_entries.
+        for k in footprint_keys {
+            if !storage.map.contains_key(&k, budget)? {
+                storage.map.insert(Rc::clone(&k), None, budget)?;
+                init_entries.insert(Rc::clone(&k), None, budget)?;
+            }
+        }
+
+        Ok(ttl_map)
     }
 }
 
