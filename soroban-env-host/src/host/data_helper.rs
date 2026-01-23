@@ -1088,7 +1088,7 @@ impl Host {
 #[cfg(any(test, feature = "testutils"))]
 use crate::crypto;
 #[cfg(any(test, feature = "testutils"))]
-use crate::storage::{AccessType, EntryWithLiveUntil, Footprint};
+use crate::storage::{AccessType, EntryWithLiveUntil};
 
 #[cfg(any(test, feature = "testutils"))]
 impl Host {
@@ -1151,10 +1151,13 @@ impl Host {
     }
 
     // Performs the necessary setup to access all the entries in provided
-    // footprint in enforcing mode.
+    // footprint entries in enforcing mode.
     // "testutils" are not covered by budget metering.
-    pub fn setup_storage_footprint(&self, footprint: Footprint) -> Result<(), HostError> {
-        for (key, access_type) in footprint.0.map {
+    pub fn setup_storage_footprint(
+        &self,
+        footprint_entries: Vec<(Rc<LedgerKey>, AccessType)>,
+    ) -> Result<(), HostError> {
+        for (key, access_type) in footprint_entries {
             self.setup_storage_entry(key, None, access_type)?;
         }
         Ok(())

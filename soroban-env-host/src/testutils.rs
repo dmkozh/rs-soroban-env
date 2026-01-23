@@ -11,8 +11,8 @@ use crate::{
         AccountId, ContractCostType, LedgerEntry, LedgerKey, PublicKey, ScAddress, ScVal, ScVec,
         Uint256,
     },
-    AddressObject, BytesObject, Env, EnvBase, Host, HostError, LedgerInfo, MeteredOrdMap,
-    StorageType, SymbolSmall, Val, VecObject,
+    AddressObject, BytesObject, Env, EnvBase, Host, HostError, LedgerInfo, StorageType,
+    SymbolSmall, Val, VecObject,
 };
 use ed25519_dalek::SigningKey;
 use rand::RngCore;
@@ -412,28 +412,37 @@ impl Host {
         // empty storage-map entries that were accessed by keys the contract made
         // up, and switch to enforcing mode.
         self.with_mut_storage(|storage| {
-            storage.footprint.0 = MeteredOrdMap::from_exact_iter(
+            // Collect updates needed based on data_keys
+            let updates: Vec<_> = storage
+                .footprint
+                .0
+                .iter(self.budget_ref())
+                .unwrap()
+                .filter_map(|(k, accesstype)| {
+                    if let LedgerKey::ContractData(kcd) = k.as_ref() {
+                        if let Some((_, ro)) = data_keys.get(&kcd.key) {
+                            let new_access = if *ro {
+                                crate::storage::AccessType::ReadOnly
+                            } else {
+                                crate::storage::AccessType::ReadWrite
+                            };
+                            if *accesstype != new_access {
+                                return Some((k.clone(), new_access));
+                            }
+                        }
+                    }
+                    None
+                })
+                .collect();
+
+            // Apply the updates
+            for (k, new_access) in updates {
                 storage
                     .footprint
                     .0
-                    .iter(self.budget_ref())
-                    .unwrap()
-                    .map(|(k, accesstype)| {
-                        let mut accesstype = *accesstype;
-                        if let LedgerKey::ContractData(k) = k.as_ref() {
-                            if let Some((_, ro)) = data_keys.get(&k.key) {
-                                if *ro {
-                                    accesstype = crate::storage::AccessType::ReadOnly;
-                                } else {
-                                    accesstype = crate::storage::AccessType::ReadWrite;
-                                }
-                            }
-                        }
-                        (k.clone(), accesstype)
-                    }),
-                self.budget_ref(),
-            )
-            .unwrap();
+                    .insert(k, new_access, self.budget_ref())
+                    .unwrap();
+            }
 
             // Synthesize empty entries for anything the contract made up (these
             // will be in the footprint but not yet in the map, which is an

@@ -13,9 +13,9 @@ use std::rc::Rc;
 use crate::budget::AsBudget;
 use crate::host::metered_clone::{MeteredClone, MeteredIterator};
 use crate::host::metered_hash::MeteredHashMap;
+use crate::host::metered_map::MeteredOrdMap;
 use crate::{
     budget::Budget,
-    host::metered_map::MeteredOrdMap,
     ledger_info::get_key_durability,
     xdr::{
         ContractDataDurability, LedgerEntry, LedgerKey, ScContractInstance, ScErrorCode,
@@ -24,7 +24,7 @@ use crate::{
     Env, Error, Host, HostError, Val,
 };
 
-pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
+pub(crate) type FootprintMap = MeteredHashMap<Rc<LedgerKey>, AccessType>;
 /// Entry with optional live_until ledger for snapshot source compatibility.
 /// Used by the SnapshotSource trait at the external interface boundary.
 pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
@@ -285,9 +285,9 @@ impl SnapshotSource for LedgerEntryMapSnapshotSource<'_> {
 /// transaction has an unknown [Footprint] it can be calculated by
 /// running a "preflight" execution in [FootprintMode::Recording],
 /// against a suitably fresh [SnapshotSource].
-// Notes on metering: covered by the underneath `MeteredOrdMap`.
-#[derive(Clone, Default, Hash)]
-pub struct Footprint(pub FootprintMap);
+// Notes on metering: covered by the underlying `MeteredHashMap`.
+#[derive(Clone, Default)]
+pub(crate) struct Footprint(pub(crate) FootprintMap);
 
 impl Footprint {
     #[cfg(any(test, feature = "recording_mode"))]
@@ -297,20 +297,20 @@ impl Footprint {
         ty: AccessType,
         budget: &Budget,
     ) -> Result<(), HostError> {
-        if let Some(existing) = self.0.get::<Rc<LedgerKey>>(key, budget)? {
-            match (existing, ty) {
+        if let Some(existing) = self.0.get(key, budget)? {
+            match (*existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
                     // The only interesting case is an upgrade
                     // from previously-read-only to read-write.
-                    self.0 = self.0.insert(Rc::clone(key), ty, budget)?;
+                    self.0.insert(Rc::clone(key), ty, budget)?;
                     Ok(())
                 }
                 (AccessType::ReadWrite, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadWrite, AccessType::ReadWrite) => Ok(()),
             }
         } else {
-            self.0 = self.0.insert(Rc::clone(key), ty, budget)?;
+            self.0.insert(Rc::clone(key), ty, budget)?;
             Ok(())
         }
     }
@@ -327,8 +327,8 @@ impl Footprint {
         // entries to access), so it might be considered 'exceeded'.
         // This also helps distinguish access errors from the values simply
         // being  missing from storage (but with a valid footprint).
-        if let Some(existing) = self.0.get::<Rc<LedgerKey>>(key, budget)? {
-            match (existing, ty) {
+        if let Some(existing) = self.0.get(key, budget)? {
+            match (*existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
                     Err((ScErrorType::Storage, ScErrorCode::ExceededLimit).into())
@@ -339,6 +339,12 @@ impl Footprint {
         } else {
             Err((ScErrorType::Storage, ScErrorCode::ExceededLimit).into())
         }
+    }
+
+    /// Returns the number of entries in the footprint.
+    #[cfg(any(test, feature = "recording_mode"))]
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -365,7 +371,7 @@ pub(crate) enum FootprintMode {
 /// [FootprintMode::Enforcing] mode and enforces partitioned access.
 #[derive(Clone, Default)]
 pub struct Storage {
-    pub footprint: Footprint,
+    pub(crate) footprint: Footprint,
     pub(crate) mode: FootprintMode,
     pub map: StorageMap,
 }
@@ -404,7 +410,8 @@ impl Storage {
     /// Constructs a new [Storage] in [FootprintMode::Enforcing] using a
     /// given [Footprint] and a storage map populated with all the keys
     /// listed in the [Footprint].
-    pub fn with_enforcing_footprint_and_map(footprint: Footprint, map: StorageMap) -> Self {
+    #[cfg(test)]
+    pub(crate) fn with_enforcing_footprint_and_map(footprint: Footprint, map: StorageMap) -> Self {
         Self {
             mode: FootprintMode::Enforcing,
             footprint,
@@ -415,7 +422,7 @@ impl Storage {
     /// Constructs a new [Storage] in [FootprintMode::Enforcing] with an empty
     /// storage map. Used for two-phase initialization where the map is
     /// populated later via Host::populate_storage_from_xdr.
-    pub fn with_enforcing_footprint_only(footprint: Footprint) -> Self {
+    pub(crate) fn with_enforcing_footprint_only(footprint: Footprint) -> Self {
         Self {
             mode: FootprintMode::Enforcing,
             footprint,

@@ -45,8 +45,7 @@ fn run_complex() -> Result<(), HostError> {
         )?;
         let realhost: Host = (*host).clone();
         drop(host);
-        let (store, _) = realhost.try_finish().unwrap();
-        store.footprint
+        realhost.get_recorded_footprint()?
     };
 
     // Run 2: enforce preflight footprint, with empty map -- contract should only write.

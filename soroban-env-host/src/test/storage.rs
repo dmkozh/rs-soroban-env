@@ -2,12 +2,12 @@ use std::rc::Rc;
 
 use crate::budget::{AsBudget, Budget};
 use crate::host_object::MuxedScAddress;
-use crate::storage::{AccessType, Footprint, Storage};
+use crate::storage::{AccessType, Footprint, FootprintMap, Storage};
 use crate::xdr::{
     ContractDataDurability, ContractId, LedgerKey, LedgerKeyContractData, MuxedEd25519Account,
     ScAddress, ScErrorCode, ScErrorType, ScVal, Uint256,
 };
-use crate::{Host, HostError, MeteredOrdMap};
+use crate::{Host, HostError};
 use soroban_env_common::{AddressObject, Env, MuxedAddressObject, Symbol, TryFromVal, TryIntoVal};
 use soroban_test_wasms::{CONTRACT_STORAGE, CONTRACT_STORAGE_WITH_VALS, INVOKE_CONTRACT};
 
@@ -23,22 +23,13 @@ fn footprint_record_access() -> Result<(), HostError> {
         durability: ContractDataDurability::Persistent,
     }));
     fp.record_access(&key, AccessType::ReadOnly, &budget)?;
-    assert_eq!(fp.0.contains_key::<LedgerKey>(&key, &budget)?, true);
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadOnly)
-    );
+    assert_eq!(fp.0.contains_key(&key, &budget)?, true);
+    assert_eq!(fp.0.get(&key, &budget)?, Some(&AccessType::ReadOnly));
     // record and change access
     fp.record_access(&key, AccessType::ReadWrite, &budget)?;
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadWrite)
-    );
+    assert_eq!(fp.0.get(&key, &budget)?, Some(&AccessType::ReadWrite));
     fp.record_access(&key, AccessType::ReadOnly, &budget)?;
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadWrite)
-    );
+    assert_eq!(fp.0.get(&key, &budget)?, Some(&AccessType::ReadWrite));
     Ok(())
 }
 
@@ -58,15 +49,14 @@ fn footprint_enforce_access() -> Result<(), HostError> {
         durability: ContractDataDurability::Temporary,
     }));
 
-    let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
-    let mom = MeteredOrdMap::from_map(om, &budget)?;
-    let mut fp = Footprint(mom);
+    let mut fp_map = FootprintMap::new();
+    fp_map.insert(Rc::clone(&key), AccessType::ReadOnly, &budget)?;
+    let mut fp = Footprint(fp_map);
     assert!(fp
         .enforce_access(&key2, AccessType::ReadOnly, &budget)
         .is_err());
     fp.enforce_access(&key, AccessType::ReadOnly, &budget)?;
-    fp.0 =
-        fp.0.insert(Rc::clone(&key), AccessType::ReadWrite, &budget)?;
+    fp.0.insert(Rc::clone(&key), AccessType::ReadWrite, &budget)?;
     fp.enforce_access(&key, AccessType::ReadOnly, &budget)?;
     fp.enforce_access(&key, AccessType::ReadWrite, &budget)?;
     Ok(())
@@ -97,9 +87,9 @@ fn footprint_attempt_to_write_readonly_entry() -> Result<(), HostError> {
         key: ScVal::I32(0),
         durability: ContractDataDurability::Persistent,
     }));
-    let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
-    let mom = MeteredOrdMap::from_map(om, &budget)?;
-    let mut fp = Footprint(mom);
+    let mut fp_map = FootprintMap::new();
+    fp_map.insert(Rc::clone(&key), AccessType::ReadOnly, &budget)?;
+    let mut fp = Footprint(fp_map);
     let res = fp.enforce_access(&key, AccessType::ReadWrite, &budget);
     assert!(HostError::result_matches_err(
         res,

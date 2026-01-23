@@ -59,8 +59,7 @@ fn run_add_i32() -> Result<(), HostError> {
             Symbol::try_from_small_str("add")?,
             host.test_vec_obj(&[a, b])?,
         )?;
-        let (store, _) = host.try_finish().unwrap();
-        store.footprint
+        host.get_recorded_footprint()?
     };
     // Run 2: enforce preflight footprint
     {
@@ -109,8 +108,7 @@ fn run_complex() -> Result<(), HostError> {
             Symbol::try_from_small_str("go")?,
             host.add_host_object(HostVec::new())?,
         )?;
-        let (store, _) = host.try_finish().unwrap();
-        store.footprint
+        host.get_recorded_footprint()?
     };
 
     // Run 2: enforce preflight footprint, with empty map -- contract should only write.

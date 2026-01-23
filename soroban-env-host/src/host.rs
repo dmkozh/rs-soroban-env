@@ -59,6 +59,8 @@ use self::{
 };
 
 use crate::host::error::TryBorrowOrErr;
+#[cfg(any(test, feature = "recording_mode"))]
+use crate::{storage::AccessType, xdr::LedgerKey};
 #[cfg(any(test, feature = "testutils"))]
 pub use frame::ContractFunctionSet;
 pub(crate) use frame::Frame;
@@ -772,7 +774,7 @@ impl Host {
     /// underlying [`HostImpl`], returning its finalized components containing
     /// processing side effects to the caller as a tuple wrapped in `Ok(...)`.
     ///
-    /// Returns (init_ledger_entries, final_ledger_entries, footprint, events).
+    /// Returns (init_ledger_entries, events).
     ///
     /// Use [`Host::can_finish`] to determine before calling the function if it
     /// will succeed.
@@ -782,24 +784,34 @@ impl Host {
     /// a live Host.
     pub fn try_finish_with_entries(
         self,
-    ) -> Result<
-        (
-            crate::storage::LedgerEntryMap,
-            crate::storage::Footprint,
-            Events,
-        ),
-        HostError,
-    > {
+    ) -> Result<(crate::storage::LedgerEntryMap, Events), HostError> {
         let events = self.try_borrow_events()?.externalize(&self)?;
         Rc::try_unwrap(self.0)
             .map(|host_impl| {
-                let storage = host_impl.storage.into_inner();
                 let init_entries = host_impl.init_ledger_entries.into_inner();
-                (init_entries, storage.footprint, events)
+                (init_entries, events)
             })
             .map_err(|_| {
                 Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InternalError).into()
             })
+    }
+
+    /// Returns the recorded footprint as a sorted vector of (key, access_type) pairs.
+    /// Only available in recording mode.
+    #[cfg(any(test, feature = "recording_mode"))]
+    pub fn get_recorded_footprint(&self) -> Result<Vec<(Rc<LedgerKey>, AccessType)>, HostError> {
+        use crate::budget::AsBudget;
+        self.with_mut_storage(|storage| {
+            let budget = self.as_budget();
+            let mut entries: Vec<(Rc<LedgerKey>, AccessType)> =
+                Vec::with_capacity(storage.footprint.len());
+            for (key, access_type) in storage.footprint.0.iter(budget)? {
+                entries.push((Rc::clone(key), *access_type));
+            }
+            // Sort by key for deterministic ordering
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Ok(entries)
+        })
     }
 
     /// Legacy version of try_finish that returns Storage.
@@ -3643,8 +3655,9 @@ impl VmCallerEnv for Host {
             ScAddress::Contract(id) => {
                 let storage_key = self.contract_instance_ledger_key(&id)?;
                 // Use try_get_cached to avoid EntryWithLiveUntil conversion
-                let maybe_cached = self.try_borrow_storage_mut()?
-                    .try_get_cached(&storage_key, self, None)?;
+                let maybe_cached =
+                    self.try_borrow_storage_mut()?
+                        .try_get_cached(&storage_key, self, None)?;
                 if let Some(cached) = maybe_cached {
                     if let Some(entry_rc) = cached.get_entry() {
                         let instance =
@@ -3863,11 +3876,9 @@ impl Host {
                 ));
             }
         };
-        let live_until = self.try_borrow_storage_mut()?.get_live_until(
-            &ledger_key,
-            self,
-            Some(key),
-        )?;
+        let live_until =
+            self.try_borrow_storage_mut()?
+                .get_live_until(&ledger_key, self, Some(key))?;
         live_until.ok_or_else(|| {
             self.err(
                 ScErrorType::Storage,
