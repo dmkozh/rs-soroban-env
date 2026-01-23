@@ -116,8 +116,8 @@ impl CachedEntry {
     }
 
     /// Creates a CachedEntry from an EntryWithLiveUntil.
-    /// For ContractData entries, converts the ScVal to Val for efficient access.
-    /// For other entry types (ContractCode, Account, Trustline), stores as Entry.
+    /// For ContractData entries (except contract instance data), converts the ScVal to Val.
+    /// For contract instance data and other entry types, stores as Entry.
     pub fn from_entry_with_live_until(
         entry: &Rc<LedgerEntry>,
         live_until: Option<u32>,
@@ -126,6 +126,19 @@ impl CachedEntry {
         use crate::xdr::LedgerEntryData;
         match &entry.data {
             LedgerEntryData::ContractData(contract_data) => {
+                // Check if this is contract instance data - these are not Val-representable
+                // because the key is LedgerKeyContractInstance and the value is ContractInstance.
+                // Also check for ContractInstance values directly in case key wasn't set yet.
+                if matches!(contract_data.key, ScVal::LedgerKeyContractInstance)
+                    || matches!(contract_data.val, ScVal::ContractInstance(_))
+                {
+                    // Store as Entry - don't try to convert to Val
+                    return Ok(CachedEntry::Entry(
+                        Rc::new(RefCell::new((*entry.as_ref()).clone())),
+                        live_until,
+                    ));
+                }
+
                 // ContractData entries must have a live_until ledger
                 let live_until_ledger = live_until.ok_or_else(|| {
                     HostError::from(Error::from_type_and_code(

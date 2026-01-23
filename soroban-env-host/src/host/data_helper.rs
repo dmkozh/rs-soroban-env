@@ -882,16 +882,27 @@ impl Host {
             }
         }
 
-        // Cache miss - read from storage
-        let entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
-        match &entry.data {
-            LedgerEntryData::ContractData(e) => self.to_valid_host_val(&e.val),
-            _ => Err(self.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "expected contract data ledger entry",
-                &[],
-            )),
+        // Cache miss - read from storage using get_cached to avoid Val→ScVal→Val roundtrip
+        let cached = self
+            .try_borrow_storage_mut()?
+            .get_cached(&key, self, Some(k))?;
+        match cached {
+            CachedEntry::ContractData(val, _) => {
+                // Val is already in host format - return directly
+                Ok(val)
+            }
+            CachedEntry::Entry(entry_rc, _) => {
+                // Fallback for Entry variant (shouldn't happen in normal flow)
+                match &entry_rc.borrow().data {
+                    LedgerEntryData::ContractData(e) => self.to_valid_host_val(&e.val),
+                    _ => Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected contract data ledger entry",
+                        &[],
+                    )),
+                }
+            }
         }
     }
 
