@@ -164,7 +164,11 @@ where
     }
 
     /// Gets a mutable reference to a value in the map.
-    pub fn get_mut<B: AsBudget>(&mut self, key: &K, budget: &B) -> Result<Option<&mut V>, HostError> {
+    pub fn get_mut<B: AsBudget>(
+        &mut self,
+        key: &K,
+        budget: &B,
+    ) -> Result<Option<&mut V>, HostError> {
         self.charge_hash(budget)?;
         self.charge_access(1, budget)?;
         Ok(self.map.get_mut(key))
@@ -195,7 +199,10 @@ where
 
     /// Returns an iterator over the map entries.
     /// Charges for accessing all entries upfront.
-    pub fn iter<B: AsBudget>(&self, budget: &B) -> Result<impl Iterator<Item = (&K, &V)>, HostError> {
+    pub fn iter<B: AsBudget>(
+        &self,
+        budget: &B,
+    ) -> Result<impl Iterator<Item = (&K, &V)>, HostError> {
         self.charge_access(self.map.len(), budget)?;
         Ok(self.map.iter())
     }
@@ -203,7 +210,10 @@ where
     /// Consumes the map and returns an iterator over owned entries.
     /// This is used for draining the cache at frame exit.
     /// Charges for accessing all entries upfront.
-    pub fn into_iter<B: AsBudget>(self, budget: &B) -> Result<impl Iterator<Item = (K, V)>, HostError> {
+    pub fn into_iter<B: AsBudget>(
+        self,
+        budget: &B,
+    ) -> Result<impl Iterator<Item = (K, V)>, HostError> {
         self.charge_access(self.map.len(), budget)?;
         Ok(self.map.into_iter())
     }
@@ -241,7 +251,7 @@ where
     {
         self.charge_hash(budget)?;
         self.charge_access(1, budget)?;
-        
+
         // Check if key exists first to avoid unnecessary clone
         if self.map.contains_key(key) {
             // Key exists - get mutable reference without cloning key
@@ -261,7 +271,7 @@ where
     {
         self.charge_hash(budget)?;
         self.charge_access(1, budget)?;
-        
+
         // Check if key exists first to avoid unnecessary clone
         if let Some(v) = self.map.get_mut(key) {
             *v = value;

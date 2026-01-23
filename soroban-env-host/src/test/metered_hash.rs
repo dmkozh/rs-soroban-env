@@ -2,7 +2,10 @@ use crate::{
     budget::Budget,
     host::metered_hash::MeteredHashMap,
     storage::CachedEntry,
-    xdr::{ContractCostType, ContractDataDurability, Hash, LedgerKey, LedgerKeyContractData, ScAddress, ScVal, ContractId},
+    xdr::{
+        ContractCostType, ContractDataDurability, ContractId, Hash, LedgerKey,
+        LedgerKeyContractData, ScAddress, ScVal,
+    },
     HostError, Val,
 };
 use std::rc::Rc;
@@ -27,14 +30,16 @@ fn make_ledger_key(id: u64) -> Rc<LedgerKey> {
 
 fn make_cache_entry(val: u64) -> Option<CachedEntry> {
     // Using Val::from_u32 for simplicity - this represents the cached value
-    Some(CachedEntry::ContractData(Val::from_u32(val as u32).into(), 1000))
+    Some(CachedEntry::ContractData(
+        Val::from_u32(val as u32).into(),
+        1000,
+    ))
 }
 
 #[test]
 fn test_metered_hash_map_basic_operations() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     // Test is_empty on empty map
     assert!(map.is_empty());
@@ -75,8 +80,7 @@ fn test_metered_hash_map_basic_operations() -> Result<(), HostError> {
 #[test]
 fn test_metered_hash_map_get_mut() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     map.insert(make_ledger_key(1), make_cache_entry(100), &budget)?;
 
@@ -96,8 +100,7 @@ fn test_metered_hash_map_get_mut() -> Result<(), HostError> {
 #[test]
 fn test_metered_hash_map_remove() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     map.insert(make_ledger_key(1), make_cache_entry(100), &budget)?;
     map.insert(make_ledger_key(2), make_cache_entry(200), &budget)?;
@@ -120,8 +123,7 @@ fn test_metered_hash_map_remove() -> Result<(), HostError> {
 #[test]
 fn test_metered_hash_map_iter() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     map.insert(make_ledger_key(1), make_cache_entry(100), &budget)?;
     map.insert(make_ledger_key(2), make_cache_entry(200), &budget)?;
@@ -137,8 +139,7 @@ fn test_metered_hash_map_iter() -> Result<(), HostError> {
 #[test]
 fn test_metered_hash_map_into_iter() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     map.insert(make_ledger_key(1), make_cache_entry(100), &budget)?;
     map.insert(make_ledger_key(2), make_cache_entry(200), &budget)?;
@@ -153,8 +154,7 @@ fn test_metered_hash_map_into_iter() -> Result<(), HostError> {
 #[test]
 fn test_metered_hash_map_metered_clone() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     map.insert(make_ledger_key(1), make_cache_entry(100), &budget)?;
     map.insert(make_ledger_key(2), make_cache_entry(200), &budget)?;
@@ -173,8 +173,7 @@ fn test_metered_hash_map_metered_clone() -> Result<(), HostError> {
 #[test]
 fn test_metered_hash_map_budget_consumption() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     // Record initial budget
     let initial_cpu = budget
@@ -201,8 +200,7 @@ fn test_metered_hash_map_budget_consumption() -> Result<(), HostError> {
 #[test]
 fn test_metered_hash_map_iter_charges_budget() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     for i in 0..10 {
         map.insert(make_ledger_key(i), make_cache_entry(i * 100), &budget)?;
@@ -231,8 +229,7 @@ fn test_metered_hash_map_iter_charges_budget() -> Result<(), HostError> {
 #[test]
 fn test_metered_hash_map_into_iter_charges_budget() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     for i in 0..10 {
         map.insert(make_ledger_key(i), make_cache_entry(i * 100), &budget)?;
@@ -262,8 +259,7 @@ fn test_metered_hash_map_into_iter_charges_budget() -> Result<(), HostError> {
 fn test_metered_hash_map_budget_exhaustion() {
     // Create a budget with very limited resources
     let budget = create_limited_budget(100);
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     // Try to perform operations that should exhaust budget
     let mut ops_succeeded = 0;
@@ -288,8 +284,7 @@ fn test_metered_hash_map_budget_exhaustion() {
 #[test]
 fn test_metered_hash_map_hash_cost_type() -> Result<(), HostError> {
     let budget = create_unlimited_budget();
-    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> =
-        MeteredHashMap::new();
+    let mut map: MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>> = MeteredHashMap::new();
 
     // Get initial count for the hash cost type
     let initial_count = budget

@@ -65,10 +65,8 @@ fn run_add_i32() -> Result<(), HostError> {
     // Run 2: enforce preflight footprint
     {
         let _run_span = tracy_span!("add_i32 run 2: enforcing footprint");
-        let store = Storage::with_enforcing_footprint_and_map(
-            Footprint::default(),
-            StorageMap::default(),
-        );
+        let store =
+            Storage::with_enforcing_footprint_and_map(Footprint::default(), StorageMap::default());
         let host = Host::with_storage_and_budget(store, Budget::default());
         host.set_ledger_info(LEDGER_INFO)?;
         host.setup_storage_footprint(foot)?;
@@ -118,10 +116,8 @@ fn run_complex() -> Result<(), HostError> {
     // Run 2: enforce preflight footprint, with empty map -- contract should only write.
     {
         let _run_span = tracy_span!("complex run 2: enforcing footprint");
-        let store = Storage::with_enforcing_footprint_and_map(
-            Footprint::default(),
-            StorageMap::default(),
-        );
+        let store =
+            Storage::with_enforcing_footprint_and_map(Footprint::default(), StorageMap::default());
         let host = Host::with_storage_and_budget(store, Budget::default());
         host.set_ledger_info(LEDGER_INFO)?;
         host.setup_storage_footprint(foot)?;

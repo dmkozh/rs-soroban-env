@@ -15,8 +15,8 @@ use crate::{
     xdr::{
         int128_helpers, AccountId, Asset, ContractCostType, ContractEventType, ContractExecutable,
         ContractId, ContractIdPreimage, ContractIdPreimageFromAddress, CreateContractArgsV2,
-        Duration, Hash, PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType,
-        ScString, ScSymbol, ScVal, TimePoint, Uint256,
+        Duration, Hash, PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType, ScString,
+        ScSymbol, ScVal, TimePoint, Uint256,
     },
     AddressObject, Bool, BytesObject, Compare, ConversionError, EnvBase, Error, LedgerInfo,
     MapObject, Object, StorageType, StringObject, Symbol, SymbolObject, SymbolSmall, TryFromVal,
@@ -750,9 +750,7 @@ impl Host {
     /// Builds a LedgerEntryMap from the current storage, converting CachedEntry
     /// variants back to LedgerEntry. This must be called before try_finish()
     /// consumes the Host, as Val→ScVal conversion requires a live Host.
-    pub fn build_final_ledger_entries(
-        &self,
-    ) -> Result<crate::storage::LedgerEntryMap, HostError> {
+    pub fn build_final_ledger_entries(&self) -> Result<crate::storage::LedgerEntryMap, HostError> {
         use crate::storage::LedgerEntryMap;
         let storage = self.try_borrow_storage()?;
         let mut result = LedgerEntryMap::new();

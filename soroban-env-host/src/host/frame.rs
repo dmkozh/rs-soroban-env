@@ -8,9 +8,9 @@ use crate::{
     },
     storage::{CachedEntry, InstanceStorageMap, StorageCache, StorageMap},
     xdr::{
-        ContractExecutable, ContractId, ContractIdPreimage,
-        CreateContractArgsV2, Hash, HostFunction, HostFunctionType, LedgerKey, ScAddress,
-        ScContractInstance, ScErrorCode, ScErrorType, ScVal,
+        ContractExecutable, ContractId, ContractIdPreimage, CreateContractArgsV2, Hash,
+        HostFunction, HostFunctionType, LedgerKey, ScAddress, ScContractInstance, ScErrorCode,
+        ScErrorType, ScVal,
     },
     AddressObject, Error, ErrorHandler, Host, HostError, Object, Symbol, SymbolStr, TryFromVal,
     TryIntoVal, Val, Vm, DEFAULT_HOST_DEPTH_LIMIT,
@@ -1302,32 +1302,34 @@ impl Host {
     }
 
     /// Flushes the data cache from the current frame to parent or storage.
-    /// 
+    ///
     /// If the parent frame has the same contract ID, the cache entries are
     /// merged into the parent frame's cache (efficient Rc moves, no cloning).
     /// Otherwise, entries are flushed to global storage (with ContractData→Entry
     /// conversion for final materialization).
-    /// 
+    ///
     /// Should be called at frame exit before persist_instance_storage.
     fn flush_data_cache(&self) -> Result<(), HostError> {
         // First, determine if we should flush to parent or storage
         let flush_to_parent = {
             let contexts = self.try_borrow_context_stack()?;
             let len = contexts.len();
-            
+
             if len < 2 {
                 false
             } else {
                 let current_contract_id = contexts[len - 1].frame.contract_id();
                 let parent_contract_id = contexts[len - 2].frame.contract_id();
-                
+
                 current_contract_id.is_some() && current_contract_id == parent_contract_id
             }
         };
-        
+
         // Take the cache from the current context
         let cache_entries: Vec<_> = self.with_current_context_mut(|ctx| {
-            Ok(std::mem::take(&mut ctx.data_cache.map).into_iter().collect())
+            Ok(std::mem::take(&mut ctx.data_cache.map)
+                .into_iter()
+                .collect())
         })?;
 
         if cache_entries.is_empty() {
@@ -1350,10 +1352,10 @@ impl Host {
         cache_entries: Vec<(Rc<LedgerKey>, Option<CachedEntry>)>,
     ) -> Result<(), HostError> {
         let budget = self.budget_ref();
-        
+
         let mut contexts = self.try_borrow_context_stack_mut()?;
         let len = contexts.len();
-        
+
         if len < 2 {
             return Err(self.err(
                 ScErrorType::Context,
@@ -1362,75 +1364,33 @@ impl Host {
                 &[],
             ));
         }
-        
+
         let parent_cache = &mut contexts[len - 2].data_cache;
-        
+
         for (key, entry) in cache_entries {
             // Simply insert into parent cache - Rc entries are moved, not cloned
             parent_cache.insert(key, entry, budget)?;
         }
-        
+
         Ok(())
     }
 
     /// Flushes cache entries to global storage.
-    /// 
+    ///
     /// This is called for final flush when there's no same-contract parent frame.
-    /// ContractData entries are converted to Entry format for get_ledger_changes
-    /// compatibility - the conversion only happens here (final storage flush),
-    /// not when flushing to a parent frame's cache.
+    /// CachedEntry::ContractData entries are preserved as-is for efficient
+    /// re-reading. Conversion to LedgerEntry format happens lazily when needed
+    /// (e.g., in get_ledger_changes).
     fn flush_cache_to_storage(
         &self,
         cache_entries: Vec<(Rc<LedgerKey>, Option<CachedEntry>)>,
     ) -> Result<(), HostError> {
-        use crate::storage::CachedEntry;
-        use crate::xdr::{ContractDataEntry, LedgerEntryData, LedgerEntryExt, LedgerKeyContractData};
-        
         for (ledger_key, cached_entry) in cache_entries {
-            // Convert ContractData to Entry for compatibility with get_ledger_changes
-            let converted_entry = match cached_entry {
-                Some(CachedEntry::ContractData(val, live_until)) => {
-                    // Reconstruct the full LedgerEntry from key and val
-                    if let crate::xdr::LedgerKey::ContractData(LedgerKeyContractData {
-                        contract,
-                        key: data_key,
-                        durability,
-                    }) = ledger_key.as_ref()
-                    {
-                        let sc_val = self.from_host_val(val)?;
-                        let entry = crate::xdr::LedgerEntry {
-                            last_modified_ledger_seq: 0,
-                            data: LedgerEntryData::ContractData(ContractDataEntry {
-                                ext: crate::xdr::ExtensionPoint::V0,
-                                contract: contract.clone(),
-                                key: data_key.clone(),
-                                durability: *durability,
-                                val: sc_val,
-                            }),
-                            ext: LedgerEntryExt::V0,
-                        };
-                        Some(CachedEntry::Entry(
-                            std::rc::Rc::new(std::cell::RefCell::new(entry)),
-                            Some(live_until),
-                        ))
-                    } else {
-                        return Err(self.err(
-                            crate::xdr::ScErrorType::Storage,
-                            crate::xdr::ScErrorCode::InternalError,
-                            "ContractData entry has non-ContractData key",
-                            &[],
-                        ));
-                    }
-                }
-                other => other,
-            };
-            
-            self.try_borrow_storage_mut()?.put_cached(
-                &ledger_key,
-                converted_entry,
-                self,
-                None,
-            )?;
+            // Pass through as-is - preserve CachedEntry::ContractData format
+            // for efficient re-reading. Conversion to LedgerEntry happens
+            // lazily when needed (e.g., in get_ledger_changes).
+            self.try_borrow_storage_mut()?
+                .put_cached(&ledger_key, cached_entry, self, None)?;
         }
 
         Ok(())

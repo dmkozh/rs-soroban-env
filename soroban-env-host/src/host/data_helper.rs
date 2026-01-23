@@ -154,9 +154,7 @@ impl Host {
             let parent_contract_id = parent_ctx.frame.contract_id();
 
             // Only check parent cache if same contract (e.g., internal call or recursion)
-            if current_contract_id.is_some()
-                && current_contract_id == parent_contract_id
-            {
+            if current_contract_id.is_some() && current_contract_id == parent_contract_id {
                 if let Some(entry) = parent_ctx.data_cache.get(key, budget)? {
                     return Ok(Some(entry.clone()));
                 }
@@ -549,11 +547,7 @@ impl Host {
     /// Use this for read-only access to Account/Trustline/ContractCode entries.
     /// Returns an error if called with a ContractData key.
     #[allow(dead_code)]
-    pub(crate) fn with_ledger_entry<F, R>(
-        &self,
-        key: &Rc<LedgerKey>,
-        f: F,
-    ) -> Result<R, HostError>
+    pub(crate) fn with_ledger_entry<F, R>(&self, key: &Rc<LedgerKey>, f: F) -> Result<R, HostError>
     where
         F: FnOnce(&LedgerEntry) -> Result<R, HostError>,
     {
@@ -754,23 +748,27 @@ impl Host {
         // - If entry exists in storage, get its live_until_ledger
         // - Otherwise use min live_until for new entries
         let budget = self.budget_ref();
-        let live_until_from_cache = self.try_with_data_cache(|cache| {
-            if let Some(Some(entry)) = cache.get(&key, budget)? {
-                if let CachedEntry::ContractData(_, live_until) = entry {
-                    return Ok(Some(*live_until));
+        let live_until_from_cache = self
+            .try_with_data_cache(|cache| {
+                if let Some(Some(entry)) = cache.get(&key, budget)? {
+                    if let CachedEntry::ContractData(_, live_until) = entry {
+                        return Ok(Some(*live_until));
+                    }
                 }
-            }
-            Ok(None)
-        })?.flatten();
+                Ok(None)
+            })?
+            .flatten();
 
         let live_until_ledger = match live_until_from_cache {
             Some(lul) => lul,
             None => {
                 // Check storage for existing entry's live_until
                 if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
-                    let (_, lul) = self
-                        .try_borrow_storage_mut()?
-                        .get_with_live_until_ledger(&key, self, Some(k))?;
+                    let (_, lul) = self.try_borrow_storage_mut()?.get_with_live_until_ledger(
+                        &key,
+                        self,
+                        Some(k),
+                    )?;
                     lul.unwrap_or(self.get_min_live_until_ledger(durability)?)
                 } else {
                     // New entry - use minimum live_until
@@ -887,22 +885,13 @@ impl Host {
             .try_borrow_storage_mut()?
             .get_cached(&key, self, Some(k))?;
         match cached {
-            CachedEntry::ContractData(val, _) => {
-                // Val is already in host format - return directly
-                Ok(val)
-            }
-            CachedEntry::Entry(entry_rc, _) => {
-                // Fallback for Entry variant (shouldn't happen in normal flow)
-                match &entry_rc.borrow().data {
-                    LedgerEntryData::ContractData(e) => self.to_valid_host_val(&e.val),
-                    _ => Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "expected contract data ledger entry",
-                        &[],
-                    )),
-                }
-            }
+            CachedEntry::ContractData(val, _) => Ok(val),
+            CachedEntry::Entry(_, _) => Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "expected contract data ledger entry",
+                &[],
+            )),
         }
     }
 
@@ -933,8 +922,7 @@ impl Host {
         let budget = self.budget_ref();
         self.try_with_mut_data_cache(|cache| {
             cache.upsert(
-                &key,
-                None,  // None indicates deleted entry
+                &key, None, // None indicates deleted entry
                 budget,
             )
         })?;
@@ -1023,13 +1011,8 @@ impl Host {
             Ok(())
         } else {
             // Entry not in cache or deleted - use storage directly
-            self.try_borrow_storage_mut()?.extend_ttl(
-                self,
-                key,
-                threshold,
-                extend_to,
-                Some(k),
-            )
+            self.try_borrow_storage_mut()?
+                .extend_ttl(self, key, threshold, extend_to, Some(k))
         }
     }
 }
@@ -1089,9 +1072,9 @@ impl Host {
                 .record_access(&key, access_type, self.as_budget())?;
             // Convert to CachedEntry format
             let cached = match val {
-                Some((entry, live_until)) => {
-                    Some(CachedEntry::from_entry_with_live_until(&entry, live_until, self)?)
-                }
+                Some((entry, live_until)) => Some(CachedEntry::from_entry_with_live_until(
+                    &entry, live_until, self,
+                )?),
                 None => None,
             };
             storage.map.insert(key, cached, self.as_budget())?;

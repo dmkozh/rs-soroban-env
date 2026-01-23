@@ -12,8 +12,8 @@ use crate::{
     host::metered_clone::MeteredClone,
     xdr::{
         AccountEntry, AccountEntryExt, AccountEntryExtensionV1Ext, AccountFlags, AccountId, Asset,
-        LedgerEntryData, ScAddress, ScErrorCode, ScErrorType,
-        TrustLineAsset, TrustLineEntry, TrustLineEntryExt, TrustLineFlags,
+        LedgerEntryData, ScAddress, ScErrorCode, ScErrorType, TrustLineAsset, TrustLineEntry,
+        TrustLineEntryExt, TrustLineFlags,
     },
     Env, ErrorHandler, Host, HostError, StorageType, TryIntoVal,
 };

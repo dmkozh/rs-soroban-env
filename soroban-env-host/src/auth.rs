@@ -2379,12 +2379,7 @@ impl Host {
                     &[],
                 )
             })?;
-            nonce_cache.insert(
-                nonce_key,
-                NonceCacheEntry {
-                    live_until_ledger,
-                },
-            );
+            nonce_cache.insert(nonce_key, NonceCacheEntry { live_until_ledger });
         }
 
         Ok(())
@@ -2403,11 +2398,16 @@ impl Host {
                     &[],
                 )
             })?;
-            nonce_cache.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            nonce_cache
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
         };
 
         for (nonce_key, entry) in entries_to_flush {
-            let nonce_key_scval = ScVal::LedgerKeyNonce(ScNonceKey { nonce: nonce_key.nonce });
+            let nonce_key_scval = ScVal::LedgerKeyNonce(ScNonceKey {
+                nonce: nonce_key.nonce,
+            });
             let storage_key = self.storage_key_for_address(
                 nonce_key.address.metered_clone(self)?,
                 nonce_key_scval.metered_clone(self)?,

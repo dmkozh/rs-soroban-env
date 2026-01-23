@@ -457,7 +457,9 @@ impl Host {
             }
             storage.map = Default::default();
             for (k, v) in map.iter() {
-                storage.map.insert(k.clone(), v.clone(), self.budget_ref())?;
+                storage
+                    .map
+                    .insert(k.clone(), v.clone(), self.budget_ref())?;
             }
             storage.mode = crate::storage::FootprintMode::Enforcing;
             Ok(())

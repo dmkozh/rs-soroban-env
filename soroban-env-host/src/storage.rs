@@ -37,13 +37,13 @@ pub type StorageMap = MeteredHashMap<Rc<LedgerKey>, Option<CachedEntry>>;
 pub type LedgerEntryMap = MeteredHashMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>;
 
 /// Unified cache entry for all ledger entry types.
-/// 
+///
 /// This enum provides a uniform representation for cached ledger entries:
 /// - `ContractData`: Stores the value as `Val` (host value) with its TTL. The `Val` form
 ///   avoids repeated ScVal<->Val conversions on each read/write from contract code.
 /// - `Entry`: Stores other entry types (ContractCode, Account, Trustline) as a RefCell
 ///   for in-place mutation, with optional live_until for ContractCode entries.
-/// 
+///
 /// `None` in the containing `Option<CachedEntry>` represents a deleted or non-existent entry.
 #[derive(Clone)]
 pub enum CachedEntry {
@@ -75,12 +75,10 @@ impl CachedEntry {
     /// Reconstructs a LedgerEntry from this CachedEntry given the key.
     /// For Entry variant, clones the inner entry.
     /// For ContractData variant, builds a new LedgerEntry from the key and value.
-    pub fn to_ledger_entry(
-        &self,
-        key: &LedgerKey,
-        host: &Host,
-    ) -> Result<LedgerEntry, HostError> {
-        use crate::xdr::{ContractDataEntry, LedgerEntryData, LedgerEntryExt, LedgerKeyContractData};
+    pub fn to_ledger_entry(&self, key: &LedgerKey, host: &Host) -> Result<LedgerEntry, HostError> {
+        use crate::xdr::{
+            ContractDataEntry, LedgerEntryData, LedgerEntryExt, LedgerKeyContractData,
+        };
         match self {
             CachedEntry::Entry(entry, _) => Ok(entry.borrow().clone()),
             CachedEntry::ContractData(val, _) => {
@@ -469,7 +467,8 @@ impl Storage {
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<(Rc<RefCell<LedgerEntry>>, Option<u32>), HostError> {
-        let cached = self.try_get_cached(key, host, key_val)?
+        let cached = self
+            .try_get_cached(key, host, key_val)?
             .ok_or_else(|| (ScErrorType::Storage, ScErrorCode::MissingValue).into())
             .map_err(|e: HostError| host.decorate_storage_error(e, key.as_ref(), key_val))?;
 
@@ -690,7 +689,9 @@ impl Storage {
         let cached = match val {
             Some((entry, live_until)) => {
                 Self::check_supported_ledger_entry_type(&entry)?;
-                Some(CachedEntry::from_entry_with_live_until(&entry, live_until, host)?)
+                Some(CachedEntry::from_entry_with_live_until(
+                    &entry, live_until, host,
+                )?)
             }
             None => None,
         };
@@ -871,18 +872,13 @@ impl Storage {
             // Get the current cached entry and update its live_until
             let cached = self.get_cached(&key, host, key_val)?;
             let updated_cached = match cached {
-                CachedEntry::ContractData(val, _) => {
-                    CachedEntry::ContractData(val, new_live_until)
-                }
+                CachedEntry::ContractData(val, _) => CachedEntry::ContractData(val, new_live_until),
                 CachedEntry::Entry(entry_rc, _) => {
                     CachedEntry::Entry(entry_rc, Some(new_live_until))
                 }
             };
-            self.map.insert(
-                key,
-                Some(updated_cached),
-                host.budget_ref(),
-            )?;
+            self.map
+                .insert(key, Some(updated_cached), host.budget_ref())?;
         }
         Ok(())
     }
@@ -947,16 +943,13 @@ impl Storage {
                 self.footprint.record_access(key, ty, host.budget_ref())?;
                 // In recording mode we treat the map as a cache
                 // that misses read-through to the underlying src.
-                if !self
-                    .map
-                    .contains_key(key, host.budget_ref())?
-                {
+                if !self.map.contains_key(key, host.budget_ref())? {
                     // Get from snapshot and convert to CachedEntry
                     let value = src.get(&key)?;
                     let cached = match value {
-                        Some((entry, live_until)) => {
-                            Some(CachedEntry::from_entry_with_live_until(&entry, live_until, host)?)
-                        }
+                        Some((entry, live_until)) => Some(CachedEntry::from_entry_with_live_until(
+                            &entry, live_until, host,
+                        )?),
                         None => None,
                     };
                     self.map.insert(key.clone(), cached, host.budget_ref())?;

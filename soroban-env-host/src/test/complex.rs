@@ -51,10 +51,8 @@ fn run_complex() -> Result<(), HostError> {
 
     // Run 2: enforce preflight footprint, with empty map -- contract should only write.
     {
-        let store = Storage::with_enforcing_footprint_and_map(
-            Footprint::default(),
-            StorageMap::default(),
-        );
+        let store =
+            Storage::with_enforcing_footprint_and_map(Footprint::default(), StorageMap::default());
         let host = Host::with_storage_and_budget(store, Budget::default());
         host.set_ledger_info(info)?;
         let host = ObservedHost::new("soroban_env_host::test::complex::run_complex_2", host);

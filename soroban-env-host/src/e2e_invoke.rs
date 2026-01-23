@@ -5,6 +5,9 @@
 use std::{cmp::max, rc::Rc};
 
 #[cfg(any(test, feature = "recording_mode"))]
+use crate::storage::{SnapshotSource, StorageMap};
+use crate::vm::wasm_module_memory_cost;
+#[cfg(any(test, feature = "recording_mode"))]
 use crate::{
     auth::RecordedAuthPayload,
     storage::is_persistent_key,
@@ -34,9 +37,6 @@ use crate::{
     DiagnosticLevel, Error, Host, HostError, LedgerInfo, MeteredOrdMap,
 };
 use crate::{ledger_info::get_key_durability, ModuleCache};
-use crate::vm::wasm_module_memory_cost;
-#[cfg(any(test, feature = "recording_mode"))]
-use crate::storage::{SnapshotSource, StorageMap};
 #[cfg(any(test, feature = "recording_mode"))]
 use sha2::{Digest, Sha256};
 
@@ -224,27 +224,26 @@ fn get_ledger_changes(
     for (key, access_type) in footprint_map.iter(budget)? {
         // Look up the final entry from final_entries map
         let final_entry_opt = final_entries.get(key, budget)?;
-        
+
         let mut entry_change = LedgerEntryChange::default();
         metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
         let durability = get_key_durability(key);
 
         // Extract entry and live_until from final LedgerEntryMap
-        let entry_with_live_until_ledger: Option<EntryWithLiveUntil> =
-            match final_entry_opt {
-                Some(Some(entry_with_live_until)) => Some(entry_with_live_until.clone()),
-                Some(None) => None,
-                None => {
-                    // Key in footprint but not in entries map. This can happen in
-                    // recording mode when a try_call accesses a non-existent entry
-                    // and fails gracefully - the storage map gets rolled back but
-                    // the access is still recorded in the footprint.
-                    // Create a minimal entry change and continue.
-                    entry_change.read_only = matches!(*access_type, AccessType::ReadOnly);
-                    changes.push(entry_change);
-                    continue;
-                }
-            };
+        let entry_with_live_until_ledger: Option<EntryWithLiveUntil> = match final_entry_opt {
+            Some(Some(entry_with_live_until)) => Some(entry_with_live_until.clone()),
+            Some(None) => None,
+            None => {
+                // Key in footprint but not in entries map. This can happen in
+                // recording mode when a try_call accesses a non-existent entry
+                // and fails gracefully - the storage map gets rolled back but
+                // the access is still recorded in the footprint.
+                // Create a minimal entry change and continue.
+                entry_change.read_only = matches!(*access_type, AccessType::ReadOnly);
+                changes.push(entry_change);
+                continue;
+            }
+        };
 
         if let Some(durability) = durability {
             let key_hash = match init_ttl_entries.get::<Rc<LedgerKey>>(key, budget)? {
@@ -327,7 +326,6 @@ fn get_ledger_changes(
     }
     Ok(changes)
 }
-
 
 /// Extracts the rent-related changes from the provided ledger changes.
 ///
@@ -1115,9 +1113,11 @@ impl Host {
         let mut ttl_map = TtlEntryMap::new();
 
         if encoded_ledger_entries.len() != encoded_ttl_entries.len() {
-            return Err(
-                Error::from_type_and_code(ScErrorType::Storage, ScErrorCode::InternalError).into(),
-            );
+            return Err(Error::from_type_and_code(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+            )
+            .into());
         }
 
         let mut storage = self.try_borrow_storage_mut()?;
@@ -1180,7 +1180,11 @@ impl Host {
                 .into());
             }
 
-            if !storage.footprint.0.contains_key::<LedgerKey>(&key, budget)? {
+            if !storage
+                .footprint
+                .0
+                .contains_key::<LedgerKey>(&key, budget)?
+            {
                 return Err(Error::from_type_and_code(
                     ScErrorType::Storage,
                     ScErrorCode::InternalError,
@@ -1201,12 +1205,8 @@ impl Host {
         }
 
         // Collect footprint keys first to avoid borrow issues
-        let footprint_keys: Vec<Rc<LedgerKey>> = storage
-            .footprint
-            .0
-            .keys(budget)?
-            .cloned()
-            .collect();
+        let footprint_keys: Vec<Rc<LedgerKey>> =
+            storage.footprint.0.keys(budget)?.cloned().collect();
 
         // Add non-existing entries from the footprint to storage and init_entries.
         for k in footprint_keys {
@@ -1219,4 +1219,3 @@ impl Host {
         Ok(ttl_map)
     }
 }
-

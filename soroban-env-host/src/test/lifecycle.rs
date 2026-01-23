@@ -1986,8 +1986,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2498373,
-                            mem_bytes: 5941465,
+                            instructions: 2499521,
+                            mem_bytes: 5941503,
                             disk_read_entries: 0,
                             memory_read_entries: 8,
                             write_entries: 3,
@@ -2067,8 +2067,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 573275,
-                                    mem_bytes: 1174552,
+                                    instructions: 574423,
+                                    mem_bytes: 1174590,
                                     disk_read_entries: 0,
                                     memory_read_entries: 0,
                                     write_entries: 0,

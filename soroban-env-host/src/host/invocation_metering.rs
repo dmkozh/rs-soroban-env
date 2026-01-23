@@ -474,7 +474,9 @@ impl InvocationResources {
 
                                     match &entry.data {
                                         LedgerEntryData::ContractData(_) => {
-                                            if entry_size > limits.max_contract_data_entry_size_bytes {
+                                            if entry_size
+                                                > limits.max_contract_data_entry_size_bytes
+                                            {
                                                 exceeded.push(format!(
                                                     "contract data entry with key '{:?}' size: {} > {}",
                                                     key.as_ref(),
@@ -484,7 +486,9 @@ impl InvocationResources {
                                             }
                                         }
                                         LedgerEntryData::ContractCode(_) => {
-                                            if entry_size > limits.max_contract_code_entry_size_bytes {
+                                            if entry_size
+                                                > limits.max_contract_code_entry_size_bytes
+                                            {
                                                 exceeded.push(format!(
                                                     "contract code entry with key '{:?}' size: {} > {}",
                                                     key.as_ref(),
@@ -1237,8 +1241,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 328161,
-                mem_bytes: 1134535,
+                instructions: 328735,
+                mem_bytes: 1134556,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1289,8 +1293,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 328168,
-                mem_bytes: 1134535,
+                instructions: 328742,
+                mem_bytes: 1134556,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1315,8 +1319,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 334739,
-                mem_bytes: 1134599,
+                instructions: 335313,
+                mem_bytes: 1134620,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1341,8 +1345,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 334451,
-                mem_bytes: 1134599,
+                instructions: 335025,
+                mem_bytes: 1134620,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1400,8 +1404,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 332328,
-                mem_bytes: 1134642,
+                instructions: 332902,
+                mem_bytes: 1134663,
                 disk_read_entries: 2,
                 memory_read_entries: 1,
                 write_entries: 2,
@@ -1432,8 +1436,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 334705,
-                mem_bytes: 1134733,
+                instructions: 335279,
+                mem_bytes: 1134754,
                 disk_read_entries: 3,
                 memory_read_entries: 0,
                 write_entries: 3,

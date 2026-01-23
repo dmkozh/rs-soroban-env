@@ -182,14 +182,12 @@ impl StellarAssetContractTest {
 
     fn update_account_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
         self.host
-            .modify_ledger_entry(key, |entry| {
-                match &mut entry.data {
-                    LedgerEntryData::Account(ref mut account) => {
-                        account.flags = new_flags;
-                        Ok(())
-                    }
-                    _ => unreachable!(),
+            .modify_ledger_entry(key, |entry| match &mut entry.data {
+                LedgerEntryData::Account(ref mut account) => {
+                    account.flags = new_flags;
+                    Ok(())
                 }
+                _ => unreachable!(),
             })
             .unwrap();
     }
@@ -254,14 +252,12 @@ impl StellarAssetContractTest {
 
     fn update_trustline_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
         self.host
-            .modify_ledger_entry(key, |entry| {
-                match &mut entry.data {
-                    LedgerEntryData::Trustline(ref mut trustline) => {
-                        trustline.flags = new_flags;
-                        Ok(())
-                    }
-                    _ => unreachable!(),
+            .modify_ledger_entry(key, |entry| match &mut entry.data {
+                LedgerEntryData::Trustline(ref mut trustline) => {
+                    trustline.flags = new_flags;
+                    Ok(())
                 }
+                _ => unreachable!(),
             })
             .unwrap();
     }
@@ -3450,8 +3446,8 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 871880,
-                mem_bytes: 1213163,
+                instructions: 872565,
+                mem_bytes: 1213184,
                 disk_read_entries: 1,
                 memory_read_entries: 5,
                 write_entries: 2,
@@ -3476,8 +3472,8 @@ fn test_custom_account_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 730278,
-                        mem_bytes: 1196948,
+                        instructions: 730963,
+                        mem_bytes: 1196969,
                         disk_read_entries: 0,
                         memory_read_entries: 3,
                         write_entries: 0,
