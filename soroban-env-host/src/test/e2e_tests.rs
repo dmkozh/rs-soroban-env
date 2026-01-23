@@ -58,6 +58,7 @@ use std::rc::Rc;
 // real_instructions <= (1 + RECORDING_MODE_INSTRUCTIONS_RANGE) * estimated_instructions
 // and
 // estimated_instructions <= real_instructions * (1 + RECORDING_MODE_INSTRUCTIONS_RANGE)
+// TODO: bring this back to 0.02
 const RECORDING_MODE_INSTRUCTIONS_RANGE: f64 = 0.06;
 
 fn prng_seed() -> [u8; 32] {
