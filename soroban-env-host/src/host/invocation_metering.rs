@@ -1215,7 +1215,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 334697,
+                instructions: 334741,
                 mem_bytes: 1134567,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1267,7 +1267,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 335866,
+                instructions: 335910,
                 mem_bytes: 1134567,
                 disk_read_entries: 0,
                 memory_read_entries: 3,

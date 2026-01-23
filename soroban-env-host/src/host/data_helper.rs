@@ -672,9 +672,11 @@ impl Host {
             // We need to clone new_entry_rc before moving into closure
             let entry_rc_for_cache = new_entry_rc.clone();
             self.try_with_mut_data_cache(|cache| {
-                let _ = cache.get_or_insert_with(key, budget, move || {
-                    Ok(Some(CachedEntry::Entry(entry_rc_for_cache, live_until)))
-                })?;
+                let _ = cache.upsert(
+                    &key,
+                    Some(CachedEntry::Entry(entry_rc_for_cache, live_until)),
+                    budget,
+                )?;
                 Ok(())
             })?;
 

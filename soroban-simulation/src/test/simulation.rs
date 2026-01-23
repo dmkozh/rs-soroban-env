@@ -1301,7 +1301,7 @@ fn test_simulate_successful_sac_call() {
             },
         },]
     );
-    expect!["4288389"].assert_eq(
+    expect!["4291421"].assert_eq(
         &res.transaction_data
             .as_ref()
             .unwrap()
@@ -1325,7 +1325,7 @@ fn test_simulate_successful_sac_call() {
             .write_bytes
             .to_string(),
     );
-    expect!["53824"].assert_eq(
+    expect!["53827"].assert_eq(
         &res.transaction_data
             .as_ref()
             .unwrap()
