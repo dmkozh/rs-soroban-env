@@ -914,7 +914,7 @@ mod cap_54_55_56 {
         }));
         let mut storage = host.try_borrow_storage_mut()?;
         let (entry, live_until_ledger) =
-            storage.get_with_live_until_ledger(&code_key, host, None)?;
+            storage.get_for_ledger_changes(&code_key, host, None)?;
         let LedgerEntryData::ContractCode(code) = &entry.data else {
             panic!("expected ContractCode");
         };
@@ -1986,8 +1986,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2499521,
-                            mem_bytes: 5941503,
+                            instructions: 2498373,
+                            mem_bytes: 5941465,
                             disk_read_entries: 0,
                             memory_read_entries: 8,
                             write_entries: 3,
@@ -2067,8 +2067,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 574423,
-                                    mem_bytes: 1174590,
+                                    instructions: 573275,
+                                    mem_bytes: 1174552,
                                     disk_read_entries: 0,
                                     memory_read_entries: 0,
                                     write_entries: 0,

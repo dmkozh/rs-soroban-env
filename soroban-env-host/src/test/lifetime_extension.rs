@@ -66,7 +66,7 @@ mod separate_instance_code_extension {
         let entry_with_live_until = host
             .try_borrow_storage_mut()
             .unwrap()
-            .get_with_live_until_ledger(
+            .get_for_ledger_changes(
                 &host.contract_instance_ledger_key(&contract).unwrap(),
                 &host,
                 None,
@@ -91,7 +91,7 @@ mod separate_instance_code_extension {
         let entry_with_live_until = host
             .try_borrow_storage_mut()
             .unwrap()
-            .get_with_live_until_ledger(&host.contract_code_ledger_key(&code).unwrap(), &host, None)
+            .get_for_ledger_changes(&host.contract_code_ledger_key(&code).unwrap(), &host, None)
             .unwrap();
 
         assert_eq!(entry_with_live_until.1, Some(9090));
@@ -112,7 +112,7 @@ mod separate_instance_code_extension {
         let code_entry_with_live_until = host
             .try_borrow_storage_mut()
             .unwrap()
-            .get_with_live_until_ledger(&host.contract_code_ledger_key(&code).unwrap(), &host, None)
+            .get_for_ledger_changes(&host.contract_code_ledger_key(&code).unwrap(), &host, None)
             .unwrap();
 
         assert_eq!(code_entry_with_live_until.1, Some(9090));
@@ -120,7 +120,7 @@ mod separate_instance_code_extension {
         let instance_entry_with_live_until = host
             .try_borrow_storage_mut()
             .unwrap()
-            .get_with_live_until_ledger(
+            .get_for_ledger_changes(
                 &host.contract_instance_ledger_key(&contract).unwrap(),
                 &host,
                 None,

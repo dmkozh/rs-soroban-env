@@ -3642,16 +3642,25 @@ impl VmCallerEnv for Host {
             }
             ScAddress::Contract(id) => {
                 let storage_key = self.contract_instance_ledger_key(&id)?;
-                let maybe_instance_entry =
-                    self.try_borrow_storage_mut()?
-                        .try_get_full(&storage_key, self, None)?;
-                if let Some((instance_entry, _ttl)) = maybe_instance_entry {
-                    let instance =
-                        self.extract_contract_instance_from_ledger_entry(&instance_entry)?;
-                    Some(AddressExecutable::from_contract_executable_xdr(
-                        &self,
-                        &instance.executable,
-                    )?)
+                // Use try_get_cached to avoid EntryWithLiveUntil conversion
+                let maybe_cached = self.try_borrow_storage_mut()?
+                    .try_get_cached(&storage_key, self, None)?;
+                if let Some(cached) = maybe_cached {
+                    if let Some(entry_rc) = cached.get_entry() {
+                        let instance =
+                            self.extract_contract_instance_from_ledger_entry(&entry_rc.borrow())?;
+                        Some(AddressExecutable::from_contract_executable_xdr(
+                            &self,
+                            &instance.executable,
+                        )?)
+                    } else {
+                        return Err(self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                            "expected Entry variant for contract instance",
+                            &[],
+                        ));
+                    }
                 } else {
                     None
                 }
@@ -3784,9 +3793,9 @@ impl Host {
     ) -> Result<u32, HostError> {
         let contract_id = self.contract_id_from_address(contract)?;
         let key = self.contract_instance_ledger_key(&contract_id)?;
-        let (_, live_until) = self
+        let live_until = self
             .try_borrow_storage_mut()?
-            .get_with_live_until_ledger(&key, self, None)?;
+            .get_live_until(&key, self, None)?;
         live_until.ok_or_else(|| {
             self.err(
                 ScErrorType::Storage,
@@ -3811,9 +3820,9 @@ impl Host {
         {
             ContractExecutable::Wasm(wasm_hash) => {
                 let key = self.contract_code_ledger_key(&wasm_hash)?;
-                let (_, live_until) = self
+                let live_until = self
                     .try_borrow_storage_mut()?
-                    .get_with_live_until_ledger(&key, self, None)?;
+                    .get_live_until(&key, self, None)?;
                 live_until.ok_or_else(|| {
                     self.err(
                         ScErrorType::Storage,
@@ -3854,7 +3863,7 @@ impl Host {
                 ));
             }
         };
-        let (_, live_until) = self.try_borrow_storage_mut()?.get_with_live_until_ledger(
+        let live_until = self.try_borrow_storage_mut()?.get_live_until(
             &ledger_key,
             self,
             Some(key),

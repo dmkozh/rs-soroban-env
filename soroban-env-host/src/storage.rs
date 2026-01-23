@@ -72,6 +72,24 @@ impl CachedEntry {
         }
     }
 
+    /// Returns the contract data value and live_until if this is a ContractData variant.
+    /// Returns None for Entry variant.
+    pub fn try_get_contract_data_val(&self) -> Option<(Val, u32)> {
+        match self {
+            CachedEntry::ContractData(val, live_until) => Some((*val, *live_until)),
+            CachedEntry::Entry(_, _) => None,
+        }
+    }
+
+    /// Returns the entry reference and live_until if this is an Entry variant.
+    /// Returns None for ContractData variant.
+    pub fn try_get_entry_rc(&self) -> Option<(Rc<RefCell<LedgerEntry>>, Option<u32>)> {
+        match self {
+            CachedEntry::ContractData(_, _) => None,
+            CachedEntry::Entry(entry, live_until) => Some((Rc::clone(entry), *live_until)),
+        }
+    }
+
     /// Reconstructs a LedgerEntry from this CachedEntry given the key.
     /// For Entry variant, clones the inner entry.
     /// For ContractData variant, builds a new LedgerEntry from the key and value.
@@ -573,19 +591,6 @@ impl Storage {
             .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
     }
 
-    // Like `get`, but distinguishes between missing values (return `Ok(None)`)
-    // and out-of-footprint values or errors (`Err(...)`).
-    #[allow(dead_code)]
-    pub(crate) fn try_get(
-        &mut self,
-        key: &Rc<LedgerKey>,
-        host: &Host,
-        key_val: Option<Val>,
-    ) -> Result<Option<Rc<LedgerEntry>>, HostError> {
-        self.try_get_full(key, host, key_val)
-            .map(|ok| ok.map(|pair| pair.0))
-    }
-
     /// Attempts to retrieve the [LedgerEntry] associated with a given
     /// [LedgerKey] and its live until ledger (if applicable) in the [Storage],
     /// returning an error if the key is not found.
@@ -600,7 +605,12 @@ impl Storage {
     ///
     /// In [FootprintMode::Enforcing] mode, succeeds only if the read
     /// [LedgerKey] has been declared in the [Footprint].
-    pub(crate) fn get_with_live_until_ledger(
+    ///
+    /// Note: This method should only be used at the ledger changes boundary.
+    /// For internal storage operations, prefer `get_cached` or `try_get_cached`.
+    #[cfg(any(test, feature = "testutils"))]
+    #[allow(dead_code)]
+    pub(crate) fn get_for_ledger_changes(
         &mut self,
         key: &Rc<LedgerKey>,
         host: &Host,
@@ -613,10 +623,23 @@ impl Storage {
             .map_err(|e| host.decorate_storage_error(e, key.as_ref(), key_val))
     }
 
+    /// Returns the live_until ledger for an entry, or None if the entry doesn't exist.
+    /// Returns an error for out-of-footprint access or other storage errors.
+    /// This is more efficient than get_for_ledger_changes when only the TTL is needed.
+    #[cfg(any(test, feature = "testutils"))]
+    pub(crate) fn get_live_until(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        host: &Host,
+        key_val: Option<Val>,
+    ) -> Result<Option<u32>, HostError> {
+        self.try_get_cached(key, host, key_val)
+            .map(|opt| opt.and_then(|cached| cached.live_until()))
+    }
+
     /// Records or enforces a write access for the given key without actually
     /// modifying the storage map. This is used by the data cache to handle
     /// footprint tracking when writes are deferred.
-    #[allow(dead_code)]
     pub(crate) fn record_write_access(
         &mut self,
         key: &Rc<LedgerKey>,
@@ -766,7 +789,7 @@ impl Storage {
         key_val: Option<Val>,
     ) -> Result<bool, HostError> {
         let _span = tracy_span!("storage has");
-        Ok(self.try_get_full(key, host, key_val)?.is_some())
+        Ok(self.try_get_cached(key, host, key_val)?.is_some())
     }
 
     /// Extends `key` to live `extend_to` ledgers from now (not counting the
@@ -806,9 +829,9 @@ impl Storage {
         self.handle_maybe_expired_entry(&key, host)?;
 
         // Extending deleted/non-existing/out-of-footprint entries will result in
-        // an error.
-        let (_entry, old_live_until) = self.get_with_live_until_ledger(&key, &host, key_val)?;
-        let old_live_until = old_live_until.ok_or_else(|| {
+        // an error. Use get_cached to avoid unnecessary EntryWithLiveUntil conversion.
+        let cached = self.get_cached(&key, &host, key_val)?;
+        let old_live_until = cached.live_until().ok_or_else(|| {
             host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,

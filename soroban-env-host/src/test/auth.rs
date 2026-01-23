@@ -301,12 +301,9 @@ impl AuthTest {
             .unwrap();
         self.host
             .with_mut_storage(|storage| {
-                if !storage.has(&nonce_key, &self.host, None)? {
-                    return Ok(None);
-                }
-                let (_, live_until_ledger) =
-                    storage.get_with_live_until_ledger(&nonce_key, &self.host, None)?;
-                Ok(live_until_ledger)
+                // Use try_get_cached to avoid redundant has+get pattern
+                let cached = storage.try_get_cached(&nonce_key, &self.host, None)?;
+                Ok(cached.and_then(|c| c.live_until()))
             })
             .unwrap()
     }
@@ -2419,8 +2416,8 @@ fn test_require_auth_within_check_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 1490693,
-                mem_bytes: 3616281,
+                instructions: 1488343,
+                mem_bytes: 3616079,
                 disk_read_entries: 1,
                 memory_read_entries: 10,
                 write_entries: 3,
@@ -2445,8 +2442,8 @@ fn test_require_auth_within_check_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1085854,
-                        mem_bytes: 2400988,
+                        instructions: 1083504,
+                        mem_bytes: 2400786,
                         disk_read_entries: 1,
                         memory_read_entries: 7,
                         write_entries: 0,
@@ -2471,8 +2468,8 @@ fn test_require_auth_within_check_auth() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 752586,
-                                mem_bytes: 1200356,
+                                instructions: 751411,
+                                mem_bytes: 1200255,
                                 disk_read_entries: 1,
                                 memory_read_entries: 3,
                                 write_entries: 0,

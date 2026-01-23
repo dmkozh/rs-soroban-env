@@ -2107,7 +2107,7 @@ fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
             wasm_entry_change.clone()
         ]
     );
-    expect!["938767"].assert_eq(&extend_res.resources.instructions.to_string());
+    expect!["938089"].assert_eq(&extend_res.resources.instructions.to_string());
     assert_eq!(
         extend_res.resources,
         SorobanResources {
@@ -2407,7 +2407,7 @@ fn test_auto_restore_with_extension_in_recording_mode() {
         ]
     );
 
-    expect!["1602996"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1602318"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -2550,7 +2550,7 @@ fn test_auto_restore_with_overwrite_in_recording_mode() {
         ]
     );
 
-    expect!["956748"].assert_eq(&res.resources.instructions.to_string());
+    expect!["951525"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {

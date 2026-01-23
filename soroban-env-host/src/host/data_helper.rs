@@ -727,6 +727,12 @@ impl Host {
     ) -> Result<(), HostError> {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
+        // Record/enforce footprint access. This is needed even though we're
+        // writing to cache because:
+        // 1. In recording mode, we need to record that this key will be written
+        // 2. In enforcing mode, we need to verify the key is in the footprint
+        self.try_borrow_storage_mut()?
+            .record_write_access(&key, self, Some(k))?;
 
         // Check if we have a frame context (for caching)
         let has_frame = self.try_with_data_cache(|_| Ok(()))?.is_some();
@@ -735,13 +741,6 @@ impl Host {
             // No frame context - use direct storage write (legacy behavior)
             return self.put_contract_data_into_storage_direct(k, v, t);
         }
-
-        // Record/enforce footprint access. This is needed even though we're
-        // writing to cache because:
-        // 1. In recording mode, we need to record that this key will be written
-        // 2. In enforcing mode, we need to verify the key is in the footprint
-        self.try_borrow_storage_mut()?
-            .record_write_access(&key, self, Some(k))?;
 
         // Determine the live_until_ledger:
         // - If entry exists in cache, preserve its live_until_ledger
@@ -762,14 +761,20 @@ impl Host {
         let live_until_ledger = match live_until_from_cache {
             Some(lul) => lul,
             None => {
-                // Check storage for existing entry's live_until
-                if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
-                    let (_, lul) = self.try_borrow_storage_mut()?.get_with_live_until_ledger(
-                        &key,
-                        self,
-                        Some(k),
-                    )?;
-                    lul.unwrap_or(self.get_min_live_until_ledger(durability)?)
+                // Check storage for existing entry's live_until using try_get_cached
+                // to avoid redundant has+get pattern
+                if let Some(cached) =
+                    self.try_borrow_storage_mut()?
+                        .try_get_cached(&key, self, Some(k))?
+                {
+                    cached.live_until().ok_or_else(|| {
+                        self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                            "expected live_until for existing contract data",
+                            &[],
+                        )
+                    })?
                 } else {
                     // New entry - use minimum live_until
                     self.get_min_live_until_ledger(durability)?
@@ -798,28 +803,39 @@ impl Host {
     ) -> Result<(), HostError> {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
-        if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
-            let (current, live_until_ledger) = self
-                .try_borrow_storage_mut()?
-                .get_with_live_until_ledger(&key, self, Some(k))?;
-            let mut current = (*current).metered_clone(self)?;
-            match current.data {
-                LedgerEntryData::ContractData(ref mut entry) => {
-                    entry.val = self.from_host_val(v)?;
-                }
-                _ => {
-                    return Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "expected DataEntry",
-                        &[],
-                    ));
+        if let Some(cached) = self
+            .try_borrow_storage_mut()?
+            .try_get_cached(&key, self, Some(k))?
+        {
+            // Entry exists - update it
+            let (entry_rc, live_until_ledger) = cached.try_get_entry_rc().ok_or_else(|| {
+                self.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "expected Entry variant for contract data update",
+                    &[],
+                )
+            })?;
+            {
+                let mut entry = entry_rc.borrow_mut();
+                match entry.data {
+                    LedgerEntryData::ContractData(ref mut data) => {
+                        data.val = self.from_host_val(v)?;
+                    }
+                    _ => {
+                        return Err(self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                            "expected DataEntry",
+                            &[],
+                        ));
+                    }
                 }
             }
-            self.try_borrow_storage_mut()?.put(
+            // Entry was modified in place via Rc<RefCell>, update the storage map
+            self.try_borrow_storage_mut()?.put_cached(
                 &key,
-                &Rc::metered_new(current, self)?,
-                live_until_ledger,
+                Some(CachedEntry::Entry(entry_rc, live_until_ledger)),
                 self,
                 Some(k),
             )?;
@@ -840,6 +856,56 @@ impl Host {
             )?;
         }
         Ok(())
+    }
+
+    /// Tries to get contract data, returning None if not found.
+    /// This is more efficient than has+get as it avoids a redundant lookup.
+    /// Checks the cache chain (current frame → parent frame if same contract → global storage).
+    pub(crate) fn try_get_contract_data_from_ledger(
+        &self,
+        k: Val,
+        t: StorageType,
+    ) -> Result<Option<Val>, HostError> {
+        let durability: ContractDataDurability = t.try_into()?;
+        let key = self.storage_key_from_val(k, durability)?;
+
+        // Check cache chain: current frame → parent frame (if same contract)
+        if let Some(entry) = self.lookup_in_cache_chain(&key)? {
+            match entry {
+                Some(CachedEntry::ContractData(val, _)) => {
+                    // Found in cache with a value - Val is already in host format
+                    return Ok(Some(val));
+                }
+                Some(CachedEntry::Entry(..)) => {
+                    // Wrong type in cache - should not happen for contract data
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "unexpected entry type in cache",
+                        &[],
+                    ));
+                }
+                None => {
+                    // Entry was deleted in cache
+                    return Ok(None);
+                }
+            }
+        }
+
+        // Cache miss - read from storage using try_get_cached
+        let cached = self
+            .try_borrow_storage_mut()?
+            .try_get_cached(&key, self, Some(k))?;
+        match cached {
+            Some(CachedEntry::ContractData(val, _)) => Ok(Some(val)),
+            Some(CachedEntry::Entry(_, _)) => Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "expected contract data ledger entry",
+                &[],
+            )),
+            None => Ok(None),
+        }
     }
 
     /// Gets contract data, checking the cache chain (current frame → parent frame

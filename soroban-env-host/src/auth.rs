@@ -2167,25 +2167,30 @@ impl AccountAuthorizationTracker {
             }
             ScAddress::Contract(contract_id) => {
                 let instance_key = host.contract_instance_ledger_key(&contract_id)?;
-                let entry = host
+                let cached = host
                     .try_borrow_storage_mut()?
-                    .try_get(&instance_key, host, None)?;
+                    .try_get_cached(&instance_key, host, None)?;
                 // In test scenarios we often may not have any actual instance, which is fine most
                 // of the time, so we don't return any errors.
                 // In simulation scenarios the instance will likely be there, and when it's
                 // not, we still make our best effort and include at least the necessary instance key
                 // into the footprint.
-                let instance = if let Some(entry) = entry {
-                    match &entry.data {
-                        LedgerEntryData::ContractData(e) => match &e.val {
-                            ScVal::ContractInstance(instance) => instance.metered_clone(host)?,
+                let instance = if let Some(entry) = cached {
+                    if let Some(entry_rc) = entry.get_entry() {
+                        let borrowed = entry_rc.borrow();
+                        match &borrowed.data {
+                            LedgerEntryData::ContractData(e) => match &e.val {
+                                ScVal::ContractInstance(instance) => instance.metered_clone(host)?,
+                                _ => {
+                                    return Ok(());
+                                }
+                            },
                             _ => {
                                 return Ok(());
                             }
-                        },
-                        _ => {
-                            return Ok(());
                         }
+                    } else {
+                        return Ok(());
                     }
                 } else {
                     return Ok(());
@@ -2196,7 +2201,7 @@ impl AccountAuthorizationTracker {
                         let wasm_key = host.contract_code_ledger_key(wasm_hash)?;
                         let _ = host
                             .try_borrow_storage_mut()?
-                            .try_get(&wasm_key, host, None)?;
+                            .try_get_cached(&wasm_key, host, None)?;
                     }
                     ContractExecutable::StellarAsset => (),
                 }

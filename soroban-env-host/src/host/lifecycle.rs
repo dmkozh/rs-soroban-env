@@ -260,19 +260,26 @@ impl Host {
 
         let mut storage = self.try_borrow_storage_mut()?;
 
-        // We will definitely put the contract in the ledger if it isn't there yet.
+        // Check if contract already exists and if we need to update it.
+        // Use try_get_cached to avoid redundant has+get pattern.
+        let existing = storage.try_get_cached(&code_key, self, None)?;
+        
         #[allow(unused_mut)]
-        let mut should_put_contract = !storage.has(&code_key, self, None)?;
+        let mut should_put_contract = existing.is_none();
 
         // We may also, in the cache-supporting protocol, overwrite the contract if its ext field changed.
         if !should_put_contract {
-            let entry = storage.get(&code_key, self, None)?;
-            if let crate::xdr::LedgerEntryData::ContractCode(ContractCodeEntry {
-                ext: old_ext,
-                ..
-            }) = &entry.data
-            {
-                should_put_contract = *old_ext != ext;
+            if let Some(cached) = &existing {
+                if let Some(entry_rc) = cached.get_entry() {
+                    let entry = entry_rc.borrow();
+                    if let crate::xdr::LedgerEntryData::ContractCode(ContractCodeEntry {
+                        ext: old_ext,
+                        ..
+                    }) = &entry.data
+                    {
+                        should_put_contract = *old_ext != ext;
+                    }
+                }
             }
         }
 
