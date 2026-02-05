@@ -10,17 +10,17 @@ use crate::{
     },
     host::{frame::Context, Events},
     host_object::{HostObject, MuxedScAddress},
-    storage::AccessType,
+    storage::{AccessType, EntryTTLFrame, StorageEntry, StorageEntryFrame, StorageLedgerEntryData},
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeCostInputs, ContractCodeEntry,
         ContractCodeEntryV1, ContractDataDurability, ContractEvent, ContractExecutable, ContractId,
         ContractIdPreimage, CreateContractArgs, CreateContractArgsV2, Duration, ExtensionPoint,
-        Hash, Int128Parts, Int256Parts, InvokeContractArgs, LedgerEntry, LedgerEntryExt, LedgerKey,
-        LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyTrustLine, PublicKey, ScAddress, ScBytes,
-        ScContractInstance, ScError, ScMap, ScMapEntry, ScNonceKey, ScString, ScSymbol, ScVal,
-        ScVec, Signer, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
-        SorobanAuthorizedInvocation, StringM, TimePoint, TrustLineAsset, TrustLineEntry, TtlEntry,
-        UInt128Parts, UInt256Parts, Uint256, SCSYMBOL_LIMIT,
+        Hash, Int128Parts, Int256Parts, InvokeContractArgs, LedgerEntry, LedgerEntryExt,
+        LedgerFootprint, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyTrustLine,
+        PublicKey, ScAddress, ScBytes, ScContractInstance, ScError, ScMap, ScMapEntry, ScNonceKey,
+        ScString, ScSymbol, ScVal, ScVec, Signer, SorobanAuthorizationEntry,
+        SorobanAuthorizedFunction, SorobanAuthorizedInvocation, StringM, TimePoint, TrustLineAsset,
+        TrustLineEntry, TtlEntry, UInt128Parts, UInt256Parts, Uint256, SCSYMBOL_LIMIT,
     },
     AddressObject, Bool, BytesObject, DurationObject, DurationSmall, DurationVal, Error, HostError,
     I128Object, I128Small, I128Val, I256Object, I256Small, I256Val, I32Val, I64Object, I64Small,
@@ -115,10 +115,18 @@ impl_declared_size_type!(U256, 32);
 impl_declared_size_type!(I256, 32);
 impl_declared_size_type!(HostObject, 64);
 impl_declared_size_type!(HostError, 16);
-impl_declared_size_type!(Context, 512);
+impl_declared_size_type!(Context, 560);
 impl_declared_size_type!(Address, 16);
 
 impl_declared_size_type!(AccessType, 1);
+// StorageLedgerEntryData: discriminant (1) + max(Val(8), Rc(16)) = 1 + 16 = 17, round to 24
+impl_declared_size_type!(StorageLedgerEntryData, 24);
+// EntryTTLFrame: u32 (4) + u32 (4) = 8
+impl_declared_size_type!(EntryTTLFrame, 8);
+// StorageEntryFrame: u32 (4) + Option<StorageLedgerEntryData> (24 + 1 discriminant = 25) = 29, round to 32
+impl_declared_size_type!(StorageEntryFrame, 32);
+// StorageEntry: AccessType (1) + Vec<StorageEntryFrame> (24) + Vec<EntryTTLFrame> (24) = 49, round to 56
+impl_declared_size_type!(StorageEntry, 56);
 impl_declared_size_type!(InternalContractEvent, 40);
 impl_declared_size_type!(HostEvent, 136);
 impl_declared_size_type!(Events, 24);
@@ -172,6 +180,8 @@ impl_declared_size_type!(ContractCodeEntryV1, 40);
 impl_declared_size_type!(TtlEntry, 36);
 impl_declared_size_type!(LedgerKey, 120);
 impl_declared_size_type!(LedgerEntry, 256);
+// LedgerFootprint contains two Vec<LedgerKey>, each Vec is 24 bytes
+impl_declared_size_type!(LedgerFootprint, 48);
 impl_declared_size_type!(ContractEvent, 128);
 impl_declared_size_type!(ScBytes, 24);
 impl_declared_size_type!(ScString, 24);

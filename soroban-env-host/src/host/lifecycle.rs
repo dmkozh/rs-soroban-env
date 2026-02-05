@@ -25,19 +25,6 @@ impl Host {
         contract_executable: ContractExecutable,
     ) -> Result<(), HostError> {
         let storage_key = self.contract_instance_ledger_key(&contract_id)?;
-        if self
-            .try_borrow_storage_mut()?
-            .has(&storage_key, self, None)?
-        {
-            return Err(self.err(
-                ScErrorType::Storage,
-                ScErrorCode::ExistingValue,
-                "contract already exists",
-                &[self
-                    .add_host_object(self.scbytes_from_hash(&contract_id.0)?)?
-                    .into()],
-            ));
-        }
         // Make sure the contract code exists. Without this check it would be
         // possible to accidentally create a contract that never may be invoked
         // (just by providing a bad hash).
@@ -51,7 +38,7 @@ impl Host {
                 ));
             }
         }
-        self.store_contract_instance(Some(contract_executable), None, contract_id, &storage_key)?;
+        self.create_contract_instance(contract_executable, None, contract_id, &storage_key)?;
         Ok(())
     }
 
@@ -273,35 +260,39 @@ impl Host {
 
         let mut storage = self.try_borrow_storage_mut()?;
 
-        // We will definitely put the contract in the ledger if it isn't there yet.
-        #[allow(unused_mut)]
-        let mut should_put_contract = !storage.has(&code_key, self, None)?;
-
-        // We may also, in the cache-supporting protocol, overwrite the contract if its ext field changed.
-        if !should_put_contract {
-            let entry = storage.get(&code_key, self, None)?;
-            if let crate::xdr::LedgerEntryData::ContractCode(ContractCodeEntry {
-                ext: old_ext,
-                ..
-            }) = &entry.data
-            {
-                should_put_contract = *old_ext != ext;
+        // Check if contract already exists and if we need to update it.
+        // Use with_ledger_entry_rc to get the entry if it exists.
+        let should_put_contract = storage.with_ledger_entry_rc(&code_key, self, None, |opt| {
+            match opt {
+                None => Ok(true), // Entry doesn't exist, need to put
+                Some(entry_rc) => {
+                    let entry = entry_rc.borrow();
+                    if let crate::xdr::LedgerEntryData::ContractCode(ContractCodeEntry {
+                        ext: old_ext,
+                        ..
+                    }) = &entry.data
+                    {
+                        // Overwrite if ext field changed
+                        Ok(*old_ext != ext)
+                    } else {
+                        Ok(false)
+                    }
+                }
             }
-        }
+        })?;
 
         if should_put_contract {
+            use crate::storage::StorageLedgerEntryData;
             let data = ContractCodeEntry {
                 hash: Hash(hash_bytes),
                 ext,
                 code: wasm_bytes_m,
             };
-            storage.put(
-                &code_key,
-                &Host::new_contract_code(self, data)?,
-                Some(self.get_min_live_until_ledger(ContractDataDurability::Persistent)?),
-                self,
-                None,
-            )?;
+            let code_entry = Host::new_contract_code(self, data)?;
+            let live_until =
+                Some(self.get_min_live_until_ledger(ContractDataDurability::Persistent)?);
+            let entry_data = StorageLedgerEntryData::from_ledger_entry(&code_entry, self)?;
+            storage.put(&code_key, Some((entry_data, live_until)), self, None)?;
         }
         Ok(hash_obj)
     }
@@ -345,6 +336,18 @@ impl Host {
 
         let contract_id = self.contract_id_from_address(contract_address)?;
         let instance_key = self.contract_instance_ledger_key(&contract_id)?;
+        // Check if contract already exists - preserve test semantics with descriptive error
+        if self
+            .try_borrow_storage_mut()?
+            .has(&instance_key, self, None)?
+        {
+            return Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::ExistingValue,
+                "contract already exists",
+                &[],
+            ));
+        }
         let wasm_hash_obj = self.upload_contract_wasm(vec![])?;
         let wasm_hash = self.hash_from_bytesobj_input("wasm_hash", wasm_hash_obj)?;
         // Use the empty Wasm as an executable to a) mark that the contract
@@ -352,8 +355,8 @@ impl Host {
         // the same ledger entries as for 'real' contracts that consist of Wasm
         // entry and the instance entry, so that instance-related host functions
         // work properly.
-        self.store_contract_instance(
-            Some(ContractExecutable::Wasm(wasm_hash)),
+        self.create_contract_instance(
+            ContractExecutable::Wasm(wasm_hash),
             None,
             contract_id.clone(),
             &instance_key,

@@ -5,6 +5,9 @@
 use std::{cmp::max, rc::Rc};
 
 #[cfg(any(test, feature = "recording_mode"))]
+use crate::storage::SnapshotSource;
+use crate::vm::wasm_module_memory_cost;
+#[cfg(any(test, feature = "recording_mode"))]
 use crate::{
     auth::RecordedAuthPayload,
     storage::is_persistent_key,
@@ -21,7 +24,10 @@ use crate::{
         metered_xdr::{metered_from_xdr_with_budget, metered_write_xdr},
         TraceHook,
     },
-    storage::{AccessType, Footprint, FootprintMap, SnapshotSource, Storage, StorageMap},
+    storage::{
+        AccessType, EntryWithLiveUntil, LedgerEntryMap, Storage, StorageEntry,
+        StorageLedgerEntryData, StorageMap,
+    },
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
         LedgerEntry, LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey,
@@ -31,7 +37,6 @@ use crate::{
     DiagnosticLevel, Error, Host, HostError, LedgerInfo, MeteredOrdMap,
 };
 use crate::{ledger_info::get_key_durability, ModuleCache};
-use crate::{storage::EntryWithLiveUntil, vm::wasm_module_memory_cost};
 #[cfg(any(test, feature = "recording_mode"))]
 use sha2::{Digest, Sha256};
 
@@ -151,7 +156,7 @@ fn build_restored_key_set(
     let mut key_set = RestoredKeySet::default();
     for e in restored_rw_entry_indices {
         key_set = key_set.insert(
-            Rc::new(
+            Rc::metered_new(
                 rw_footprint
                     .get(*e as usize)
                     .ok_or_else(|| {
@@ -161,7 +166,8 @@ fn build_restored_key_set(
                         ))
                     })?
                     .metered_clone(budget)?,
-            ),
+                budget,
+            )?,
             (),
             budget,
         )?;
@@ -169,13 +175,37 @@ fn build_restored_key_set(
     Ok(Some(key_set))
 }
 
-/// Returns the difference between the `storage` and its initial snapshot as
+/// Builds a LedgerEntryMap from a SnapshotSource for the keys in the footprint.
+/// This is used by recording mode to build the initial entries for diffing.
+#[cfg(any(test, feature = "recording_mode"))]
+fn build_init_entries_from_snapshot(
+    budget: &Budget,
+    key_order: &[Rc<LedgerKey>],
+    snapshot: &dyn SnapshotSource,
+) -> Result<LedgerEntryMap, HostError> {
+    let mut init_entries = LedgerEntryMap::new();
+    for key in key_order {
+        let entry_with_live_until = snapshot.get(key)?;
+        init_entries.insert(Rc::clone(key), entry_with_live_until, budget)?;
+    }
+    Ok(init_entries)
+}
+
+/// Returns the difference between the final and initial ledger entries as
 /// `LedgerEntryChanges`.
-/// Returns an entry for every item in `storage` footprint.
+/// Returns an entry for every item in the storage map.
+///
+/// Both `init_entries` and `final_entries` are `LedgerEntryMap` which contains
+/// raw `LedgerEntry` values (no Val conversion needed).
+///
+/// The `key_order` parameter determines the iteration order for deterministic
+/// output ordering. The `storage_map` is used to look up access types.
 fn get_ledger_changes(
     budget: &Budget,
-    storage: &Storage,
-    init_storage_snapshot: &(impl SnapshotSource + ?Sized),
+    storage_map: &StorageMap,
+    key_order: &[Rc<LedgerKey>],
+    init_entries: &LedgerEntryMap,
+    final_entries: &LedgerEntryMap,
     init_ttl_entries: TtlEntryMap,
     min_live_until_ledger: u32,
     restored_keys: &Option<RestoredKeySet>,
@@ -183,9 +213,8 @@ fn get_ledger_changes(
 ) -> Result<Vec<LedgerEntryChange>, HostError> {
     // Skip allocation metering for this for the sake of simplicity - the
     // bounding factor here is XDR decoding which is metered.
-    let mut changes = Vec::with_capacity(storage.map.len());
+    let mut changes = Vec::with_capacity(key_order.len());
 
-    let footprint_map = &storage.footprint.0;
     // We return any invariant errors here as internal errors, as they would
     // typically mean inconsistency between storage and snapshot that shouldn't
     // happen in embedder environments, or simply fundamental invariant bugs.
@@ -195,10 +224,33 @@ fn get_ledger_changes(
             ScErrorCode::InternalError,
         ))
     };
-    for (key, entry_with_live_until_ledger) in storage.map.iter(budget)? {
+    // Iterate key_order to ensure consistent ordering of changes
+    for key in key_order {
+        // Look up access_type from storage map entry
+        let storage_entry = storage_map.get(key, budget)?.ok_or_else(internal_error)?;
+        let access_type = storage_entry.access_type;
+        // Look up the final entry from final_entries map
+        let final_entry_opt = final_entries.get(key, budget)?;
+
         let mut entry_change = LedgerEntryChange::default();
         metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
         let durability = get_key_durability(key);
+
+        // Extract entry and live_until from final LedgerEntryMap
+        let entry_with_live_until_ledger: Option<EntryWithLiveUntil> = match final_entry_opt {
+            Some(Some((entry, live_until))) => Some((Rc::clone(entry), *live_until)),
+            Some(None) => None,
+            None => {
+                // Key in storage map but not in entries map. This can happen in
+                // recording mode when a try_call accesses a non-existent entry
+                // and fails gracefully - the storage map gets rolled back but
+                // the access is still recorded.
+                // Create a minimal entry change and continue.
+                entry_change.read_only = matches!(access_type, AccessType::ReadOnly);
+                changes.push(entry_change);
+                continue;
+            }
+        };
 
         if let Some(durability) = durability {
             let key_hash = match init_ttl_entries.get::<Rc<LedgerKey>>(key, budget)? {
@@ -214,8 +266,13 @@ fn get_ledger_changes(
                 new_live_until_ledger: 0,
             });
         }
-        let entry_with_live_until = init_storage_snapshot.get(key)?;
-        if let Some((old_entry, old_live_until_ledger)) = entry_with_live_until {
+        // Get initial entry from init_entries map
+        let init_entry_with_live_until: Option<EntryWithLiveUntil> =
+            match init_entries.get(key, budget)? {
+                Some(Some((entry, live_until))) => Some((Rc::clone(entry), *live_until)),
+                Some(None) | None => None,
+            };
+        if let Some((old_entry, old_live_until_ledger)) = init_entry_with_live_until {
             let mut buf = vec![];
             metered_write_xdr(budget, old_entry.as_ref(), &mut buf)?;
 
@@ -237,7 +294,7 @@ fn get_ledger_changes(
                 }
             }
         }
-        if let Some((_, new_live_until_ledger)) = entry_with_live_until_ledger {
+        if let Some((_, new_live_until_ledger)) = &entry_with_live_until_ledger {
             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
                 // Never reduce the final live until ledger.
                 ttl_change.new_live_until_ledger = max(
@@ -246,14 +303,13 @@ fn get_ledger_changes(
                 );
             }
         }
-        let maybe_access_type: Option<AccessType> =
-            footprint_map.get::<Rc<LedgerKey>>(key, budget)?.copied();
-        match maybe_access_type {
-            Some(AccessType::ReadOnly) => {
+        // access_type comes from storage map entry
+        match access_type {
+            AccessType::ReadOnly => {
                 entry_change.read_only = true;
             }
-            Some(AccessType::ReadWrite) => {
-                if let Some((entry, _)) = entry_with_live_until_ledger {
+            AccessType::ReadWrite => {
+                if let Some((entry, _)) = &entry_with_live_until_ledger {
                     let mut entry_buf = vec![];
                     metered_write_xdr(budget, entry.as_ref(), &mut entry_buf)?;
                     entry_change.new_entry_size_bytes_for_rent =
@@ -272,42 +328,10 @@ fn get_ledger_changes(
                     }
                 }
             }
-            None => {
-                return Err(internal_error());
-            }
         }
         changes.push(entry_change);
     }
     Ok(changes)
-}
-
-/// Creates ledger changes for entries that don't exist in the storage.
-///
-/// In recording mode it's possible to have discrepancies between the storage
-/// and the footprint. Specifically, if an entry is only accessed from a
-/// function that has failed and had its failure handled gracefully (via
-/// `try_call`), then the storage map will get rolled back and the access will
-/// only be recorded in the footprint. However, we still need to account for
-/// these in the ledger entry changes, as downstream consumers (simulation) rely
-/// on that to determine the fees.
-#[cfg(any(test, feature = "recording_mode"))]
-fn add_footprint_only_ledger_changes(
-    budget: &Budget,
-    storage: &Storage,
-    changes: &mut Vec<LedgerEntryChange>,
-) -> Result<(), HostError> {
-    for (key, access_type) in storage.footprint.0.iter(budget)? {
-        // We have to check if the entry exists in the internal storage map
-        // because `has` check on storage affects the footprint.
-        if storage.map.contains_key::<Rc<LedgerKey>>(key, budget)? {
-            continue;
-        }
-        let mut entry_change = LedgerEntryChange::default();
-        metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
-        entry_change.read_only = matches!(*access_type, AccessType::ReadOnly);
-        changes.push(entry_change);
-    }
-    Ok(())
 }
 
 /// Extracts the rent-related changes from the provided ledger changes.
@@ -415,7 +439,7 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     let resources: SorobanResources =
         metered_from_xdr_with_budget(encoded_resources.as_ref(), &budget)?;
     let restored_keys = build_restored_key_set(&budget, &resources, &restored_rw_entry_indices)?;
-    let footprint = build_storage_footprint_from_xdr(&budget, resources.footprint)?;
+    let (storage_map, key_order) = build_storage_footprint_from_xdr(&budget, resources.footprint)?;
     let current_ledger_seq = ledger_info.sequence_number;
     let min_live_until_ledger = ledger_info
         .min_live_until_ledger_checked(ContractDataDurability::Persistent)
@@ -425,9 +449,14 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
                 ScErrorCode::InternalError,
             ))
         })?;
-    let (storage_map, init_ttl_map) = build_storage_map_from_xdr_ledger_entries(
-        &budget,
-        &footprint,
+
+    // Create storage with pre-built map containing footprint access types
+    let storage = Storage::with_enforcing_footprint_and_map_internal(storage_map);
+    let host = Host::with_storage_and_budget(storage, budget.clone());
+
+    // Populate storage from XDR, performing ScVal→Val conversion for ContractData entries.
+    // This also stores raw LedgerEntry copies in init_ledger_entries for diff computation.
+    let init_ttl_map = host.populate_storage_from_xdr(
         encoded_ledger_entries,
         encoded_ttl_entries,
         current_ledger_seq,
@@ -435,10 +464,6 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         false,
     )?;
 
-    let init_storage_map = storage_map.metered_clone(budget)?;
-
-    let storage = Storage::with_enforcing_footprint_and_map(footprint, storage_map);
-    let host = Host::with_storage_and_budget(storage, budget.clone());
     let have_trace_hook = trace_hook.is_some();
     if let Some(th) = trace_hook {
         host.set_trace_hook(Some(th))?;
@@ -471,7 +496,13 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     if have_trace_hook {
         host.set_trace_hook(None)?;
     }
-    let (storage, events) = host.try_finish()?;
+
+    // Build final ledger entries while Host is still alive (for Val→ScVal conversion)
+    let final_entries = host.build_final_ledger_entries()?;
+
+    // Now consume the Host and get storage, init entries, and events
+    let (storage, init_entries, events) = host.try_finish_with_entries()?;
+
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
     }
@@ -480,14 +511,12 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         metered_write_xdr(&budget, &res, &mut encoded_result_sc_val).map(|_| encoded_result_sc_val)
     });
     if encoded_invoke_result.is_ok() {
-        let init_storage_snapshot = StorageMapSnapshotSource {
-            budget: &budget,
-            map: &init_storage_map,
-        };
         let ledger_changes = get_ledger_changes(
             &budget,
-            &storage,
-            &init_storage_snapshot,
+            &storage.map,
+            &key_order,
+            &init_entries,
+            &final_entries,
             init_ttl_map,
             min_live_until_ledger,
             &restored_keys,
@@ -532,14 +561,15 @@ impl Host {
 
 #[cfg(any(test, feature = "recording_mode"))]
 fn storage_footprint_to_ledger_footprint(
-    footprint: &Footprint,
+    footprint_entries: &[(Rc<LedgerKey>, AccessType)],
+    budget: &Budget,
 ) -> Result<LedgerFootprint, HostError> {
-    let mut read_only: Vec<LedgerKey> = Vec::with_capacity(footprint.0.len());
-    let mut read_write: Vec<LedgerKey> = Vec::with_capacity(footprint.0.len());
-    for (key, access_type) in &footprint.0 {
+    let mut read_only: Vec<LedgerKey> = Vec::with_capacity(footprint_entries.len());
+    let mut read_write: Vec<LedgerKey> = Vec::with_capacity(footprint_entries.len());
+    for (key, access_type) in footprint_entries {
         match access_type {
-            AccessType::ReadOnly => read_only.push((**key).clone()),
-            AccessType::ReadWrite => read_write.push((**key).clone()),
+            AccessType::ReadOnly => read_only.push(key.as_ref().metered_clone(budget)?),
+            AccessType::ReadWrite => read_write.push(key.as_ref().metered_clone(budget)?),
         }
     }
     Ok(LedgerFootprint {
@@ -666,7 +696,7 @@ pub fn invoke_host_function_in_recording_mode(
 
     match &auth_mode {
         RecordingInvocationAuthMode::Enforcing(auth_entries) => {
-            host.set_authorization_entries(auth_entries.clone())?;
+            host.set_authorization_entries(auth_entries.metered_clone(budget.clone())?)?;
         }
         RecordingInvocationAuthMode::Recording(disable_non_root_auth) => {
             host.switch_to_recording_auth(*disable_non_root_auth)?;
@@ -707,96 +737,124 @@ pub fn invoke_host_function_in_recording_mode(
         }
     }
 
-    let (footprint, disk_read_bytes, init_ttl_map, restored_rw_entry_ids, restored_keys) = host
-        .with_mut_storage(|storage| {
-            let footprint = storage_footprint_to_ledger_footprint(&storage.footprint)?;
-            let _footprint_from_xdr = build_storage_footprint_from_xdr(&budget, footprint.clone())?;
+    // Get the recorded footprint as a sorted vector (for deterministic output)
+    let recorded_footprint = host.get_recorded_footprint()?;
+    // Build key_order in the same order as build_storage_footprint_from_xdr: read_write first, then read_only
+    let key_order: Vec<Rc<LedgerKey>> = recorded_footprint
+        .iter()
+        .filter(|(_, access_type)| matches!(*access_type, AccessType::ReadWrite))
+        .map(|(k, _)| Rc::clone(k))
+        .chain(
+            recorded_footprint
+                .iter()
+                .filter(|(_, access_type)| matches!(*access_type, AccessType::ReadOnly))
+                .map(|(k, _)| Rc::clone(k)),
+        )
+        .collect();
 
-            let mut encoded_ledger_entries = Vec::with_capacity(storage.footprint.0.len());
-            let mut encoded_ttl_entries = Vec::with_capacity(storage.footprint.0.len());
-            let mut disk_read_bytes = 0_u32;
-            let mut current_rw_id = 0;
-            let mut restored_rw_entry_ids = vec![];
-            let mut restored_keys = RestoredKeySet::default();
+    let (ledger_footprint, disk_read_bytes, init_ttl_map, restored_rw_entry_ids, restored_keys) = {
+        let footprint = storage_footprint_to_ledger_footprint(&recorded_footprint, &budget)?;
+        let _footprint_from_xdr =
+            build_storage_footprint_from_xdr(&budget, footprint.metered_clone(budget)?)?;
 
-            for (lk, access_type) in &storage.footprint.0 {
-                let entry_with_live_until = ledger_snapshot.get(lk)?;
-                if let Some((le, live_until)) = entry_with_live_until {
-                    let encoded_le = host.to_xdr_non_metered(&*le)?;
-                    match &le.data {
-                        LedgerEntryData::ContractData(_) | LedgerEntryData::ContractCode(_) => {
-                            if let Some(live_until) = live_until {
-                                // Check if entry has been auto-restored (only persistent entries
-                                // can be auto-restored)
-                                if live_until < ledger_seq && is_persistent_key(lk.as_ref()) {
-                                    // Auto-restored entries are expected to be in RW footprint.
-                                    if !matches!(*access_type, AccessType::ReadWrite) {
-                                        return Err(HostError::from(Error::from_type_and_code(
-                                            ScErrorType::Storage,
-                                            ScErrorCode::InternalError,
-                                        )));
-                                    }
-                                    // Auto-restored entries are counted towards disk read bytes.
-                                    disk_read_bytes =
-                                        disk_read_bytes.saturating_add(encoded_le.len() as u32);
-                                    restored_rw_entry_ids.push(current_rw_id);
-                                    restored_keys =
-                                        restored_keys.insert(lk.clone(), (), &budget)?;
+        let mut encoded_ledger_entries = Vec::with_capacity(recorded_footprint.len());
+        let mut encoded_ttl_entries = Vec::with_capacity(recorded_footprint.len());
+        let mut disk_read_bytes = 0_u32;
+        let mut current_rw_id = 0;
+        let mut restored_rw_entry_ids = vec![];
+        let mut restored_keys = RestoredKeySet::default();
+
+        for (lk, access_type) in &recorded_footprint {
+            let entry_with_live_until = ledger_snapshot.get(lk)?;
+            if let Some((le, live_until)) = entry_with_live_until {
+                let encoded_le = host.to_xdr_non_metered(&*le)?;
+                match &le.data {
+                    LedgerEntryData::ContractData(_) | LedgerEntryData::ContractCode(_) => {
+                        if let Some(live_until) = live_until {
+                            // Check if entry has been auto-restored (only persistent entries
+                            // can be auto-restored)
+                            if live_until < ledger_seq && is_persistent_key(lk.as_ref()) {
+                                // Auto-restored entries are expected to be in RW footprint.
+                                if !matches!(*access_type, AccessType::ReadWrite) {
+                                    return Err(HostError::from(Error::from_type_and_code(
+                                        ScErrorType::Storage,
+                                        ScErrorCode::InternalError,
+                                    )));
                                 }
+                                // Auto-restored entries are counted towards disk read bytes.
+                                disk_read_bytes =
+                                    disk_read_bytes.saturating_add(encoded_le.len() as u32);
+                                restored_rw_entry_ids.push(current_rw_id);
+                                restored_keys = restored_keys.insert(Rc::clone(lk), (), &budget)?;
                             }
                         }
-                        _ => {
-                            // Non-Soroban entries are counted towards disk read bytes.
-                            disk_read_bytes =
-                                disk_read_bytes.saturating_add(encoded_le.len() as u32);
-                        }
                     }
-
-                    encoded_ledger_entries.push(encoded_le);
-                    if let Some(live_until_ledger) = live_until {
-                        let key_xdr = host.to_xdr_non_metered(lk.as_ref())?;
-                        let key_hash: [u8; 32] = Sha256::digest(&key_xdr).into();
-                        let ttl_entry = TtlEntry {
-                            key_hash: key_hash.try_into().map_err(|_| {
-                                HostError::from((ScErrorType::Context, ScErrorCode::InternalError))
-                            })?,
-                            live_until_ledger_seq: live_until_ledger,
-                        };
-                        encoded_ttl_entries.push(host.to_xdr_non_metered(&ttl_entry)?);
-                    } else {
-                        encoded_ttl_entries.push(vec![]);
+                    _ => {
+                        // Non-Soroban entries are counted towards disk read bytes.
+                        disk_read_bytes = disk_read_bytes.saturating_add(encoded_le.len() as u32);
                     }
                 }
-                if matches!(*access_type, AccessType::ReadWrite) {
-                    current_rw_id += 1;
+
+                encoded_ledger_entries.push(encoded_le);
+                if let Some(live_until_ledger) = live_until {
+                    let key_xdr = host.to_xdr_non_metered(lk.as_ref())?;
+                    let key_hash: [u8; 32] = Sha256::digest(&key_xdr).into();
+                    let ttl_entry = TtlEntry {
+                        key_hash: key_hash.try_into().map_err(|_| {
+                            HostError::from((ScErrorType::Context, ScErrorCode::InternalError))
+                        })?,
+                        live_until_ledger_seq: live_until_ledger,
+                    };
+                    encoded_ttl_entries.push(host.to_xdr_non_metered(&ttl_entry)?);
+                } else {
+                    encoded_ttl_entries.push(vec![]);
                 }
             }
-            let (init_storage, init_ttl_map) = build_storage_map_from_xdr_ledger_entries(
-                &budget,
-                &storage.footprint,
-                encoded_ledger_entries.iter(),
-                encoded_ttl_entries.iter(),
-                ledger_seq,
-                true,
-            )?;
-            let _init_storage_clone = init_storage.metered_clone(budget)?;
-            Ok((
-                footprint,
-                disk_read_bytes,
-                init_ttl_map,
-                restored_rw_entry_ids,
-                restored_keys,
-            ))
-        })?;
+            if matches!(*access_type, AccessType::ReadWrite) {
+                current_rw_id += 1;
+            }
+        }
+        // Build the footprint for storage map construction
+        let (mut storage_map_for_init, _) =
+            build_storage_footprint_from_xdr(&budget, footprint.metered_clone(budget)?)?;
+        let init_ttl_map = build_storage_map_from_xdr_ledger_entries(
+            &budget,
+            &mut storage_map_for_init,
+            encoded_ledger_entries.iter(),
+            encoded_ttl_entries.iter(),
+            ledger_seq,
+            true,
+        )?;
+        let _init_storage_clone = storage_map_for_init.metered_clone(budget)?;
+        (
+            footprint,
+            disk_read_bytes,
+            init_ttl_map,
+            restored_rw_entry_ids,
+            restored_keys,
+        )
+    };
     let mut resources = SorobanResources {
-        footprint,
+        footprint: ledger_footprint,
         instructions: 0,
         disk_read_bytes,
         write_bytes: 0,
     };
     let _resources_roundtrip: SorobanResources =
         host.metered_from_xdr(host.to_xdr_non_metered(&resources)?.as_slice())?;
-    let (storage, events) = host.try_finish()?;
+
+    // Build final ledger entries while Host is still alive (for Val→ScVal conversion)
+    let final_entries = host.build_final_ledger_entries()?;
+
+    // Build footprint from recorded entries for get_ledger_changes
+    let (footprint, _) =
+        build_storage_footprint_from_xdr(&budget, resources.footprint.metered_clone(budget)?)?;
+
+    // Build init entries from the snapshot source
+    let init_entries = build_init_entries_from_snapshot(&budget, &key_order, &*ledger_snapshot)?;
+
+    let (_, events) = host.try_finish()?;
+
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
     }
@@ -805,22 +863,19 @@ pub fn invoke_host_function_in_recording_mode(
     } else {
         Some(restored_keys)
     };
+
     let (ledger_changes, contract_events) = if invoke_result.is_ok() {
-        let mut ledger_changes = get_ledger_changes(
+        let ledger_changes = get_ledger_changes(
             &budget,
-            &storage,
-            &*ledger_snapshot,
+            &footprint,
+            &key_order,
+            &init_entries,
+            &final_entries,
             init_ttl_map,
             min_live_until_ledger,
             &restored_keys,
             ledger_seq,
         )?;
-        // Add the keys that only exist in the footprint, but not in the
-        // storage. This doesn't resemble anything in the enforcing mode, so use
-        // the shadow budget for this.
-        budget.with_shadow_mode(|| {
-            add_footprint_only_ledger_changes(budget, &storage, &mut ledger_changes)
-        });
 
         let encoded_contract_events = encode_contract_events(budget, &events)?;
         for e in &encoded_contract_events {
@@ -918,41 +973,49 @@ pub(crate) fn ledger_entry_to_ledger_key(
     }
 }
 
+/// Builds a storage map from XDR footprint with empty value stacks.
+/// Returns the map (with access types set but no values) and a key order vector.
+/// Values will be populated later by Host::populate_storage_from_xdr.
 fn build_storage_footprint_from_xdr(
     budget: &Budget,
     footprint: LedgerFootprint,
-) -> Result<Footprint, HostError> {
-    let mut footprint_map = FootprintMap::new();
+) -> Result<(StorageMap, Vec<Rc<LedgerKey>>), HostError> {
+    let mut storage_map = StorageMap::new();
+    // Capture key order: read_write keys first, then read_only keys
+    let mut key_order = Vec::with_capacity(footprint.read_write.len() + footprint.read_only.len());
 
     for key in footprint.read_write.as_vec() {
         Storage::check_supported_ledger_key_type(&key)?;
-        footprint_map = footprint_map.insert(
-            Rc::metered_new(key.metered_clone(budget)?, budget)?,
-            AccessType::ReadWrite,
-            budget,
-        )?;
+        let key_rc = Rc::metered_new(key.metered_clone(budget)?, budget)?;
+        key_order.push(Rc::clone(&key_rc));
+        // Create StorageEntry with ReadWrite access and empty stack (no value yet)
+        let storage_entry = StorageEntry::new(AccessType::ReadWrite, None);
+        storage_map.insert(key_rc, storage_entry, budget)?;
     }
 
     for key in footprint.read_only.as_vec() {
         Storage::check_supported_ledger_key_type(&key)?;
-        footprint_map = footprint_map.insert(
-            Rc::metered_new(key.metered_clone(budget)?, budget)?,
-            AccessType::ReadOnly,
-            budget,
-        )?;
+        let key_rc = Rc::metered_new(key.metered_clone(budget)?, budget)?;
+        key_order.push(Rc::clone(&key_rc));
+        // Create StorageEntry with ReadOnly access and empty stack (no value yet)
+        let storage_entry = StorageEntry::new(AccessType::ReadOnly, None);
+        storage_map.insert(key_rc, storage_entry, budget)?;
     }
-    Ok(Footprint(footprint_map))
+    Ok((storage_map, key_order))
 }
 
+/// Builds a storage map from XDR-encoded ledger entries.
+/// This is used by recording mode to recreate init state from encoded entries.
+/// Takes a pre-built storage_map with access types and populates it with values.
+#[cfg(any(test, feature = "recording_mode"))]
 fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     budget: &Budget,
-    footprint: &Footprint,
+    storage_map: &mut StorageMap,
     encoded_ledger_entries: I,
     encoded_ttl_entries: I,
     ledger_num: u32,
-    #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
-) -> Result<(StorageMap, TtlEntryMap), HostError> {
-    let mut storage_map = StorageMap::new();
+    is_recording_mode: bool,
+) -> Result<TtlEntryMap, HostError> {
     let mut ttl_map = TtlEntryMap::new();
 
     if encoded_ledger_entries.len() != encoded_ttl_entries.len() {
@@ -1010,7 +1073,7 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
 
             live_until_ledger = Some(ttl_entry.live_until_ledger_seq);
 
-            ttl_map = ttl_map.insert(key.clone(), ttl_entry, budget)?;
+            ttl_map = ttl_map.insert(Rc::clone(&key), ttl_entry, budget)?;
         } else if matches!(le.as_ref().data, LedgerEntryData::ContractData(_))
             || matches!(le.as_ref().data, LedgerEntryData::ContractCode(_))
         {
@@ -1021,23 +1084,24 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             .into());
         }
 
-        if !footprint.0.contains_key::<LedgerKey>(&key, budget)? {
-            return Err(Error::from_type_and_code(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-            )
-            .into());
-        }
-        storage_map = storage_map.insert(key, Some((le, live_until_ledger)), budget)?;
+        // Look up access type from storage_map entry
+        let storage_entry = storage_map.get_mut(&key, budget)?.ok_or_else(|| {
+            Error::from_type_and_code(ScErrorType::Storage, ScErrorCode::InternalError)
+        })?;
+        // Store entries as Entry variant in the initial storage map.
+        // ContractData entries will be converted to ContractData variant
+        // (with Val) when accessed by contracts, enabling efficient in-memory access.
+        // We can't convert here because Host doesn't exist yet for ScVal→Val conversion.
+        let entry_rc = Rc::metered_new(
+            std::cell::RefCell::new(le.as_ref().metered_clone(budget)?),
+            budget,
+        )?;
+        let entry_data = StorageLedgerEntryData::Entry(entry_rc);
+        // Update the storage entry's stack[0] value
+        storage_entry.set_base_frame_value(entry_data, live_until_ledger);
     }
 
-    // Add non-existing entries from the footprint to the storage.
-    for k in footprint.0.keys(budget)? {
-        if !storage_map.contains_key::<LedgerKey>(k, budget)? {
-            storage_map = storage_map.insert(Rc::clone(k), None, budget)?;
-        }
-    }
-    Ok((storage_map, ttl_map))
+    Ok(ttl_map)
 }
 
 impl Host {
@@ -1051,21 +1115,131 @@ impl Host {
                 self.as_budget(),
             )?
     }
-}
 
-struct StorageMapSnapshotSource<'a> {
-    budget: &'a Budget,
-    map: &'a StorageMap,
-}
+    /// Populates the Host's storage from XDR-encoded ledger entries.
+    ///
+    /// This method:
+    /// 1. Decodes XDR entries and TTL entries
+    /// 2. Converts ContractData entries to Val using `StorageLedgerEntryData::from_entry_with_live_until`
+    /// 3. Populates the storage map with converted entries
+    /// 4. Stores raw LedgerEntry copies in `init_ledger_entries` for later diff computation
+    /// 5. Returns `TtlEntryMap` for TTL tracking
+    ///
+    /// The Host's storage must already have a footprint set before calling this method.
+    pub fn populate_storage_from_xdr<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
+        &self,
+        encoded_ledger_entries: I,
+        encoded_ttl_entries: I,
+        ledger_num: u32,
+        #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
+    ) -> Result<TtlEntryMap, HostError> {
+        let budget = self.as_budget();
+        let mut ttl_map = TtlEntryMap::new();
 
-impl SnapshotSource for StorageMapSnapshotSource<'_> {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        if let Some(Some((entry, live_until_ledger))) =
-            self.map.get::<Rc<LedgerKey>>(key, self.budget)?
-        {
-            Ok(Some((Rc::clone(entry), *live_until_ledger)))
-        } else {
-            Ok(None)
+        if encoded_ledger_entries.len() != encoded_ttl_entries.len() {
+            return Err(Error::from_type_and_code(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+            )
+            .into());
         }
+
+        let mut storage = self.try_borrow_storage_mut()?;
+        let mut init_entries = self.try_borrow_init_ledger_entries_mut()?;
+
+        for (entry_buf, ttl_buf) in encoded_ledger_entries.zip(encoded_ttl_entries) {
+            let mut live_until_ledger: Option<u32> = None;
+
+            let le = Rc::metered_new(
+                metered_from_xdr_with_budget::<LedgerEntry>(entry_buf.as_ref(), budget)?,
+                budget,
+            )?;
+            let key = Rc::metered_new(ledger_entry_to_ledger_key(&le, budget)?, budget)?;
+
+            if !ttl_buf.as_ref().is_empty() {
+                let ttl_entry = Rc::metered_new(
+                    metered_from_xdr_with_budget::<TtlEntry>(ttl_buf.as_ref(), budget)?,
+                    budget,
+                )?;
+                // In the default host flow (i.e. enforcing storage only) we don't
+                // expect expired entries to ever appear in the storage map, so
+                // that's always an internal error.
+                #[cfg(not(any(test, feature = "recording_mode")))]
+                if ttl_entry.live_until_ledger_seq < ledger_num {
+                    return Err(Error::from_type_and_code(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                    )
+                    .into());
+                }
+                // In the recording mode we still compile both recording and
+                // enforcing functions, and we do allow expired entries in the
+                // recording mode when allow_expired_entries is true.
+                #[cfg(any(test, feature = "recording_mode"))]
+                if ttl_entry.live_until_ledger_seq < ledger_num {
+                    if !is_recording_mode {
+                        return Err(Error::from_type_and_code(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                        )
+                        .into());
+                    }
+                    // Skip expired temp entries, as these can't actually appear in
+                    // storage.
+                    if !crate::storage::is_persistent_key(key.as_ref()) {
+                        continue;
+                    }
+                }
+
+                live_until_ledger = Some(ttl_entry.live_until_ledger_seq);
+
+                ttl_map = ttl_map.insert(Rc::clone(&key), ttl_entry, budget)?;
+            } else if matches!(le.as_ref().data, LedgerEntryData::ContractData(_))
+                || matches!(le.as_ref().data, LedgerEntryData::ContractCode(_))
+            {
+                return Err(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                )
+                .into());
+            }
+
+            if !storage.map.contains_key(&key, budget)? {
+                return Err(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                )
+                .into());
+            }
+
+            // Store raw LedgerEntry in init_ledger_entries for later diff computation
+            // This avoids needing Val→ScVal conversion in get_ledger_changes
+            let init_entry: Option<EntryWithLiveUntil> = Some((Rc::clone(&le), live_until_ledger));
+            init_entries.insert(Rc::clone(&key), init_entry, budget)?;
+
+            // Convert entry to StorageLedgerEntryData using from_ledger_entry.
+            // For ContractData entries, this performs ScVal→Val conversion.
+            // For other entry types, this creates StorageLedgerEntryData::Entry.
+            let entry_data = StorageLedgerEntryData::from_ledger_entry(&le, self)?;
+            // Update the existing StorageEntry's value at depth 0
+            let storage_entry = storage.map.get_mut(&key, budget)?.ok_or_else(|| {
+                Error::from_type_and_code(ScErrorType::Storage, ScErrorCode::InternalError)
+            })?;
+            // Set base frame value
+            storage_entry.set_base_frame_value(entry_data, live_until_ledger);
+        }
+
+        // Collect storage keys for entries not yet in init_entries
+        let storage_keys: Vec<Rc<LedgerKey>> =
+            storage.map.iter().map(|(k, _)| Rc::clone(k)).collect();
+
+        // Add non-existing entries from the storage map to init_entries.
+        for k in storage_keys {
+            if !init_entries.contains_key(&k, budget)? {
+                init_entries.insert(Rc::clone(&k), None, budget)?;
+            }
+        }
+
+        Ok(ttl_map)
     }
 }

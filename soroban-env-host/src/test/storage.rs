@@ -1,112 +1,16 @@
-use std::rc::Rc;
-
-use crate::budget::{AsBudget, Budget};
+use crate::budget::AsBudget;
 use crate::host_object::MuxedScAddress;
-use crate::storage::{AccessType, Footprint, Storage};
-use crate::xdr::{
-    ContractDataDurability, ContractId, LedgerKey, LedgerKeyContractData, MuxedEd25519Account,
-    ScAddress, ScErrorCode, ScErrorType, ScVal, Uint256,
-};
-use crate::{Host, HostError, MeteredOrdMap};
+use crate::storage::Storage;
+use crate::xdr::{LedgerKey, MuxedEd25519Account, ScAddress, ScErrorCode, ScErrorType, Uint256};
+use crate::{Host, HostError};
 use soroban_env_common::{AddressObject, Env, MuxedAddressObject, Symbol, TryFromVal, TryIntoVal};
-use soroban_test_wasms::{CONTRACT_STORAGE, CONTRACT_STORAGE_WITH_VALS, INVOKE_CONTRACT};
+use soroban_test_wasms::{
+    CONTRACT_STORAGE, CONTRACT_STORAGE_P26, CONTRACT_STORAGE_WITH_VALS, INVOKE_CONTRACT,
+};
 
-#[test]
-fn footprint_record_access() -> Result<(), HostError> {
-    let budget = Budget::default();
-    budget.reset_unlimited()?;
-    let mut fp = Footprint::default();
-    // record when key not exist
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
-    fp.record_access(&key, AccessType::ReadOnly, &budget)?;
-    assert_eq!(fp.0.contains_key::<LedgerKey>(&key, &budget)?, true);
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadOnly)
-    );
-    // record and change access
-    fp.record_access(&key, AccessType::ReadWrite, &budget)?;
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadWrite)
-    );
-    fp.record_access(&key, AccessType::ReadOnly, &budget)?;
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadWrite)
-    );
-    Ok(())
-}
-
-#[test]
-fn footprint_enforce_access() -> Result<(), HostError> {
-    let budget = Budget::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
-
-    // Key not in footprint. Only difference is type_
-    let key2 = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Temporary,
-    }));
-
-    let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
-    let mom = MeteredOrdMap::from_map(om, &budget)?;
-    let mut fp = Footprint(mom);
-    assert!(fp
-        .enforce_access(&key2, AccessType::ReadOnly, &budget)
-        .is_err());
-    fp.enforce_access(&key, AccessType::ReadOnly, &budget)?;
-    fp.0 =
-        fp.0.insert(Rc::clone(&key), AccessType::ReadWrite, &budget)?;
-    fp.enforce_access(&key, AccessType::ReadOnly, &budget)?;
-    fp.enforce_access(&key, AccessType::ReadWrite, &budget)?;
-    Ok(())
-}
-
-#[test]
-fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
-    let budget = Budget::default();
-    let mut fp = Footprint::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
-    let res = fp.enforce_access(&key, AccessType::ReadOnly, &budget);
-    assert!(HostError::result_matches_err(
-        res,
-        (ScErrorType::Storage, ScErrorCode::ExceededLimit)
-    ));
-    Ok(())
-}
-
-#[test]
-fn footprint_attempt_to_write_readonly_entry() -> Result<(), HostError> {
-    let budget = Budget::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
-    let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
-    let mom = MeteredOrdMap::from_map(om, &budget)?;
-    let mut fp = Footprint(mom);
-    let res = fp.enforce_access(&key, AccessType::ReadWrite, &budget);
-    assert!(HostError::result_matches_err(
-        res,
-        (ScErrorType::Storage, ScErrorCode::ExceededLimit)
-    ));
-    Ok(())
-}
+// Note: Tests for the old Footprint type methods (footprint_record_access,
+// footprint_enforce_access, etc.) have been removed as the Footprint type
+// no longer exists. Access enforcement is now done inline in Storage methods.
 
 fn storage_fn_name(host: &Host, fn_name: &str, storage: &str) -> Symbol {
     Symbol::try_from_val(host, &format!("{}_{}", fn_name, storage).as_str()).unwrap()
@@ -353,15 +257,8 @@ fn test_nested_bump() {
         .contract_instance_ledger_key(&contract_id_hash)
         .unwrap();
     host.with_mut_storage(|s: &mut Storage| {
-        let v = s
-            .map
-            .get::<Rc<LedgerKey>>(&storage_key, host.as_budget())
-            .unwrap()
-            .unwrap()
-            .clone()
-            .unwrap()
-            .1
-            .unwrap();
+        let entry = s.map.get(&storage_key, host.as_budget()).unwrap().unwrap();
+        let v = entry.current_ttl().unwrap();
         assert_eq!(v, 4095);
         Ok(())
     })
@@ -382,15 +279,8 @@ fn test_nested_bump() {
     .unwrap();
 
     host.with_mut_storage(|s: &mut Storage| {
-        let v = s
-            .map
-            .get::<Rc<LedgerKey>>(&storage_key, host.as_budget())
-            .unwrap()
-            .unwrap()
-            .clone()
-            .unwrap()
-            .1
-            .unwrap();
+        let entry = s.map.get(&storage_key, host.as_budget()).unwrap().unwrap();
+        let v = entry.current_ttl().unwrap();
         // The inner call adds 10 to the extend_to parameter
         assert_eq!(v, 5010);
         Ok(())
@@ -539,4 +429,41 @@ fn test_large_instance_key() {
         storage_fn_name(&host, "put", "instance"),
         test_vec![&*host, key, 1_u64].into(),
     );
+}
+
+/// Tests that multiple storage modifications at the same frame depth work correctly.
+/// This exercises the copy-on-write semantics and verifies that we don't create
+/// duplicate frames in the entry and TTL stacks when performing multiple operations
+/// on the same key within a single contract call.
+#[test]
+fn test_stress_storage_same_frame_depth() {
+    let host = observe_host!(Host::test_host_with_recording_footprint());
+    let contract_id = host.register_test_contract_wasm(CONTRACT_STORAGE_P26);
+
+    let stress_storage_fn = Symbol::try_from_val(&*host, &"stress_storage").unwrap();
+    let key = Symbol::try_from_small_str("stresskey").unwrap();
+
+    // Test temporary storage (storage_type = 0)
+    host.call(
+        contract_id,
+        stress_storage_fn,
+        test_vec![&*host, 0_u32, key].into(),
+    )
+    .expect("stress_storage for temporary should succeed");
+
+    // Test persistent storage (storage_type = 1)
+    host.call(
+        contract_id,
+        stress_storage_fn,
+        test_vec![&*host, 1_u32, key].into(),
+    )
+    .expect("stress_storage for persistent should succeed");
+
+    // Test instance storage (storage_type = 2)
+    host.call(
+        contract_id,
+        stress_storage_fn,
+        test_vec![&*host, 2_u32, key].into(),
+    )
+    .expect("stress_storage for instance should succeed");
 }

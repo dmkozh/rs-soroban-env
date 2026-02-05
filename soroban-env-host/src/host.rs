@@ -15,8 +15,8 @@ use crate::{
     xdr::{
         int128_helpers, AccountId, Asset, ContractCostType, ContractEventType, ContractExecutable,
         ContractId, ContractIdPreimage, ContractIdPreimageFromAddress, CreateContractArgsV2,
-        Duration, Hash, LedgerEntryData, PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType,
-        ScString, ScSymbol, ScVal, TimePoint, Uint256,
+        Duration, Hash, PublicKey, ScAddress, ScBytes, ScErrorCode, ScErrorType, ScString,
+        ScSymbol, ScVal, TimePoint, Uint256,
     },
     AddressObject, Bool, BytesObject, Compare, ConversionError, EnvBase, Error, LedgerInfo,
     MapObject, Object, StorageType, StringObject, Symbol, SymbolObject, SymbolSmall, TryFromVal,
@@ -59,6 +59,8 @@ use self::{
 };
 
 use crate::host::error::TryBorrowOrErr;
+#[cfg(any(test, feature = "recording_mode"))]
+use crate::{storage::AccessType, xdr::LedgerKey};
 #[cfg(any(test, feature = "testutils"))]
 pub use frame::ContractFunctionSet;
 pub(crate) use frame::Frame;
@@ -85,7 +87,7 @@ pub struct CoverageScoreboard {
 }
 
 // The soroban 26.x host only supports protocol 26 and later.
-pub(crate) const MIN_LEDGER_PROTOCOL_VERSION: u32 = 26;
+pub(crate) const MIN_LEDGER_PROTOCOL_VERSION: u32 = 25;
 
 #[derive(Clone, Default)]
 struct HostImpl {
@@ -94,7 +96,14 @@ struct HostImpl {
     ledger: RefCell<Option<LedgerInfo>>,
     objects: RefCell<Vec<HostObject>>,
     storage: RefCell<Storage>,
+    /// Initial ledger entries at the start of execution.
+    /// Used to compute ledger changes without requiring Host for Val→ScVal conversion.
+    init_ledger_entries: RefCell<crate::storage::LedgerEntryMap>,
     context_stack: RefCell<Vec<Context>>,
+    /// Current frame depth for storage stack management.
+    /// 0 = no frames, 1 = first frame, etc.
+    /// This is incremented on push_context and decremented on pop_context.
+    frame_depth: RefCell<u32>,
     // Note: budget is refcounted and is _not_ deep-cloned when you call HostImpl::deep_clone,
     // mainly because it's not really possible to achieve (the same budget is connected to many
     // metered sub-objects) but also because it's plausible that the person calling deep_clone
@@ -237,6 +246,12 @@ impl_checked_borrow_helpers!(
     try_borrow_context_stack_mut
 );
 impl_checked_borrow_helpers!(
+    frame_depth,
+    u32,
+    try_borrow_frame_depth,
+    try_borrow_frame_depth_mut
+);
+impl_checked_borrow_helpers!(
     events,
     InternalEventsBuffer,
     try_borrow_events,
@@ -302,6 +317,13 @@ impl_checked_borrow_helpers!(
     try_borrow_storage_key_conversion_active_mut
 );
 
+impl_checked_borrow_helpers!(
+    init_ledger_entries,
+    crate::storage::LedgerEntryMap,
+    try_borrow_init_ledger_entries,
+    try_borrow_init_ledger_entries_mut
+);
+
 #[cfg(any(test, feature = "testutils"))]
 impl_checked_borrow_helpers!(
     top_contract_invocation_hook,
@@ -359,7 +381,9 @@ impl Host {
             ledger: RefCell::new(None),
             objects: Default::default(),
             storage: RefCell::new(storage),
+            init_ledger_entries: Default::default(),
             context_stack: Default::default(),
+            frame_depth: RefCell::new(0),
             budget,
             events: Default::default(),
             authorization_manager: RefCell::new(
@@ -625,6 +649,25 @@ impl Host {
         &self.0.budget
     }
 
+    /// Returns the current frame depth.
+    /// 0 = no frames, 1 = first frame, etc.
+    pub(crate) fn current_frame_depth(&self) -> Result<u32, HostError> {
+        Ok(*self.try_borrow_frame_depth()?)
+    }
+
+    /// Increments the frame depth. Called when pushing a context.
+    pub(crate) fn increment_frame_depth(&self) -> Result<(), HostError> {
+        *self.try_borrow_frame_depth_mut()? += 1;
+        Ok(())
+    }
+
+    /// Decrements the frame depth. Called when popping a context.
+    pub(crate) fn decrement_frame_depth(&self) -> Result<(), HostError> {
+        let mut depth = self.try_borrow_frame_depth_mut()?;
+        *depth = depth.saturating_sub(1);
+        Ok(())
+    }
+
     pub fn budget_cloned(&self) -> Budget {
         self.0.budget.clone()
     }
@@ -736,12 +779,81 @@ impl Host {
         Rc::strong_count(&self.0) == 1
     }
 
+    /// Builds a LedgerEntryMap from the current storage, converting StorageLedgerEntry
+    /// variants back to LedgerEntry. This must be called before try_finish()
+    /// consumes the Host, as Val→ScVal conversion requires a live Host.
+    pub fn build_final_ledger_entries(&self) -> Result<crate::storage::LedgerEntryMap, HostError> {
+        use crate::storage::LedgerEntryMap;
+        let storage = self.try_borrow_storage()?;
+        let mut result = LedgerEntryMap::new();
+        for (key, storage_entry) in storage.map.iter() {
+            // Get the current frame from the top of the entry's stack
+            let frame = storage_entry.current_entry(self)?;
+            let entry_with_live_until = match frame.value.as_ref() {
+                Some(entry) => {
+                    let ledger_entry = entry.to_ledger_entry(key.as_ref(), self)?;
+                    let live_until = storage_entry.current_ttl();
+                    Some((Rc::new(ledger_entry), live_until))
+                }
+                None => None,
+            };
+            result.insert(Rc::clone(key), entry_with_live_until, self.budget_ref())?;
+        }
+        Ok(result)
+    }
+
     /// Accept a _unique_ (refcount = 1) host reference and destroy the
     /// underlying [`HostImpl`], returning its finalized components containing
-    /// processing side effects  to the caller as a tuple wrapped in `Ok(...)`.
+    /// processing side effects to the caller as a tuple wrapped in `Ok(...)`.
+    ///
+    /// Returns (storage, init_ledger_entries, events).
     ///
     /// Use [`Host::can_finish`] to determine before calling the function if it
     /// will succeed.
+    ///
+    /// Note: `build_final_ledger_entries` must be called before this method
+    /// to obtain the final ledger entries, as Val→ScVal conversion requires
+    /// a live Host.
+    pub fn try_finish_with_entries(
+        self,
+    ) -> Result<
+        (
+            crate::storage::Storage,
+            crate::storage::LedgerEntryMap,
+            Events,
+        ),
+        HostError,
+    > {
+        let events = self.try_borrow_events()?.externalize(&self)?;
+        Rc::try_unwrap(self.0)
+            .map(|host_impl| {
+                let storage = host_impl.storage.into_inner();
+                let init_entries = host_impl.init_ledger_entries.into_inner();
+                (storage, init_entries, events)
+            })
+            .map_err(|_| {
+                Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InternalError).into()
+            })
+    }
+
+    /// Returns the recorded footprint as a sorted vector of (key, access_type) pairs.
+    /// Only available in recording mode.
+    #[cfg(any(test, feature = "recording_mode"))]
+    pub fn get_recorded_footprint(&self) -> Result<Vec<(Rc<LedgerKey>, AccessType)>, HostError> {
+        self.with_mut_storage(|storage| {
+            let mut entries: Vec<(Rc<LedgerKey>, AccessType)> =
+                Vec::with_capacity(storage.map.len());
+            for (key, entry) in storage.map.iter() {
+                entries.push((Rc::clone(key), entry.access_type));
+            }
+            // Sort by key for deterministic ordering
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Ok(entries)
+        })
+    }
+
+    /// Legacy version of try_finish that returns Storage.
+    /// Will be marked test-only in a future commit.
     pub fn try_finish(self) -> Result<(Storage, Events), HostError> {
         let events = self.try_borrow_events()?.externalize(&self)?;
         Rc::try_unwrap(self.0)
@@ -2145,8 +2257,7 @@ impl VmCallerEnv for Host {
     ) -> Result<Bool, HostError> {
         let res = match t {
             StorageType::Temporary | StorageType::Persistent => {
-                let key = self.storage_key_from_val(k, t.try_into()?)?;
-                self.try_borrow_storage_mut()?.has(&key, self, Some(k))?
+                self.has_contract_data_in_ledger(k, t)?
             }
             StorageType::Instance => {
                 self.with_instance_storage(|s| Ok(s.map.get(&k, self)?.is_some()))?
@@ -2165,17 +2276,7 @@ impl VmCallerEnv for Host {
     ) -> Result<Val, HostError> {
         match t {
             StorageType::Temporary | StorageType::Persistent => {
-                let key = self.storage_key_from_val(k, t.try_into()?)?;
-                let entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
-                match &entry.data {
-                    LedgerEntryData::ContractData(e) => Ok(self.to_valid_host_val(&e.val)?),
-                    _ => Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "expected contract data ledger entry",
-                        &[],
-                    )),
-                }
+                self.get_contract_data_from_ledger(k, t)
             }
             StorageType::Instance => self.with_instance_storage(|s| {
                 s.map
@@ -2202,8 +2303,7 @@ impl VmCallerEnv for Host {
     ) -> Result<Void, HostError> {
         match t {
             StorageType::Temporary | StorageType::Persistent => {
-                let key = self.storage_key_from_val(k, t.try_into()?)?;
-                self.try_borrow_storage_mut()?.del(&key, self, Some(k))?;
+                self.del_contract_data_from_ledger(k, t)?;
             }
             StorageType::Instance => {
                 self.with_mut_instance_storage(|s| {
@@ -2235,14 +2335,7 @@ impl VmCallerEnv for Host {
                 &[],
             ))?;
         }
-        let key = self.storage_key_from_val(k, t.try_into()?)?;
-        self.try_borrow_storage_mut()?.extend_ttl(
-            self,
-            key,
-            threshold.into(),
-            extend_to.into(),
-            Some(k),
-        )?;
+        self.extend_contract_data_ttl_in_ledger(k, t, threshold.into(), extend_to.into())?;
         Ok(Val::VOID)
     }
 
@@ -2421,10 +2514,12 @@ impl VmCallerEnv for Host {
         }
         let curr_contract_id = self.get_current_contract_id_internal()?;
         let key = self.contract_instance_ledger_key(&curr_contract_id)?;
-        let old_instance = self.retrieve_contract_instance_from_storage(&key)?;
         let new_executable = ContractExecutable::Wasm(wasm_hash);
-        self.emit_update_contract_event(&old_instance.executable, &new_executable)?;
-        self.store_contract_instance(Some(new_executable), None, curr_contract_id, &key)?;
+        self.modify_contract_instance(&key, |instance| {
+            self.emit_update_contract_event(&instance.executable, &new_executable)?;
+            instance.executable = new_executable.metered_clone(self)?;
+            Ok(())
+        })?;
         Ok(Val::VOID)
     }
 
@@ -3597,19 +3692,23 @@ impl VmCallerEnv for Host {
             }
             ScAddress::Contract(id) => {
                 let storage_key = self.contract_instance_ledger_key(&id)?;
-                let maybe_instance_entry =
-                    self.try_borrow_storage_mut()?
-                        .try_get_full(&storage_key, self, None)?;
-                if let Some((instance_entry, _ttl)) = maybe_instance_entry {
-                    let instance =
-                        self.extract_contract_instance_from_ledger_entry(&instance_entry)?;
-                    Some(AddressExecutable::from_contract_executable_xdr(
-                        &self,
-                        &instance.executable,
-                    )?)
-                } else {
-                    None
-                }
+                // Use with_ledger_entry to access the contract instance
+                self.try_borrow_storage_mut()?.with_ledger_entry(
+                    &storage_key,
+                    self,
+                    None,
+                    |opt| match opt {
+                        Some(entry) => {
+                            let instance =
+                                self.extract_contract_instance_from_ledger_entry(entry)?;
+                            Ok(Some(AddressExecutable::from_contract_executable_xdr(
+                                &self,
+                                &instance.executable,
+                            )?))
+                        }
+                        None => Ok(None),
+                    },
+                )?
             }
             _ => {
                 return Err(self.err(
@@ -3739,9 +3838,9 @@ impl Host {
     ) -> Result<u32, HostError> {
         let contract_id = self.contract_id_from_address(contract)?;
         let key = self.contract_instance_ledger_key(&contract_id)?;
-        let (_, live_until) = self
+        let live_until = self
             .try_borrow_storage_mut()?
-            .get_with_live_until_ledger(&key, self, None)?;
+            .get_live_until(&key, self, None)?;
         live_until.ok_or_else(|| {
             self.err(
                 ScErrorType::Storage,
@@ -3766,9 +3865,9 @@ impl Host {
         {
             ContractExecutable::Wasm(wasm_hash) => {
                 let key = self.contract_code_ledger_key(&wasm_hash)?;
-                let (_, live_until) = self
+                let live_until = self
                     .try_borrow_storage_mut()?
-                    .get_with_live_until_ledger(&key, self, None)?;
+                    .get_live_until(&key, self, None)?;
                 live_until.ok_or_else(|| {
                     self.err(
                         ScErrorType::Storage,
@@ -3809,11 +3908,9 @@ impl Host {
                 ));
             }
         };
-        let (_, live_until) = self.try_borrow_storage_mut()?.get_with_live_until_ledger(
-            &ledger_key,
-            self,
-            Some(key),
-        )?;
+        let live_until =
+            self.try_borrow_storage_mut()?
+                .get_live_until(&ledger_key, self, Some(key))?;
         live_until.ok_or_else(|| {
             self.err(
                 ScErrorType::Storage,

@@ -293,13 +293,27 @@ impl Host {
             let budget = self.budget_ref();
             budget.with_shadow_mode(|| {
                 store.map.len().metered_hash(&mut state, budget)?;
-                for (k, v) in store.map.iter(budget)? {
+                for (k, storage_entry) in store.map.iter() {
                     k.metered_hash_xdr(&mut state, budget)?;
-                    match v {
-                        Some((entry, ttl)) => {
+                    // Hash access type
+                    (storage_entry.access_type as u8).metered_hash(&mut state, budget)?;
+                    // Hash the current frame (value and live_until)
+                    let frame = storage_entry.current_entry(self)?;
+                    let live_until = storage_entry.current_ttl();
+                    match frame.value.as_ref() {
+                        Some(entry) => {
                             0.metered_hash(&mut state, budget)?;
-                            entry.metered_hash_xdr(&mut state, budget)?;
-                            ttl.metered_hash(&mut state, budget)?;
+                            match entry {
+                                crate::storage::StorageLedgerEntryData::ContractData(val) => {
+                                    // Hash the Val payload and live_until
+                                    val.get_payload().metered_hash(&mut state, budget)?;
+                                    live_until.metered_hash(&mut state, budget)?;
+                                }
+                                crate::storage::StorageLedgerEntryData::Entry(entry_rc) => {
+                                    entry_rc.borrow().metered_hash_xdr(&mut state, budget)?;
+                                    live_until.metered_hash(&mut state, budget)?;
+                                }
+                            }
                         }
                         None => {
                             1.metered_hash(&mut state, budget)?;
@@ -353,7 +367,7 @@ impl Host {
     }
     fn storage_footprint_size(&self) -> usize {
         if let Ok(storage) = self.0.storage.try_borrow() {
-            storage.footprint.0.len()
+            storage.map.len()
         } else {
             0
         }
@@ -364,10 +378,10 @@ impl Host {
             let mut state = CountingHasher::default();
             let budget = self.budget_ref();
             budget.with_shadow_mode(|| {
-                storage.footprint.0.len().metered_hash(&mut state, budget)?;
-                for (k, v) in storage.footprint.0.iter(budget)? {
+                storage.map.len().metered_hash(&mut state, budget)?;
+                for (k, entry) in storage.map.iter() {
                     k.metered_hash_xdr(&mut state, budget)?;
-                    v.metered_hash(&mut state, budget)?;
+                    entry.access_type.metered_hash(&mut state, budget)?;
                 }
                 Ok(())
             });

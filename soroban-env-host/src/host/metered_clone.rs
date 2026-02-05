@@ -24,16 +24,17 @@ use crate::{
     budget::{AsBudget, DepthLimiter},
     builtin_contracts::base_types::Address,
     host_object::MuxedScAddress,
-    storage::AccessType,
+    storage::{AccessType, EntryTTLFrame, StorageEntry, StorageEntryFrame, StorageLedgerEntryData},
     xdr::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeCostInputs, ContractCodeEntry,
-        ContractCodeEntryExt, ContractCodeEntryV1, ContractCostType, ContractExecutable,
-        ContractId, ContractIdPreimage, CreateContractArgs, CreateContractArgsV2, Duration, Hash,
-        InvokeContractArgs, LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey,
-        LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyTrustLine, PublicKey, ScAddress, ScBytes,
-        ScContractInstance, ScErrorCode, ScErrorType, ScMap, ScMapEntry, ScNonceKey, ScString,
-        ScSymbol, ScVal, ScVec, Signer, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
-        SorobanAuthorizedInvocation, StringM, TimePoint, TrustLineAsset, TrustLineEntry, Uint256,
+        ContractCodeEntryExt, ContractCodeEntryV1, ContractCostType, ContractDataDurability,
+        ContractExecutable, ContractId, ContractIdPreimage, CreateContractArgs,
+        CreateContractArgsV2, Duration, Hash, InvokeContractArgs, LedgerEntry, LedgerEntryData,
+        LedgerEntryExt, LedgerFootprint, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
+        LedgerKeyTrustLine, PublicKey, ScAddress, ScBytes, ScContractInstance, ScErrorCode,
+        ScErrorType, ScMap, ScMapEntry, ScNonceKey, ScString, ScSymbol, ScVal, ScVec, Signer,
+        SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanAuthorizedInvocation, StringM,
+        TimePoint, TrustLineAsset, TrustLineEntry, Uint256,
     },
     AddressObject, Bool, BytesObject, DurationObject, DurationSmall, DurationVal, Error, HostError,
     I128Object, I128Small, I128Val, I256Object, I256Small, I256Val, I32Val, I64Object, I64Small,
@@ -314,6 +315,7 @@ impl MeteredClone for U256 {}
 impl MeteredClone for I256 {}
 impl MeteredClone for Address {}
 impl MeteredClone for AccessType {}
+impl MeteredClone for ContractDataDurability {}
 // endregion: other env types with no substructure
 
 // region: xdr types with no substructure
@@ -431,6 +433,49 @@ impl<C: MeteredClone> MeteredClone for Option<C> {
 // endregion: Rust standard composite types
 
 // region: other env types with substructure
+
+impl MeteredClone for StorageLedgerEntryData {
+    // StorageLedgerEntryData contains either Val (shallow copy) or Rc<LedgerEntry> (shallow Rc clone)
+    // Neither requires deep cloning, so we treat it as shallow.
+    const IS_SHALLOW: bool = true;
+
+    fn charge_for_substructure(&self, _budget: impl AsBudget) -> Result<(), HostError> {
+        // Val is a tagged 64-bit value (shallow)
+        // Rc<LedgerEntry> clone is just a refcount increment (shallow)
+        // No deep structure to charge for
+        Ok(())
+    }
+}
+
+impl MeteredClone for EntryTTLFrame {
+    // EntryTTLFrame contains two u32 values - completely shallow.
+    const IS_SHALLOW: bool = true;
+
+    fn charge_for_substructure(&self, _budget: impl AsBudget) -> Result<(), HostError> {
+        Ok(())
+    }
+}
+
+impl MeteredClone for StorageEntryFrame {
+    // StorageEntryFrame contains depth (u32) and Option<StorageLedgerEntryData>
+    const IS_SHALLOW: bool = true;
+
+    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
+        self.value.charge_for_substructure(budget)
+    }
+}
+
+impl MeteredClone for StorageEntry {
+    // StorageEntry contains AccessType (shallow), Vec<StorageEntryFrame>, and Vec<EntryTTLFrame>
+    // Vecs have substructure that needs charging
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
+        self.entry_stack.charge_for_substructure(budget.clone())?;
+        self.ttl_stack.charge_for_substructure(budget)
+    }
+}
+
 // endregion: other env types with substructure
 
 // region: xdr types with substructure
@@ -676,6 +721,15 @@ impl MeteredClone for CreateContractArgsV2 {
             .charge_for_substructure(budget.clone())?;
         self.executable.charge_for_substructure(budget.clone())?;
         self.constructor_args.charge_for_substructure(budget)
+    }
+}
+
+impl MeteredClone for LedgerFootprint {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
+        self.read_only.charge_for_substructure(budget.clone())?;
+        self.read_write.charge_for_substructure(budget)
     }
 }
 // endregion: xdr types with substructure

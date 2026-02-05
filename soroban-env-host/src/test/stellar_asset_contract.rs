@@ -147,9 +147,17 @@ impl StellarAssetContractTest {
 
     fn get_trustline_balance(&self, key: &Rc<LedgerKey>) -> i64 {
         self.host
-            .with_mut_storage(|s| match &s.get(key, &self.host, None).unwrap().data {
-                LedgerEntryData::Trustline(trustline) => Ok(trustline.balance),
-                _ => unreachable!(),
+            .with_mut_storage(|s| {
+                match &s
+                    .try_get_full(key, &self.host, None)
+                    .unwrap()
+                    .unwrap()
+                    .0
+                    .data
+                {
+                    LedgerEntryData::Trustline(trustline) => Ok(trustline.balance),
+                    _ => unreachable!(),
+                }
             })
             .unwrap()
     }
@@ -182,20 +190,12 @@ impl StellarAssetContractTest {
 
     fn update_account_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
         self.host
-            .with_mut_storage(|s| {
-                let entry = s.get(key, &self.host, None).unwrap();
-                match entry.data.clone() {
-                    LedgerEntryData::Account(mut account) => {
-                        account.flags = new_flags;
-                        let update = Host::modify_ledger_entry_data(
-                            &self.host,
-                            &entry,
-                            LedgerEntryData::Account(account),
-                        )?;
-                        s.put(key, &update, None, &self.host, None)
-                    }
-                    _ => unreachable!(),
+            .modify_ledger_entry(key, |entry_opt| match &mut entry_opt.unwrap().data {
+                LedgerEntryData::Account(ref mut account) => {
+                    account.flags = new_flags;
+                    Ok(())
                 }
+                _ => unreachable!(),
             })
             .unwrap();
     }
@@ -260,20 +260,12 @@ impl StellarAssetContractTest {
 
     fn update_trustline_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
         self.host
-            .with_mut_storage(|s| {
-                let entry = s.get(key, &self.host, None).unwrap();
-                match entry.data.clone() {
-                    LedgerEntryData::Trustline(mut trustline) => {
-                        trustline.flags = new_flags;
-                        let update = Host::modify_ledger_entry_data(
-                            &self.host,
-                            &entry,
-                            LedgerEntryData::Trustline(trustline),
-                        )?;
-                        s.put(key, &update, None, &self.host, None)
-                    }
-                    _ => unreachable!(),
+            .modify_ledger_entry(key, |entry_opt| match &mut entry_opt.unwrap().data {
+                LedgerEntryData::Trustline(ref mut trustline) => {
+                    trustline.flags = new_flags;
+                    Ok(())
                 }
+                _ => unreachable!(),
             })
             .unwrap();
     }
@@ -3462,13 +3454,13 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 828505,
-                mem_bytes: 1216862,
-                disk_read_entries: 1,
-                memory_read_entries: 5,
-                write_entries: 2,
-                disk_read_bytes: 116,
-                write_bytes: 188,
+                instructions: 829394,
+                mem_bytes: 1212226,
+                disk_read_entries: 0,
+                memory_read_entries: 1,
+                write_entries: 1,
+                disk_read_bytes: 0,
+                write_bytes: 72,
                 contract_events_size_bytes: 200,
                 persistent_rent_ledger_bytes: 0,
                 persistent_entry_rent_bumps: 0,
@@ -3488,10 +3480,10 @@ fn test_custom_account_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 712830,
-                        mem_bytes: 1197596,
+                        instructions: 713904,
+                        mem_bytes: 1196547,
                         disk_read_entries: 0,
-                        memory_read_entries: 3,
+                        memory_read_entries: 0,
                         write_entries: 0,
                         disk_read_bytes: 0,
                         write_bytes: 0,

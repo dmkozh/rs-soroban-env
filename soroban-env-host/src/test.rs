@@ -26,6 +26,7 @@ mod lifecycle;
 mod lifetime_extension;
 mod linear_memory;
 mod map;
+mod metered_hash;
 #[cfg(feature = "testutils")]
 mod metering_benchmark;
 mod num;

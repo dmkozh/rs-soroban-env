@@ -1,4 +1,5 @@
 use soroban_env_common::Env;
+use std::rc::Rc;
 
 use crate::{
     builtin_contracts::account_contract::ACCOUNT_CONTRACT_CHECK_AUTH_FN_NAME,
@@ -441,36 +442,38 @@ impl InvocationResources {
 
         // Check individual entry sizes in storage
         if let Ok(storage) = host.try_borrow_storage() {
-            if let Ok(footprint_iter) = storage.footprint.0.iter(host.budget_ref()) {
-                for (key, _access_type) in footprint_iter {
-                    // Serialize the key to get its size
-                    let mut key_buf = Vec::<u8>::new();
-                    if metered_write_xdr(host.budget_ref(), key.as_ref(), &mut key_buf).is_ok() {
-                        let key_size = key_buf.len() as u32;
+            let storage_iter = storage.map.iter();
+            for (key, _entry) in storage_iter {
+                // Serialize the key to get its size
+                let mut key_buf = Vec::<u8>::new();
+                if metered_write_xdr(host.budget_ref(), key.as_ref(), &mut key_buf).is_ok() {
+                    let key_size = key_buf.len() as u32;
 
-                        // Check contract data key size limit
-                        if matches!(key.as_ref(), LedgerKey::ContractData(_)) {
-                            if key_size > limits.max_contract_data_key_size_bytes {
-                                exceeded.push(format!(
-                                    "contract data key '{:?}' size: {} > {}",
-                                    key.as_ref(),
-                                    key_size,
-                                    limits.max_contract_data_key_size_bytes
-                                ));
-                            }
+                    // Check contract data key size limit
+                    if matches!(key.as_ref(), LedgerKey::ContractData(_)) {
+                        if key_size > limits.max_contract_data_key_size_bytes {
+                            exceeded.push(format!(
+                                "contract data key '{:?}' size: {} > {}",
+                                key.as_ref(),
+                                key_size,
+                                limits.max_contract_data_key_size_bytes
+                            ));
                         }
                     }
+                }
 
-                    // Get the entry to check its size
-                    if let Ok(maybe_entry) = storage.get_from_map(key, host) {
-                        if let Some((entry, _)) = maybe_entry {
+                // Get the entry to check its size
+                if let Ok(maybe_entry) = storage.get_from_map(key, host) {
+                    if let Some((entry, _live_until)) = maybe_entry {
+                        // Reconstruct the LedgerEntry from the storage entry
+                        if let Ok(ledger_entry) = entry.to_ledger_entry(key.as_ref(), host) {
                             let mut entry_buf = Vec::<u8>::new();
-                            if metered_write_xdr(host.budget_ref(), entry.as_ref(), &mut entry_buf)
+                            if metered_write_xdr(host.budget_ref(), &ledger_entry, &mut entry_buf)
                                 .is_ok()
                             {
                                 let entry_size = entry_buf.len() as u32;
 
-                                match &entry.data {
+                                match &ledger_entry.data {
                                     LedgerEntryData::ContractData(_) => {
                                         if entry_size > limits.max_contract_data_entry_size_bytes {
                                             exceeded.push(format!(
@@ -501,6 +504,9 @@ impl InvocationResources {
         }
 
         if !exceeded.is_empty() {
+            // Sort the messages for deterministic output regardless of iteration order
+            exceeded.sort();
+
             // This error may seem somewhat cryptic if experienced only via
             // diagnostic events, so print a bit more user-friendly message to
             // stderr as well.
@@ -733,8 +739,8 @@ impl InvocationMeter {
             host.budget_ref().reset()?;
             host.try_borrow_events_mut()?.clear();
             // Note, that the storage itself shouldn't be reset, as it's treated
-            // as the ledger state before invocation.
-            host.try_borrow_storage_mut()?.reset_footprint();
+            // as the ledger state before invocation. Access types are part of
+            // the storage entries and don't need separate reset.
             self.storage_snapshot = host.try_borrow_storage()?.clone();
             self.stack_depth = 1;
             self.detailed_invocation_resources = Some(DetailedInvocationResources {
@@ -954,19 +960,24 @@ impl Host {
         invocation_resources: &mut SubInvocationResources,
     ) -> Result<(), HostError> {
         let mut curr_storage = self.try_borrow_storage_mut()?;
-        let curr_footprint = curr_storage.footprint.clone();
 
         let curr_ledger_seq: u32 = self.get_ledger_sequence()?.into();
-        for (key, curr_access_type) in curr_footprint.0.iter(self.budget_ref())? {
-            let maybe_init_entry = init_storage_snapshot.get_from_map(key, self)?;
+        // Collect keys and access types to avoid borrow issues
+        let entries: Vec<_> = curr_storage
+            .map
+            .iter()
+            .map(|(k, e)| (Rc::clone(k), e.access_type))
+            .collect();
+        for (key, curr_access_type) in entries {
+            let maybe_init_entry = init_storage_snapshot.get_from_map(&key, self)?;
             let mut init_entry_size_for_rent = 0;
             let mut init_live_until_ledger = curr_ledger_seq;
             let mut is_disk_read = match key.as_ref() {
                 LedgerKey::ContractData(_) | LedgerKey::ContractCode(_) => false,
                 _ => true,
             };
-            if let Some((init_entry, init_entry_live_until)) = maybe_init_entry {
-                if let Some(live_until) = init_entry_live_until {
+            if let Some((init_entry, init_live_until_opt)) = maybe_init_entry {
+                if let Some(live_until) = init_live_until_opt {
                     if live_until >= curr_ledger_seq {
                         // Only bump `init_live_until_ledger` to a value higher than the current
                         // ledger in order to get the appropriate rent bump amount.
@@ -979,18 +990,19 @@ impl Host {
                     }
                 }
 
+                let init_ledger_entry = init_entry.to_ledger_entry(key.as_ref(), self)?;
                 let mut buf = Vec::<u8>::new();
-                metered_write_xdr(self.budget_ref(), init_entry.as_ref(), &mut buf)?;
+                metered_write_xdr(self.budget_ref(), &init_ledger_entry, &mut buf)?;
                 if is_disk_read {
                     invocation_resources.disk_read_bytes += buf.len() as i32;
                 }
                 init_entry_size_for_rent =
-                    entry_size_for_rent(self.budget_ref(), &init_entry, buf.len() as u32)?;
+                    entry_size_for_rent(self.budget_ref(), &init_ledger_entry, buf.len() as u32)?;
             }
             let mut entry_size = 0;
             let mut new_entry_size_for_rent = 0;
             let mut entry_live_until_ledger = None;
-            let maybe_entry = curr_storage.try_get_full(key, self, None)?;
+            let maybe_entry = curr_storage.try_get_full(&key, self, None)?;
             if let Some((entry, entry_live_until)) = maybe_entry {
                 let mut buf = Vec::<u8>::new();
                 metered_write_xdr(self.budget_ref(), entry.as_ref(), &mut buf)?;
@@ -1091,8 +1103,8 @@ mod test {
         // contract), so 2 writes/bumps are expected.
         expect![[r#"
             InvocationResources {
-                instructions: 4199640,
-                mem_bytes: 2863204,
+                instructions: 4210154,
+                mem_bytes: 2866020,
                 disk_read_entries: 0,
                 memory_read_entries: 2,
                 write_entries: 2,
@@ -1109,8 +1121,8 @@ mod test {
             DetailedInvocationResources {
                 invocation: CreateContractEntryPoint,
                 resources: SubInvocationResources {
-                    instructions: 4199640,
-                    mem_bytes: 2863204,
+                    instructions: 4210154,
+                    mem_bytes: 2866020,
                     disk_read_entries: 0,
                     memory_read_entries: 2,
                     write_entries: 2,
@@ -1145,10 +1157,10 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316637,
-                mem_bytes: 1134859,
+                instructions: 319727,
+                mem_bytes: 1134337,
                 disk_read_entries: 0,
-                memory_read_entries: 3,
+                memory_read_entries: 1,
                 write_entries: 0,
                 disk_read_bytes: 0,
                 write_bytes: 0,
@@ -1172,10 +1184,10 @@ mod test {
                     ),
                 ),
                 resources: SubInvocationResources {
-                    instructions: 316637,
-                    mem_bytes: 1134859,
+                    instructions: 319727,
+                    mem_bytes: 1134337,
                     disk_read_entries: 0,
-                    memory_read_entries: 3,
+                    memory_read_entries: 1,
                     write_entries: 0,
                     disk_read_bytes: 0,
                     write_bytes: 0,
@@ -1206,10 +1218,10 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 320246,
-                mem_bytes: 1135322,
+                instructions: 319937,
+                mem_bytes: 1134369,
                 disk_read_entries: 0,
-                memory_read_entries: 3,
+                memory_read_entries: 0,
                 write_entries: 1,
                 disk_read_bytes: 0,
                 write_bytes: 84,
@@ -1232,10 +1244,10 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 315936,
-                mem_bytes: 1134707,
+                instructions: 318556,
+                mem_bytes: 1134337,
                 disk_read_entries: 0,
-                memory_read_entries: 3,
+                memory_read_entries: 0,
                 write_entries: 0,
                 disk_read_bytes: 0,
                 write_bytes: 0,
@@ -1258,10 +1270,10 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 322157,
-                mem_bytes: 1135678,
+                instructions: 321108,
+                mem_bytes: 1134369,
                 disk_read_entries: 0,
-                memory_read_entries: 3,
+                memory_read_entries: 1,
                 write_entries: 1,
                 disk_read_bytes: 0,
                 write_bytes: 84,
@@ -1284,10 +1296,10 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316476,
-                mem_bytes: 1134775,
+                instructions: 318556,
+                mem_bytes: 1134337,
                 disk_read_entries: 0,
-                memory_read_entries: 3,
+                memory_read_entries: 0,
                 write_entries: 0,
                 disk_read_bytes: 0,
                 write_bytes: 0,
@@ -1310,10 +1322,10 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 317701,
-                mem_bytes: 1135127,
+                instructions: 318757,
+                mem_bytes: 1134401,
                 disk_read_entries: 0,
-                memory_read_entries: 3,
+                memory_read_entries: 0,
                 write_entries: 0,
                 disk_read_bytes: 0,
                 write_bytes: 0,
@@ -1336,10 +1348,10 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 318103,
-                mem_bytes: 1135127,
+                instructions: 318469,
+                mem_bytes: 1134401,
                 disk_read_entries: 0,
-                memory_read_entries: 3,
+                memory_read_entries: 0,
                 write_entries: 0,
                 disk_read_bytes: 0,
                 write_bytes: 0,
@@ -1362,10 +1374,10 @@ mod test {
         assert!(res.is_err());
         expect![[r#"
             InvocationResources {
-                instructions: 317540,
-                mem_bytes: 1135195,
+                instructions: 319885,
+                mem_bytes: 1134401,
                 disk_read_entries: 0,
-                memory_read_entries: 3,
+                memory_read_entries: 1,
                 write_entries: 0,
                 disk_read_bytes: 0,
                 write_bytes: 0,
@@ -1395,16 +1407,16 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 320711,
-                mem_bytes: 1135662,
-                disk_read_entries: 2,
-                memory_read_entries: 1,
-                write_entries: 2,
-                disk_read_bytes: 3132,
-                write_bytes: 3132,
+                instructions: 318556,
+                mem_bytes: 1134337,
+                disk_read_entries: 0,
+                memory_read_entries: 0,
+                write_entries: 0,
+                disk_read_bytes: 0,
+                write_bytes: 0,
                 contract_events_size_bytes: 0,
-                persistent_rent_ledger_bytes: 80531388,
-                persistent_entry_rent_bumps: 2,
+                persistent_rent_ledger_bytes: 0,
+                persistent_entry_rent_bumps: 0,
                 temporary_rent_ledger_bytes: 0,
                 temporary_entry_rent_bumps: 0,
             }"#]]
@@ -1427,16 +1439,16 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 323248,
-                mem_bytes: 1136109,
-                disk_read_entries: 3,
+                instructions: 318556,
+                mem_bytes: 1134337,
+                disk_read_entries: 0,
                 memory_read_entries: 0,
-                write_entries: 3,
-                disk_read_bytes: 3216,
-                write_bytes: 3216,
+                write_entries: 0,
+                disk_read_bytes: 0,
+                write_bytes: 0,
                 contract_events_size_bytes: 0,
-                persistent_rent_ledger_bytes: 80615304,
-                persistent_entry_rent_bumps: 3,
+                persistent_rent_ledger_bytes: 0,
+                persistent_entry_rent_bumps: 0,
                 temporary_rent_ledger_bytes: 0,
                 temporary_entry_rent_bumps: 0,
             }"#]]
@@ -1874,7 +1886,7 @@ mod test {
                             ),
                             data: String(
                                 ScString(
-                                    StringM(invocation resource limits are exceeded: instructions: 1861715 > 10, memory bytes: 1163433 > 20, contract events size bytes: 800 > 50, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(1a2ee5a89dd2162a20e716b3e2de70a2d662480a9565350378661871bcf8e398) })' size: 1840 > 45),
+                                    StringM(invocation resource limits are exceeded: contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(1a2ee5a89dd2162a20e716b3e2de70a2d662480a9565350378661871bcf8e398) })' size: 1840 > 45, contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) })' size: 3028 > 45, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract events size bytes: 800 > 50, instructions: 1863732 > 10, memory bytes: 1163086 > 20),
                                 ),
                             ),
                         },
@@ -1927,7 +1939,7 @@ mod test {
                             ),
                             data: String(
                                 ScString(
-                                    StringM(invocation resource limits are exceeded: instructions: 320964 > 10, memory bytes: 1135814 > 20, total footprint ledger entries: 5 > 4, disk read ledger entries: 2 > 1, disk read bytes: 3132 > 30, write ledger entries: 2 > 0, write bytes: 3132 > 40, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: Symbol(ScSymbol(StringM(key_1))), durability: Persistent })' size: 60 > 25, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) })' size: 3028 > 45),
+                                    StringM(invocation resource limits are exceeded: contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(1a2ee5a89dd2162a20e716b3e2de70a2d662480a9565350378661871bcf8e398) })' size: 1840 > 45, contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) })' size: 3028 > 45, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: Symbol(ScSymbol(StringM(key_1))), durability: Persistent })' size: 60 > 25, instructions: 319727 > 10, memory bytes: 1134337 > 20),
                                 ),
                             ),
                         },

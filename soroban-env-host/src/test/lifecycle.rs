@@ -2,7 +2,7 @@ use crate::auth::RecordedAuthPayload;
 use crate::HostError;
 use crate::{
     budget::{AsBudget, Budget},
-    storage::{AccessType, Footprint, Storage, StorageMap},
+    storage::{AccessType, Storage, StorageEntry, StorageMap},
     xdr::{
         self, AccountId, ContractEvent, ContractEventBody, ContractEventType, ContractEventV0,
         ContractExecutable, ContractId, ContractIdPreimage, ContractIdPreimageFromAddress,
@@ -25,7 +25,13 @@ fn get_contract_wasm_ref(host: &Host, contract_id: ContractId) -> Hash {
     host.with_mut_storage(|s: &mut Storage| {
         assert!(s.has(&storage_key, &host, None).unwrap());
 
-        match &s.get(&storage_key, host, None).unwrap().data {
+        match &s
+            .try_get_full(&storage_key, host, None)
+            .unwrap()
+            .unwrap()
+            .0
+            .data
+        {
             LedgerEntryData::ContractData(e) => match &e.val {
                 ScVal::ContractInstance(i) => match &i.executable {
                     ContractExecutable::Wasm(h) => Ok(h.clone()),
@@ -44,7 +50,13 @@ fn get_contract_wasm(host: &Host, wasm_hash: Hash) -> Vec<u8> {
     host.with_mut_storage(|s: &mut Storage| {
         assert!(s.has(&storage_key, &host, None).unwrap());
 
-        match &s.get(&storage_key, host, None).unwrap().data {
+        match &s
+            .try_get_full(&storage_key, host, None)
+            .unwrap()
+            .unwrap()
+            .0
+            .data
+        {
             LedgerEntryData::ContractCode(code_entry) => Ok(code_entry.code.to_vec()),
             _ => panic!("expected contract WASM code"),
         }
@@ -61,8 +73,7 @@ fn get_bytes_from_sc_val(val: &ScVal) -> Vec<u8> {
 
 fn test_host() -> Host {
     let budget = Budget::default();
-    let storage =
-        Storage::with_enforcing_footprint_and_map(Footprint::default(), StorageMap::new());
+    let storage = Storage::with_enforcing_footprint_and_map(Default::default());
     let host = Host::with_storage_and_budget(storage, budget);
     host.set_base_prng_seed(*Host::TEST_PRNG_SEED).unwrap();
     host.set_ledger_info(LedgerInfo {
@@ -686,7 +697,7 @@ mod cap_54_55_56 {
 
     use crate::{
         crypto::sha256_hash_from_bytes,
-        storage::{FootprintMap, StorageMap},
+        storage::StorageLedgerEntryData,
         test::observe::ObservedHost,
         testutils::wasm::wasm_module_with_a_bit_of_everything,
         xdr::{
@@ -772,8 +783,14 @@ mod cap_54_55_56 {
         }
         fn reload(self, host: &Host) -> Result<Self, HostError> {
             host.with_mut_storage(|storage| {
-                let contract_entry = storage.get(&self.contract_key, host, None)?;
-                let wasm_entry = storage.get(&self.wasm_key, host, None)?;
+                let contract_entry = storage
+                    .try_get_full(&self.contract_key, host, None)?
+                    .ok_or_else(|| host.storage_error_missing_value(&self.contract_key, None))?
+                    .0;
+                let wasm_entry = storage
+                    .try_get_full(&self.wasm_key, host, None)?
+                    .ok_or_else(|| host.storage_error_missing_value(&self.wasm_key, None))?
+                    .0;
                 Ok(ContractAndWasmEntries {
                     contract_key: self.contract_key,
                     contract_entry,
@@ -788,8 +805,14 @@ mod cap_54_55_56 {
             let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
 
             host.with_mut_storage(|storage| {
-                let contract_entry = storage.get(&contract_key, host, None)?;
-                let wasm_entry = storage.get(&wasm_key, host, None)?;
+                let contract_entry = storage
+                    .try_get_full(&contract_key, host, None)?
+                    .ok_or_else(|| host.storage_error_missing_value(&contract_key, None))?
+                    .0;
+                let wasm_entry = storage
+                    .try_get_full(&wasm_key, host, None)?
+                    .ok_or_else(|| host.storage_error_missing_value(&wasm_key, None))?
+                    .0;
                 Ok(ContractAndWasmEntries {
                     contract_key,
                     contract_entry,
@@ -798,50 +821,75 @@ mod cap_54_55_56 {
                 })
             })
         }
-        fn read_only_footprint(&self, budget: &Budget) -> Footprint {
-            Footprint(
-                FootprintMap::new()
-                    .insert(self.contract_key.clone(), AccessType::ReadOnly, budget)
-                    .unwrap()
-                    .insert(self.wasm_key.clone(), AccessType::ReadOnly, budget)
-                    .unwrap(),
+        fn read_only_storage_map(&self, budget: &Budget) -> StorageMap {
+            let mut map = StorageMap::new();
+            map.insert(
+                self.contract_key.clone(),
+                StorageEntry::new(
+                    AccessType::ReadOnly,
+                    Some((
+                        StorageLedgerEntryData::Entry(Rc::new(std::cell::RefCell::new(
+                            (*self.contract_entry).clone(),
+                        ))),
+                        Some(99999),
+                    )),
+                ),
+                budget,
             )
-        }
-        fn wasm_writing_footprint(&self, budget: &Budget) -> Footprint {
-            Footprint(
-                FootprintMap::new()
-                    .insert(self.contract_key.clone(), AccessType::ReadOnly, budget)
-                    .unwrap()
-                    .insert(self.wasm_key.clone(), AccessType::ReadWrite, budget)
-                    .unwrap(),
+            .unwrap();
+            map.insert(
+                self.wasm_key.clone(),
+                StorageEntry::new(
+                    AccessType::ReadOnly,
+                    Some((
+                        StorageLedgerEntryData::Entry(Rc::new(std::cell::RefCell::new(
+                            (*self.wasm_entry).clone(),
+                        ))),
+                        Some(99999),
+                    )),
+                ),
+                budget,
             )
+            .unwrap();
+            map
         }
-        fn storage_map(&self, budget: &Budget) -> StorageMap {
-            StorageMap::new()
-                .insert(
-                    self.contract_key.clone(),
-                    Some((self.contract_entry.clone(), Some(99999))),
-                    budget,
-                )
-                .unwrap()
-                .insert(
-                    self.wasm_key.clone(),
-                    Some((self.wasm_entry.clone(), Some(99999))),
-                    budget,
-                )
-                .unwrap()
+        fn wasm_writing_storage_map(&self, budget: &Budget) -> StorageMap {
+            let mut map = StorageMap::new();
+            map.insert(
+                self.contract_key.clone(),
+                StorageEntry::new(
+                    AccessType::ReadOnly,
+                    Some((
+                        StorageLedgerEntryData::Entry(Rc::new(std::cell::RefCell::new(
+                            (*self.contract_entry).clone(),
+                        ))),
+                        Some(99999),
+                    )),
+                ),
+                budget,
+            )
+            .unwrap();
+            map.insert(
+                self.wasm_key.clone(),
+                StorageEntry::new(
+                    AccessType::ReadWrite,
+                    Some((
+                        StorageLedgerEntryData::Entry(Rc::new(std::cell::RefCell::new(
+                            (*self.wasm_entry).clone(),
+                        ))),
+                        Some(99999),
+                    )),
+                ),
+                budget,
+            )
+            .unwrap();
+            map
         }
         fn read_only_storage(&self, budget: &Budget) -> Storage {
-            Storage::with_enforcing_footprint_and_map(
-                self.read_only_footprint(budget),
-                self.storage_map(budget),
-            )
+            Storage::with_enforcing_footprint_and_map(self.read_only_storage_map(budget))
         }
         fn wasm_writing_storage(&self, budget: &Budget) -> Storage {
-            Storage::with_enforcing_footprint_and_map(
-                self.wasm_writing_footprint(budget),
-                self.storage_map(budget),
-            )
+            Storage::with_enforcing_footprint_and_map(self.wasm_writing_storage_map(budget))
         }
     }
 
@@ -882,7 +930,7 @@ mod cap_54_55_56 {
         let realhost = host.clone();
         drop(host);
         let (storage, _events) = realhost.try_finish()?;
-        let storage = Storage::with_enforcing_footprint_and_map(storage.footprint, storage.map);
+        let storage = Storage::with_enforcing_footprint_and_map(storage.map);
 
         // Phase 2: build new host with previous ledger output as storage. Possibly on new protocol.
         let host = observed_test_host_with_storage_and_budget(
@@ -906,8 +954,9 @@ mod cap_54_55_56 {
             hash: wasm_hash,
         }));
         let mut storage = host.try_borrow_storage_mut()?;
-        let (entry, live_until_ledger) =
-            storage.get_with_live_until_ledger(&code_key, host, None)?;
+        let (entry, live_until_ledger) = storage
+            .try_get_full(&code_key, host, None)?
+            .ok_or_else(|| (ScErrorType::Storage, ScErrorCode::MissingValue))?;
         let LedgerEntryData::ContractCode(code) = &entry.data else {
             panic!("expected ContractCode");
         };
@@ -918,7 +967,9 @@ mod cap_54_55_56 {
             }),
             ..(*entry).clone()
         });
-        storage.put(&code_key, &new_entry, live_until_ledger, &host, None)?;
+        use crate::storage::StorageLedgerEntryData;
+        let data = StorageLedgerEntryData::from_ledger_entry(&new_entry, &host)?;
+        storage.put(&code_key, Some((data, live_until_ledger)), &host, None)?;
         Ok(())
     }
 
@@ -1233,17 +1284,7 @@ mod cap_54_55_56 {
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
         host.with_mut_storage(|storage| {
             let budget = host.budget_cloned();
-            storage.footprint.0 = storage
-                .footprint
-                .0
-                .remove::<Rc<LedgerKey>>(&wasm_key, &budget)?
-                .unwrap()
-                .0;
-            storage.map = storage
-                .map
-                .remove::<Rc<LedgerKey>>(&wasm_key, &budget)?
-                .unwrap()
-                .0;
+            storage.map.remove(&wasm_key, &budget)?;
             Ok(())
         })?;
 
@@ -1281,8 +1322,17 @@ mod cap_54_55_56 {
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
         host.with_mut_storage(|storage| {
+            use crate::storage::StorageEntry;
             let budget = host.budget_cloned();
-            storage.map = storage.map.insert(wasm_key, None, &budget)?;
+            // Get access type from storage map or default to ReadWrite
+            let access_type = storage
+                .map
+                .get(&wasm_key, &budget)?
+                .map(|entry| entry.access_type)
+                .unwrap_or(AccessType::ReadWrite);
+            storage
+                .map
+                .insert(wasm_key, StorageEntry::new(access_type, None), &budget)?;
             Ok(())
         })?;
 
@@ -1328,17 +1378,7 @@ mod cap_54_55_56 {
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
         host.with_mut_storage(|storage| {
             let budget = host.budget_cloned();
-            storage.footprint.0 = storage
-                .footprint
-                .0
-                .remove::<Rc<LedgerKey>>(&wasm_key, &budget)?
-                .unwrap()
-                .0;
-            storage.map = storage
-                .map
-                .remove::<Rc<LedgerKey>>(&wasm_key, &budget)?
-                .unwrap()
-                .0;
+            storage.map.remove(&wasm_key, &budget)?;
             Ok(())
         })?;
 
@@ -1375,12 +1415,12 @@ mod cap_54_55_56 {
         );
         let wasm_code_key = host.contract_code_ledger_key(&wasm_hash)?;
         host.with_mut_storage(|storage| {
-            storage.footprint.record_access(
-                &wasm_code_key,
-                AccessType::ReadWrite,
+            use crate::storage::StorageEntry;
+            storage.map.insert(
+                wasm_code_key,
+                StorageEntry::new(AccessType::ReadWrite, None),
                 host.as_budget(),
             )?;
-            storage.map = storage.map.insert(wasm_code_key, None, host.as_budget())?;
             Ok(())
         })?;
 
@@ -1829,11 +1869,11 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 899132,
-                            mem_bytes: 3470257,
+                            instructions: 896495,
+                            mem_bytes: 3466015,
                             disk_read_entries: 0,
-                            memory_read_entries: 6,
-                            write_entries: 3,
+                            memory_read_entries: 2,
+                            write_entries: 2,
                             disk_read_bytes: 0,
                             write_bytes: 280,
                             contract_events_size_bytes: 0,
@@ -1855,10 +1895,10 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 629414,
-                                    mem_bytes: 2338889,
+                                    instructions: 623008,
+                                    mem_bytes: 2335068,
                                     disk_read_entries: 0,
-                                    memory_read_entries: 4,
+                                    memory_read_entries: 2,
                                     write_entries: 2,
                                     disk_read_bytes: 0,
                                     write_bytes: 176,
@@ -1881,10 +1921,10 @@ mod cap_58_constructor {
                                             ),
                                         ),
                                         resources: SubInvocationResources {
-                                            instructions: 348679,
-                                            mem_bytes: 1207475,
+                                            instructions: 350586,
+                                            mem_bytes: 1207028,
                                             disk_read_entries: 0,
-                                            memory_read_entries: 2,
+                                            memory_read_entries: 0,
                                             write_entries: 0,
                                             disk_read_bytes: 0,
                                             write_bytes: 0,
@@ -1987,10 +2027,10 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2403909,
-                            mem_bytes: 5948080,
+                            instructions: 2408496,
+                            mem_bytes: 5940881,
                             disk_read_entries: 0,
-                            memory_read_entries: 8,
+                            memory_read_entries: 3,
                             write_entries: 3,
                             disk_read_bytes: 0,
                             write_bytes: 280,
@@ -2013,10 +2053,10 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 913796,
-                                    mem_bytes: 2387055,
+                                    instructions: 906724,
+                                    mem_bytes: 2381982,
                                     disk_read_entries: 0,
-                                    memory_read_entries: 4,
+                                    memory_read_entries: 2,
                                     write_entries: 2,
                                     disk_read_bytes: 0,
                                     write_bytes: 176,
@@ -2039,10 +2079,10 @@ mod cap_58_constructor {
                                             ),
                                         ),
                                         resources: SubInvocationResources {
-                                            instructions: 349975,
-                                            mem_bytes: 1207735,
+                                            instructions: 350815,
+                                            mem_bytes: 1207052,
                                             disk_read_entries: 0,
-                                            memory_read_entries: 2,
+                                            memory_read_entries: 0,
                                             write_entries: 0,
                                             disk_read_bytes: 0,
                                             write_bytes: 0,
@@ -2068,8 +2108,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 546392,
-                                    mem_bytes: 1175064,
+                                    instructions: 551179,
+                                    mem_bytes: 1174552,
                                     disk_read_entries: 0,
                                     memory_read_entries: 0,
                                     write_entries: 0,
