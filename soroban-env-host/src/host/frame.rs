@@ -6,11 +6,11 @@ use crate::{
         metered_clone::{MeteredClone, MeteredContainer},
         prng::Prng,
     },
-    storage::{InstanceStorageMap, StorageMap},
+    storage::InstanceStorageMap,
     xdr::{
         ContractExecutable, ContractId, ContractIdPreimage, CreateContractArgsV2, Hash,
-        HostFunction, HostFunctionType, ScAddress, ScContractInstance, ScErrorCode, ScErrorType,
-        ScVal,
+        HostFunction, HostFunctionType, LedgerKey, ScAddress, ScContractInstance, ScErrorCode,
+        ScErrorType, ScVal,
     },
     AddressObject, Error, ErrorHandler, Host, HostError, Object, Symbol, SymbolStr, TryFromVal,
     TryIntoVal, Val, Vm, DEFAULT_HOST_DEPTH_LIMIT,
@@ -39,10 +39,10 @@ const RESERVED_CONTRACT_FN_PREFIX: &str = "__";
 
 /// Saves host state (storage and objects) for rolling back a (sub-)transaction
 /// on error. A helper type used by [`FrameGuard`].
+///
 // Notes on metering: `RollbackPoint` are metered under Frame operations
 // #[derive(Clone)]
 pub(super) struct RollbackPoint {
-    storage: StorageMap,
     events: usize,
     auth: AuthorizationManagerSnapshot,
 }
@@ -193,12 +193,13 @@ impl Host {
         let auth_snapshot = auth_manager.push_frame(self, &ctx.frame)?;
         // Establish the rp first, since this might run out of gas and fail.
         let rp = RollbackPoint {
-            storage: self.try_borrow_storage()?.map.metered_clone(self.as_budget())?,
             events: self.try_borrow_events()?.vec.len(),
             auth: auth_snapshot,
         };
         // Charge for the push, which might also run out of gas.
         Vec::<Context>::charge_bulk_init_cpy(1, self.as_budget())?;
+        // Increment frame depth tracking
+        self.increment_frame_depth()?;
         // Finally commit to doing the push.
         self.try_borrow_context_stack_mut()?.push(ctx);
         Ok(rp)
@@ -219,12 +220,23 @@ impl Host {
             self.try_borrow_authorization_manager()?
                 .maybe_emulate_authentication(self)?;
         }
+
         let mut auth_snapshot = None;
         if let Some(rp) = orp {
-            self.try_borrow_storage_mut()?.map = rp.storage;
+            // Rollback storage - it does not require a rollback point as it
+            // tracks rollbacks internally.
+            self.try_borrow_storage_mut()?
+                .commit_or_rollback_frame(true, self)?;
             self.try_borrow_events_mut()?.rollback(rp.events)?;
             auth_snapshot = Some(rp.auth);
+        } else {
+            // Commit the storage frame on success.
+            self.try_borrow_storage_mut()?
+                .commit_or_rollback_frame(false, self)?;
         }
+
+        // Decrement frame depth tracking after commit/rollback
+        self.decrement_frame_depth()?;
         self.try_borrow_authorization_manager()?
             .pop_frame(self, auth_snapshot)?;
         ctx.ok_or_else(|| {
@@ -523,25 +535,26 @@ impl Host {
         // else failed. Unfortunately flushing instance storage is _itself_
         // fallible in a variety of ways, and if it fails we want to roll back
         // everything else.
+        let mut instance_storage_persisted = false;
         if res.is_ok() {
-            let instance_storage_persisted = self.persist_instance_storage();
-            match instance_storage_persisted {
+            match self.persist_instance_storage() {
                 Ok(persisted) => {
-                    // If we did persist instance storage, we may need to reload
-                    // it into the re-entrant parent frames.
-                    if persisted {
-                        // Similarly to above, if reloading instance storage, if
-                        // this fails we need to roll back everything.
-                        if let Err(e) = self.maybe_reload_instance_storage_on_frame_pop() {
-                            res = Err(e);
-                        }
-                    }
+                    instance_storage_persisted = persisted;
                 }
                 Err(e) => {
                     res = Err(e);
                 }
             }
         }
+        if res.is_ok() && instance_storage_persisted {
+                    // If we did persist instance storage, we may need to reload
+                    // it into the re-entrant parent frames.
+                        // Similarly to above, if reloading instance storage, if
+                        // this fails we need to roll back everything.
+                        if let Err(e) = self.maybe_reload_instance_storage_on_frame_pop() {
+                            res = Err(e);
+                        }
+                    }
         {
             // We do this _before_ the context is popped, in order to let the
             // observation code assume a context exists
@@ -742,7 +755,9 @@ impl Host {
         args: Vec<Val>,
     ) -> Result<TestContractFrame, HostError> {
         let instance_key = self.contract_instance_ledger_key(&id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&instance_key)?;
+        let instance = self.with_contract_instance_from_storage(&instance_key, |instance| {
+            instance.metered_clone(self)
+        })?;
         Ok(TestContractFrame::new(id, func, args.to_vec(), instance))
     }
 
@@ -756,7 +771,9 @@ impl Host {
     ) -> Result<Val, HostError> {
         // Create key for storage
         let storage_key = self.contract_instance_ledger_key(id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&storage_key)?;
+        let instance = self.with_contract_instance_from_storage(&storage_key, |instance| {
+            instance.metered_clone(self)
+        })?;
         Vec::<Val>::charge_bulk_init_cpy(args.len() as u64, self.as_budget())?;
         let args_vec = args.to_vec();
         match &instance.executable {
@@ -905,13 +922,28 @@ impl Host {
             return self.get_ledger_protocol_version();
         }
         let storage_key = self.contract_instance_ledger_key(contract_id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&storage_key)?;
+        let code_key = self.with_contract_instance_from_storage(&storage_key, |instance| {
         match &instance.executable {
             ContractExecutable::Wasm(wasm_hash) => {
-                let vm = self.instantiate_vm(contract_id, wasm_hash)?;
+                    Ok(Some(self.contract_code_ledger_key(wasm_hash)?))
+                }
+                ContractExecutable::StellarAsset => Ok(None),
+            }
+        })?;
+        match code_key {
+            Some(code_key) => {
+                let LedgerKey::ContractCode(ref code) = code_key else {
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected ContractCode ledger key",
+                        &[],
+                    ));
+                };
+                let vm = self.instantiate_vm(contract_id, &code.hash)?;
                 Ok(vm.module.proto_version)
             }
-            ContractExecutable::StellarAsset => self.get_ledger_protocol_version(),
+            None => self.get_ledger_protocol_version(),
         }
     }
 
@@ -1217,8 +1249,11 @@ impl Host {
             ));
         };
         let instance_key = self.contract_instance_ledger_key(&contract_id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&instance_key)?;
-        ctx.storage = Some(InstanceStorageMap::from_instance_xdr(&instance, self)?);
+        let storage = self.with_contract_instance_from_storage(&instance_key, |instance| {
+            InstanceStorageMap::from_instance_xdr(instance, self)
+        })?;
+
+        ctx.storage = Some(storage);
         Ok(())
     }
 
@@ -1262,11 +1297,14 @@ impl Host {
                 Ok(None)
             }
         })?;
-        if updated_instance_storage.is_some() {
+        if let Some(storage) = updated_instance_storage {
             let contract_id = self.get_current_contract_id_internal()?;
             let key = self.contract_instance_ledger_key(&contract_id)?;
 
-            self.store_contract_instance(None, updated_instance_storage, contract_id, &key)?;
+            self.modify_contract_instance(&key, |instance| {
+                instance.storage = Some(storage);
+                Ok(())
+            })?;
             Ok(true)
         } else {
             Ok(false)

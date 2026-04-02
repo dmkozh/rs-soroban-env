@@ -1,4 +1,4 @@
-use std::{convert::TryInto, rc::Rc};
+use std::convert::TryInto;
 
 use crate::builtin_contracts::base_types::BytesN;
 use crate::testutils::simple_account_sign_fn;
@@ -127,7 +127,7 @@ impl StellarAssetContractTest {
         );
     }
 
-    fn create_default_trustline(&self, user: &TestSigner) -> Rc<LedgerKey> {
+    fn create_default_trustline(&self, user: &TestSigner) -> LedgerKey {
         self.create_trustline(
             &user.account_id(),
             &signing_key_to_account_id(&self.issuer_key),
@@ -145,11 +145,19 @@ impl StellarAssetContractTest {
         account.balance
     }
 
-    fn get_trustline_balance(&self, key: &Rc<LedgerKey>) -> i64 {
+    fn get_trustline_balance(&self, key: &LedgerKey) -> i64 {
         self.host
-            .with_mut_storage(|s| match &s.get(key, &self.host, None).unwrap().data {
+            .with_mut_storage(|s| {
+                match &s
+                    .try_get_full(key, &self.host, None)
+                    .unwrap()
+                    .unwrap()
+                    .0
+                    .data
+                {
                 LedgerEntryData::Trustline(trustline) => Ok(trustline.balance),
                 _ => unreachable!(),
+                }
             })
             .unwrap()
     }
@@ -180,19 +188,15 @@ impl StellarAssetContractTest {
         );
     }
 
-    fn update_account_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
+    fn update_account_flags(&self, key: &LedgerKey, new_flags: u32) {
         self.host
-            .with_mut_storage(|s| {
-                let entry = s.get(key, &self.host, None).unwrap();
-                match entry.data.clone() {
-                    LedgerEntryData::Account(mut account) => {
+            .try_borrow_storage_mut()
+            .unwrap()
+            .modify_ledger_entry(key, &self.host, |entry_opt| {
+                match &mut entry_opt.unwrap().data {
+                    LedgerEntryData::Account(ref mut account) => {
                         account.flags = new_flags;
-                        let update = Host::modify_ledger_entry_data(
-                            &self.host,
-                            &entry,
-                            LedgerEntryData::Account(account),
-                        )?;
-                        s.put(key, &update, None, &self.host, None)
+                        Ok(())
                     }
                     _ => unreachable!(),
                 }
@@ -210,7 +214,7 @@ impl StellarAssetContractTest {
         flags: u32,
         // (buying, selling) liabilities
         liabilities: Option<(i64, i64)>,
-    ) -> Rc<LedgerKey> {
+    ) -> LedgerKey {
         let asset = match asset_code.len() {
             4 => {
                 let mut code = [0_u8; 4];
@@ -258,19 +262,15 @@ impl StellarAssetContractTest {
         key
     }
 
-    fn update_trustline_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
+    fn update_trustline_flags(&self, key: &LedgerKey, new_flags: u32) {
         self.host
-            .with_mut_storage(|s| {
-                let entry = s.get(key, &self.host, None).unwrap();
-                match entry.data.clone() {
-                    LedgerEntryData::Trustline(mut trustline) => {
+            .try_borrow_storage_mut()
+            .unwrap()
+            .modify_ledger_entry(key, &self.host, |entry_opt| {
+                match &mut entry_opt.unwrap().data {
+                    LedgerEntryData::Trustline(ref mut trustline) => {
                         trustline.flags = new_flags;
-                        let update = Host::modify_ledger_entry_data(
-                            &self.host,
-                            &entry,
-                            LedgerEntryData::Trustline(trustline),
-                        )?;
-                        s.put(key, &update, None, &self.host, None)
+                        Ok(())
                     }
                     _ => unreachable!(),
                 }
@@ -361,7 +361,9 @@ impl StellarAssetContractTest {
             .unwrap();
 
         self.host
-            .with_mut_storage(|s| match &s.get(&tl_key, &self.host, None).unwrap().data {
+            .try_borrow_storage_mut()
+            .unwrap()
+            .with_ledger_entry(&tl_key, &self.host, |le_opt| match &le_opt.unwrap().data {
                 LedgerEntryData::Trustline(tl) => Ok(tl.clone()),
                 _ => panic!("Expected trustline entry"),
             })
@@ -3628,13 +3630,13 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 829684,
-                mem_bytes: 1216830,
-                disk_read_entries: 1,
-                memory_read_entries: 5,
-                write_entries: 2,
-                disk_read_bytes: 116,
-                write_bytes: 188,
+                instructions: 803028,
+                mem_bytes: 1207232,
+                disk_read_entries: 0,
+                memory_read_entries: 1,
+                write_entries: 1,
+                disk_read_bytes: 0,
+                write_bytes: 72,
                 contract_events_size_bytes: 200,
                 persistent_rent_ledger_bytes: 0,
                 persistent_entry_rent_bumps: 0,
@@ -3654,10 +3656,10 @@ fn test_custom_account_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 713167,
-                        mem_bytes: 1197508,
+                        instructions: 710965,
+                        mem_bytes: 1195867,
                         disk_read_entries: 0,
-                        memory_read_entries: 3,
+                        memory_read_entries: 0,
                         write_entries: 0,
                         disk_read_bytes: 0,
                         write_bytes: 0,

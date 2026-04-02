@@ -1,112 +1,12 @@
-use std::rc::Rc;
-
-use crate::budget::{AsBudget, Budget};
+use crate::budget::AsBudget;
 use crate::host_object::MuxedScAddress;
-use crate::storage::{AccessType, Footprint, Storage};
-use crate::xdr::{
-    ContractDataDurability, ContractId, LedgerKey, LedgerKeyContractData, MuxedEd25519Account,
-    ScAddress, ScErrorCode, ScErrorType, ScVal, Uint256,
-};
-use crate::{Host, HostError, MeteredOrdMap};
+use crate::storage::Storage;
+use crate::xdr::{LedgerKey, MuxedEd25519Account, ScAddress, ScErrorCode, ScErrorType, Uint256};
+use crate::{Host, HostError};
 use soroban_env_common::{AddressObject, Env, MuxedAddressObject, Symbol, TryFromVal, TryIntoVal};
-use soroban_test_wasms::{CONTRACT_STORAGE, CONTRACT_STORAGE_WITH_VALS, INVOKE_CONTRACT};
-
-#[test]
-fn footprint_record_access() -> Result<(), HostError> {
-    let budget = Budget::default();
-    budget.reset_unlimited()?;
-    let mut fp = Footprint::default();
-    // record when key not exist
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
-    fp.record_access(&key, AccessType::ReadOnly, &budget)?;
-    assert_eq!(fp.0.contains_key::<LedgerKey>(&key, &budget)?, true);
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadOnly)
-    );
-    // record and change access
-    fp.record_access(&key, AccessType::ReadWrite, &budget)?;
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadWrite)
-    );
-    fp.record_access(&key, AccessType::ReadOnly, &budget)?;
-    assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
-        Some(&AccessType::ReadWrite)
-    );
-    Ok(())
-}
-
-#[test]
-fn footprint_enforce_access() -> Result<(), HostError> {
-    let budget = Budget::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
-
-    // Key not in footprint. Only difference is type_
-    let key2 = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Temporary,
-    }));
-
-    let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
-    let mom = MeteredOrdMap::from_map(om, &budget)?;
-    let mut fp = Footprint(mom);
-    assert!(fp
-        .enforce_access(&key2, AccessType::ReadOnly, &budget)
-        .is_err());
-    fp.enforce_access(&key, AccessType::ReadOnly, &budget)?;
-    fp.0 =
-        fp.0.insert(Rc::clone(&key), AccessType::ReadWrite, &budget)?;
-    fp.enforce_access(&key, AccessType::ReadOnly, &budget)?;
-    fp.enforce_access(&key, AccessType::ReadWrite, &budget)?;
-    Ok(())
-}
-
-#[test]
-fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
-    let budget = Budget::default();
-    let mut fp = Footprint::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
-    let res = fp.enforce_access(&key, AccessType::ReadOnly, &budget);
-    assert!(HostError::result_matches_err(
-        res,
-        (ScErrorType::Storage, ScErrorCode::ExceededLimit)
-    ));
-    Ok(())
-}
-
-#[test]
-fn footprint_attempt_to_write_readonly_entry() -> Result<(), HostError> {
-    let budget = Budget::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
-    let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
-    let mom = MeteredOrdMap::from_map(om, &budget)?;
-    let mut fp = Footprint(mom);
-    let res = fp.enforce_access(&key, AccessType::ReadWrite, &budget);
-    assert!(HostError::result_matches_err(
-        res,
-        (ScErrorType::Storage, ScErrorCode::ExceededLimit)
-    ));
-    Ok(())
-}
+use soroban_test_wasms::{
+    CONTRACT_STORAGE, CONTRACT_STORAGE_P26, CONTRACT_STORAGE_WITH_VALS, INVOKE_CONTRACT,
+};
 
 fn storage_fn_name(host: &Host, fn_name: &str, storage: &str) -> Symbol {
     Symbol::try_from_val(host, &format!("{}_{}", fn_name, storage).as_str()).unwrap()
@@ -349,19 +249,12 @@ fn test_nested_bump() {
     let storage_contract_id = host.register_test_contract_wasm(CONTRACT_STORAGE);
 
     let contract_id_hash = host.contract_id_from_address(storage_contract_id).unwrap();
-    let storage_key: std::rc::Rc<LedgerKey> = host
+    let storage_key: LedgerKey = host
         .contract_instance_ledger_key(&contract_id_hash)
         .unwrap();
     host.with_mut_storage(|s: &mut Storage| {
-        let v = s
-            .map
-            .get::<Rc<LedgerKey>>(&storage_key, host.as_budget())
-            .unwrap()
-            .unwrap()
-            .clone()
-            .unwrap()
-            .1
-            .unwrap();
+        let entry = s.map.get(&storage_key, host.as_budget()).unwrap().unwrap();
+        let v = entry.current_ttl().unwrap();
         assert_eq!(v, 4095);
         Ok(())
     })
@@ -382,15 +275,8 @@ fn test_nested_bump() {
     .unwrap();
 
     host.with_mut_storage(|s: &mut Storage| {
-        let v = s
-            .map
-            .get::<Rc<LedgerKey>>(&storage_key, host.as_budget())
-            .unwrap()
-            .unwrap()
-            .clone()
-            .unwrap()
-            .1
-            .unwrap();
+        let entry = s.map.get(&storage_key, host.as_budget()).unwrap().unwrap();
+        let v = entry.current_ttl().unwrap();
         // The inner call adds 10 to the extend_to parameter
         assert_eq!(v, 5010);
         Ok(())
@@ -575,7 +461,6 @@ mod ttl_extension_v2_tests {
     use crate::xdr::{ContractDataDurability, LedgerKeyContractData, ScSymbol, ScVal};
     use soroban_env_common::{ContractTtlExtension, StorageType};
     use soroban_test_wasms::CONTRACT_STORAGE_P26;
-
     fn setup_host() -> Host {
         let host = Host::test_host_with_recording_footprint();
         host.set_ledger_info(crate::LedgerInfo {
@@ -588,23 +473,40 @@ mod ttl_extension_v2_tests {
         host
     }
 
-    fn get_live_until(host: &Host, key: &Rc<LedgerKey>) -> u32 {
-        host.with_mut_storage(|s| Ok(s.get_with_live_until_ledger(key, host, None)?.1.unwrap()))
-            .unwrap()
+    fn get_live_until(host: &Host, key: &LedgerKey) -> u32 {
+        host.with_mut_storage(|s| {
+            let storage_entry = s.map.get(key, host.budget_ref())?.ok_or_else(|| {
+                host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "key not found",
+                    &[],
+                )
+            })?;
+            storage_entry.current_ttl().ok_or_else(|| {
+                host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "entry has no TTL",
+                    &[],
+                )
+            })
+        })
+        .unwrap()
     }
 
-    fn make_data_key(host: &Host, contract_id: AddressObject, storage: &str) -> Rc<LedgerKey> {
+    fn make_data_key(host: &Host, contract_id: AddressObject, storage: &str) -> LedgerKey {
         let contract_id_hash = host.contract_id_from_address(contract_id).unwrap();
         let durability = match storage {
             "persistent" => ContractDataDurability::Persistent,
             "temporary" => ContractDataDurability::Temporary,
             _ => panic!("unexpected storage type"),
         };
-        Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
+        LedgerKey::ContractData(LedgerKeyContractData {
             contract: ScAddress::Contract(contract_id_hash),
             key: ScVal::Symbol(ScSymbol("key_1".try_into().unwrap())),
             durability,
-        }))
+        })
     }
 
     fn extend_v2_fn_name(host: &Host, storage: &str) -> Symbol {
@@ -614,7 +516,6 @@ mod ttl_extension_v2_tests {
 
     fn test_extend_ttl_v2(host: &Host, contract_id: AddressObject, storage: &str) {
         let key = Symbol::try_from_small_str("key_1").unwrap();
-
         host.call(
             contract_id,
             storage_fn_name(host, "put", storage),
@@ -803,14 +704,14 @@ mod ttl_extension_v2_tests {
             .contract_instance_ledger_key(&contract_id_hash)
             .unwrap();
 
-        let code_hash = match &host
-            .retrieve_contract_instance_from_storage(&instance_key)
-            .unwrap()
-            .executable
-        {
-            crate::xdr::ContractExecutable::Wasm(hash) => hash.clone(),
-            _ => panic!("Expected Wasm executable"),
-        };
+        let code_hash = host
+            .with_contract_instance_from_storage(&instance_key, |instance| {
+                match &instance.executable {
+                    crate::xdr::ContractExecutable::Wasm(hash) => Ok(hash.clone()),
+                    _ => panic!("Expected Wasm executable"),
+                }
+            })
+            .unwrap();
         let code_key = host.contract_code_ledger_key(&code_hash).unwrap();
 
         let get_ttls = || {
@@ -841,4 +742,37 @@ mod ttl_extension_v2_tests {
         assert_eq!(extend(ContractTtlExtension::Instance, 9000), (500, 0));
         assert_eq!(extend(ContractTtlExtension::Code, 10000), (0, 500));
     }
+}
+
+#[test]
+fn test_stress_storage() {
+    let host = observe_host!(Host::test_host_with_recording_footprint());
+    let contract_id = host.register_test_contract_wasm(CONTRACT_STORAGE_P26);
+
+    let stress_storage_fn = Symbol::try_from_val(&*host, &"stress_storage").unwrap();
+    let key = Symbol::try_from_small_str("stresskey").unwrap();
+
+    // Test temporary storage (storage_type = 0)
+    host.call(
+        contract_id,
+        stress_storage_fn,
+        test_vec![&*host, 0_u32, key].into(),
+    )
+    .expect("stress_storage for temporary should succeed");
+
+    // Test persistent storage (storage_type = 1)
+    host.call(
+        contract_id,
+        stress_storage_fn,
+        test_vec![&*host, 1_u32, key].into(),
+    )
+    .expect("stress_storage for persistent should succeed");
+
+    // Test instance storage (storage_type = 2)
+    host.call(
+        contract_id,
+        stress_storage_fn,
+        test_vec![&*host, 2_u32, key].into(),
+    )
+    .expect("stress_storage for instance should succeed");
 }

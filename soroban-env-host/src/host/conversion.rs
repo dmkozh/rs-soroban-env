@@ -1,13 +1,9 @@
-use std::rc::Rc;
-
 use crate::host_object::{MemHostObjectType, MuxedScAddress};
 use crate::{
     budget::AsBudget,
     crypto::metered_scalar::MeteredScalar,
     err,
-    host::metered_clone::{
-        charge_shallow_copy, MeteredAlloc, MeteredClone, MeteredContainer, MeteredIterator,
-    },
+    host::metered_clone::{charge_shallow_copy, MeteredClone, MeteredContainer, MeteredIterator},
     host_object::{HostMap, HostObject, HostVec},
     num::{i256_from_pieces, i256_into_pieces, u256_from_pieces, u256_into_pieces},
     xdr::{
@@ -133,22 +129,19 @@ impl Host {
         contract: ScAddress,
         key: ScVal,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
-        Rc::metered_new(
-            LedgerKey::ContractData(LedgerKeyContractData {
+    ) -> Result<LedgerKey, HostError> {
+        Ok(LedgerKey::ContractData(LedgerKeyContractData {
                 contract,
                 key,
                 durability,
-            }),
-            self.as_budget(),
-        )
+        }))
     }
 
     pub(crate) fn storage_key_from_scval(
         &self,
         key: ScVal,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LedgerKey, HostError> {
         let contract_id = self.get_current_contract_id_internal()?;
         self.storage_key_for_address(ScAddress::Contract(contract_id), key, durability)
     }
@@ -160,7 +153,7 @@ impl Host {
         &self,
         k: Val,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LedgerKey, HostError> {
         let key_scval = self.from_host_val_for_storage(k)?;
         self.storage_key_from_scval(key_scval, durability)
     }
@@ -500,7 +493,7 @@ impl Host {
         objref: Object,
     ) -> Result<ScVal, HostError> {
         match ho {
-            HostObject::Vec(vv) => {
+                    HostObject::Vec(vv) => {
                 let sv = vv
                     .iter()
                     .map(|e| self.from_host_val_unmetered(*e))
@@ -513,7 +506,7 @@ impl Host {
                     let key = self.from_host_val_unmetered(*k)?;
                     let val = self.from_host_val_unmetered(*v)?;
                     mv.push(ScMapEntry { key, val });
-                }
+                    }
                 Ok(ScVal::Map(Some(ScMap(self.map_err(mv.try_into())?))))
             }
             HostObject::U64(u) => Ok(ScVal::U64(*u)),
@@ -521,53 +514,53 @@ impl Host {
             HostObject::TimePoint(tp) => Ok(ScVal::Timepoint(tp.clone())),
             HostObject::Duration(d) => Ok(ScVal::Duration(d.clone())),
             HostObject::U128(u) => Ok(ScVal::U128(UInt128Parts {
-                hi: int128_helpers::u128_hi(*u),
-                lo: int128_helpers::u128_lo(*u),
+                            hi: int128_helpers::u128_hi(*u),
+                            lo: int128_helpers::u128_lo(*u),
             })),
             HostObject::I128(i) => Ok(ScVal::I128(Int128Parts {
-                hi: int128_helpers::i128_hi(*i),
-                lo: int128_helpers::i128_lo(*i),
+                            hi: int128_helpers::i128_hi(*i),
+                            lo: int128_helpers::i128_lo(*i),
             })),
-            HostObject::U256(u) => {
-                let (hi_hi, hi_lo, lo_hi, lo_lo) = u256_into_pieces(*u);
+                    HostObject::U256(u) => {
+                        let (hi_hi, hi_lo, lo_hi, lo_lo) = u256_into_pieces(*u);
                 Ok(ScVal::U256(UInt256Parts {
-                    hi_hi,
-                    hi_lo,
-                    lo_hi,
-                    lo_lo,
+                            hi_hi,
+                            hi_lo,
+                            lo_hi,
+                            lo_lo,
                 }))
-            }
-            HostObject::I256(i) => {
-                let (hi_hi, hi_lo, lo_hi, lo_lo) = i256_into_pieces(*i);
+                    }
+                    HostObject::I256(i) => {
+                        let (hi_hi, hi_lo, lo_hi, lo_lo) = i256_into_pieces(*i);
                 Ok(ScVal::I256(Int256Parts {
-                    hi_hi,
-                    hi_lo,
-                    lo_hi,
-                    lo_lo,
+                            hi_hi,
+                            hi_lo,
+                            lo_hi,
+                            lo_lo,
                 }))
-            }
+                    }
             HostObject::Bytes(b) => Ok(ScVal::Bytes(b.clone())),
             HostObject::String(s) => Ok(ScVal::String(s.clone())),
             HostObject::Symbol(s) => Ok(ScVal::Symbol(s.clone())),
             HostObject::Address(addr) => Ok(ScVal::Address(addr.clone())),
-            HostObject::MuxedAddress(addr) => {
-                if *self.try_borrow_storage_key_conversion_active()? {
-                    return Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InvalidInput,
-                        "muxed addresses should not be used in the storage keys",
-                        &[objref.to_val()],
-                    ));
-                }
+                    HostObject::MuxedAddress(addr) => {
+                        if *self.try_borrow_storage_key_conversion_active()? {
+                            return Err(self.err(
+                                ScErrorType::Storage,
+                                ScErrorCode::InvalidInput,
+                                "muxed addresses should not be used in the storage keys",
+                                &[objref.to_val()],
+                            ));
+                        }
                 Ok(ScVal::Address(addr.0.clone()))
-            }
+                    }
         }
     }
 
     /// Convert a Val to ScVal without individual budget charges.
     /// The caller must have already charged based on the Val's xdr_byte_size.
     ///
-    /// Inlines all inline-Val → ScVal conversions directly to avoid function
+    /// Inlines all inline-Val ? ScVal conversions directly to avoid function
     /// call overhead. For object Vals, uses the unmetered conversion path.
     fn from_host_val_unmetered(&self, val: Val) -> Result<ScVal, HostError> {
         use crate::{
@@ -576,7 +569,7 @@ impl Host {
             U32Val, I32Val, U64Small, I64Small,
             TimepointSmall, DurationSmall,
             U128Small, I128Small, U256Small, I256Small,
-        };
+                };
         let bad = |msg| self.err(ScErrorType::Value, ScErrorCode::InternalError, msg, &[]);
         match val.get_tag() {
             Tag::False => Ok(ScVal::Bool(false)),
@@ -646,14 +639,14 @@ impl Host {
                 let error = crate::Error::try_from(val).map_err(|_| bad("bad err"))?;
                 Ok(error.try_into().map_err(|_| bad("bad error val"))?)
             }
-            // Object types — look up and convert unmetered
+            // Object types � look up and convert unmetered
             _ => {
                 let objref: Object = val.try_into().map_err(|_| bad("expected object val"))?;
                 self.visit_obj_untyped(objref, |ho| {
                     self.from_host_obj_unmetered(ho, objref)
-                })
-            }
+            })
         }
+    }
     }
 
     pub(crate) fn to_host_obj(&self, ob: &ScValObjRef<'_>) -> Result<Object, HostError> {
@@ -867,8 +860,8 @@ impl Host {
                 }
             };
             // Expected strkey lengths:
-            // - Account/Contract: PAYLOAD_LEN = 32 + 3 = 35 bytes → 56 chars in base32
-            // - Muxed account: MUXED_PAYLOAD_LEN = 32 + 8 + 3 = 43 bytes → 69 chars in base32
+            // - Account/Contract: PAYLOAD_LEN = 32 + 3 = 35 bytes -> 56 chars in base32
+            // - Muxed account: MUXED_PAYLOAD_LEN = 32 + 8 + 3 = 43 bytes -> 69 chars in base32
             const PAYLOAD_LEN: u64 = 32 + 3;
             const MUXED_PAYLOAD_LEN: u64 = 32 + 8 + 3;
             let expected_key_len = (PAYLOAD_LEN * 8).div_ceil(5);

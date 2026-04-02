@@ -37,7 +37,7 @@ pub struct AutoRestoringSnapshotSource<T: SnapshotSource> {
     snapshot_source: Rc<T>,
     min_persistent_live_until_ledger: u32,
     current_ledger_sequence: u32,
-    restored_ledger_keys: RefCell<BTreeSet<Rc<LedgerKey>>>,
+    restored_ledger_keys: RefCell<BTreeSet<LedgerKey>>,
 }
 
 impl<T: SnapshotSource> AutoRestoringSnapshotSource<T> {
@@ -74,7 +74,7 @@ impl<T: SnapshotSource> AutoRestoringSnapshotSource<T> {
             ledger_info,
             restored_keys
                 .iter()
-                .map(|k| k.as_ref().clone())
+                .cloned()
                 .collect::<Vec<LedgerKey>>()
                 .as_ref(),
         )
@@ -83,10 +83,10 @@ impl<T: SnapshotSource> AutoRestoringSnapshotSource<T> {
 }
 
 impl<T: SnapshotSource> SnapshotSource for AutoRestoringSnapshotSource<T> {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &LedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError> {
         let entry_with_live_until = self.snapshot_source.get(key)?;
         if let Some((entry, live_until)) = entry_with_live_until {
-            if let Some(durability) = get_key_durability(key.as_ref()) {
+            if let Some(durability) = get_key_durability(key) {
                 let live_until = live_until.ok_or_else(|| {
                     // Entries with durability must have TTL.
                     HostError::from((ScErrorType::Storage, ScErrorCode::InternalError))
@@ -117,13 +117,13 @@ impl<T: SnapshotSource> SnapshotSource for AutoRestoringSnapshotSource<T> {
 
 #[derive(Default)]
 struct LedgerEntryUpdater {
-    updated_entries_cache: BTreeMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>,
+    updated_entries_cache: BTreeMap<LedgerKey, Option<EntryWithLiveUntil>>,
 }
 
 impl LedgerEntryUpdater {
     fn maybe_update_entry(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         entry: Option<EntryWithLiveUntil>,
     ) -> Option<EntryWithLiveUntil> {
         if let Some(e) = self.updated_entries_cache.get(key) {
@@ -157,7 +157,7 @@ enum SnapshotSourceHolder<'a> {
 }
 
 impl SnapshotSource for SnapshotSourceHolder<'_> {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &LedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError> {
         match self {
             SnapshotSourceHolder::Ref(r) => r.get(key),
             SnapshotSourceHolder::Rc(r) => r.get(key),
@@ -192,7 +192,7 @@ impl<'a> SimulationSnapshotSource<'a> {
 }
 
 impl SnapshotSource for SimulationSnapshotSource<'_> {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &LedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError> {
         Ok(self
             .entry_updater
             .borrow_mut()

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::e2e_invoke::ledger_entry_to_ledger_key;
 use crate::storage::EntryWithLiveUntil;
 use crate::ErrorHandler;
@@ -9,8 +11,8 @@ use crate::{
         AccountId, ContractCostType, LedgerEntry, LedgerKey, PublicKey, ScAddress, ScVal, ScVec,
         Uint256,
     },
-    AddressObject, BytesObject, Env, EnvBase, Host, HostError, LedgerInfo, MeteredOrdMap,
-    StorageType, SymbolSmall, Val, VecObject,
+    AddressObject, BytesObject, Env, EnvBase, Host, HostError, LedgerInfo, StorageType,
+    SymbolSmall, Val, VecObject,
 };
 use ed25519_dalek::SigningKey;
 use rand::RngCore;
@@ -117,18 +119,18 @@ pub fn generate_bytes_array(host: &Host) -> [u8; 32] {
     bytes
 }
 
-pub struct MockSnapshotSource(BTreeMap<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>);
+pub struct MockSnapshotSource(BTreeMap<LedgerKey, (Rc<LedgerEntry>, Option<u32>)>);
 
 impl MockSnapshotSource {
     pub fn new() -> Self {
-        Self(BTreeMap::<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>::new())
+        Self(BTreeMap::<LedgerKey, (Rc<LedgerEntry>, Option<u32>)>::new())
     }
 
     pub fn from_entries(entries: Vec<(LedgerEntry, Option<u32>)>) -> Self {
-        let mut map = BTreeMap::<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>::new();
+        let mut map = BTreeMap::<LedgerKey, (Rc<LedgerEntry>, Option<u32>)>::new();
         let dummy_budget = Budget::default();
         for (e, maybe_ttl) in entries {
-            let key = Rc::new(ledger_entry_to_ledger_key(&e, &dummy_budget).unwrap());
+            let key = ledger_entry_to_ledger_key(&e, &dummy_budget).unwrap();
             map.insert(key, (Rc::new(e), maybe_ttl));
         }
         Self(map)
@@ -136,7 +138,7 @@ impl MockSnapshotSource {
 }
 
 impl SnapshotSource for MockSnapshotSource {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &LedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError> {
         if let Some((entry, live_until)) = self.0.get(key) {
             Ok(Some((Rc::clone(entry), *live_until)))
         } else {
@@ -406,58 +408,57 @@ impl Host {
         })
         .unwrap();
 
-        // Modify footprint entries to read-only-ness as required, synthesize
-        // empty storage-map entries that were accessed by keys the contract made
-        // up, and switch to enforcing mode.
+        // Modify storage map entries to read-only-ness as required, and switch
+        // to enforcing mode.
         self.with_mut_storage(|storage| {
-            storage.footprint.0 = MeteredOrdMap::from_exact_iter(
-                storage
-                    .footprint
-                    .0
-                    .iter(self.budget_ref())
-                    .unwrap()
-                    .map(|(k, accesstype)| {
-                        let mut accesstype = *accesstype;
-                        if let LedgerKey::ContractData(k) = k.as_ref() {
-                            if let Some((_, ro)) = data_keys.get(&k.key) {
-                                if *ro {
-                                    accesstype = crate::storage::AccessType::ReadOnly;
-                                } else {
-                                    accesstype = crate::storage::AccessType::ReadWrite;
-                                }
+            // Collect updates needed based on data_keys
+            let updates: Vec<_> = storage
+                .map
+                .iter_non_metered()
+                .filter_map(|(k, entry)| {
+                    if let LedgerKey::ContractData(kcd) = k {
+                        if let Some((_, ro)) = data_keys.get(&kcd.key) {
+                            let new_access = if *ro {
+                                crate::storage::AccessType::ReadOnly
+                            } else {
+                                crate::storage::AccessType::ReadWrite
+                            };
+                            if entry.access_type() != new_access {
+                                return Some((k.clone(), new_access));
                             }
                         }
-                        (k.clone(), accesstype)
-                    }),
-                self.budget_ref(),
-            )
-            .unwrap();
+                    }
+                    None
+                })
+                .collect();
 
-            // Synthesize empty entries for anything the contract made up (these
-            // will be in the footprint but not yet in the map, which is an
-            // invariant violation we need to repair here).
-            let mut map = BTreeMap::new();
-            for (k, v) in storage.map.iter(self.budget_ref()).unwrap() {
-                map.insert(k.clone(), v.clone());
-            }
-            for (k, _) in storage.footprint.0.iter(self.budget_ref()).unwrap() {
-                if !map.contains_key(k) {
-                    map.insert(k.clone(), None);
+            // Apply the updates
+            for (k, new_access) in updates {
+                if let Some(entry) = storage.map.get_mut(&k, self.budget_ref()).unwrap() {
+                    entry.set_access_type(new_access);
                 }
             }
+
+            // Access types are already in storage.map entries.
+            let mut map = BTreeMap::new();
+            for (k, storage_entry) in storage.map.iter_non_metered() {
+                map.insert(k.clone(), storage_entry.clone());
+            }
             // Reset any nonces so they can be consumed.
-            for (k, v) in map.iter_mut() {
-                if let LedgerKey::ContractData(k) = k.as_ref() {
+            for (k, storage_entry) in map.iter_mut() {
+                if let LedgerKey::ContractData(k) = k {
                     if let ScVal::LedgerKeyNonce(_) = &k.key {
-                        *v = None;
+                        // Clear the stacks to just have None at depth 0
+                        storage_entry.reset_to_none_at_depth_zero();
                     }
                 }
             }
-            storage.map = MeteredOrdMap::from_exact_iter(
-                map.iter().map(|(k, v)| (k.clone(), v.clone())),
-                self.budget_ref(),
-            )
-            .unwrap();
+            storage.map = Default::default();
+            for (k, v) in map.iter() {
+                storage
+                    .map
+                    .insert(k.clone(), v.clone(), self.budget_ref())?;
+            }
             storage.mode = crate::storage::FootprintMode::Enforcing;
             Ok(())
         })

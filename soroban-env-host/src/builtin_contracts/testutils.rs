@@ -296,7 +296,7 @@ pub(crate) fn create_account(
     flags: u32,
 ) {
     let key = host.to_account_key(account_id.clone()).unwrap();
-    let account_id = match key.as_ref() {
+    let account_id = match &key {
         LedgerKey::Account(acc) => acc.account_id.clone(),
         _ => unreachable!(),
     };
