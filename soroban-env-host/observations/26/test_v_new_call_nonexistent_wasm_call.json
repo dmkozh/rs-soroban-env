@@ -1,8 +1,8 @@
 {
   "   0 begin": "cpu:0, mem:0, prngs:-/-, objs:-/-, vm:-/-, evt:-, store:-/2@380dc9ee, stk:-, auth:-/-",
-  "   1 call vec_new()": "cpu:175943, mem:28398, objs:-/1@10432200, store:-/1@a324d858",
-  "   2 ret vec_new -> Ok(Vec(obj#3))": "cpu:176446, mem:28478, objs:-/2@acf0be8f",
+  "   1 call vec_new()": "cpu:175494, mem:28262, objs:-/1@10432200, store:-/1@a324d858",
+  "   2 ret vec_new -> Ok(Vec(obj#3))": "cpu:175997, mem:28342, objs:-/2@acf0be8f",
   "   3 call call(Address(obj#1), Symbol(test), Vec(obj#3))": "",
-  "   4 ret call -> Err(Error(Storage, ExceededLimit))": "cpu:187759, mem:28966",
-  "   5 end": "cpu:187759, mem:28966, prngs:-/-, objs:-/2@acf0be8f, vm:-/-, evt:-, store:-/1@a324d858, stk:-, auth:-/-"
+  "   4 ret call -> Err(Error(Storage, ExceededLimit))": "cpu:188215, mem:28422",
+  "   5 end": "cpu:188215, mem:28422, prngs:-/-, objs:-/2@acf0be8f, vm:-/-, evt:-, store:-/1@a324d858, stk:-, auth:-/-"
 }
