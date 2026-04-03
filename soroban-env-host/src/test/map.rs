@@ -264,7 +264,7 @@ fn map_values() -> Result<(), HostError> {
 
 #[test]
 fn map_stack_no_overflow_65536_boxed_keys_and_vals() {
-    let mut map: Vec<(Rc<LedgerKey>, Option<Rc<LedgerEntry>>)> = Vec::new();
+    let mut map: Vec<(LedgerKey, Option<Rc<LedgerEntry>>)> = Vec::new();
     for a in 0..=255 {
         for b in 0..=255 {
             let mut k: [u8; 32] = [0; 32];
@@ -274,7 +274,7 @@ fn map_stack_no_overflow_65536_boxed_keys_and_vals() {
             let key = LedgerKey::Account(LedgerKeyAccount {
                 account_id: AccountId(pk),
             });
-            map.push((Rc::new(key), None));
+            map.push((key, None));
         }
     }
 }

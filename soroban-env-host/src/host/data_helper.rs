@@ -75,16 +75,13 @@ impl Host {
     pub(crate) fn contract_instance_ledger_key(
         &self,
         contract_id: &ContractId,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LedgerKey, HostError> {
         let contract_id = contract_id.metered_clone(self)?;
-        Rc::metered_new(
-            LedgerKey::ContractData(LedgerKeyContractData {
-                key: ScVal::LedgerKeyContractInstance,
-                durability: ContractDataDurability::Persistent,
-                contract: ScAddress::Contract(contract_id),
-            }),
-            self,
-        )
+        Ok(LedgerKey::ContractData(LedgerKeyContractData {
+            key: ScVal::LedgerKeyContractInstance,
+            durability: ContractDataDurability::Persistent,
+            contract: ScAddress::Contract(contract_id),
+        }))
     }
 
     pub(crate) fn extract_contract_instance_from_ledger_entry(
@@ -113,7 +110,7 @@ impl Host {
     // Notes on metering: retrieving from storage covered. Rest are free.
     pub(crate) fn retrieve_contract_instance_from_storage(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
     ) -> Result<ScContractInstance, HostError> {
         self.try_borrow_storage_mut()?
             .with_ledger_entry(key, self, |opt| match opt {
@@ -125,12 +122,11 @@ impl Host {
     pub(crate) fn contract_code_ledger_key(
         &self,
         wasm_hash: &Hash,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LedgerKey, HostError> {
         let wasm_hash = wasm_hash.metered_clone(self)?;
-        Rc::metered_new(
-            LedgerKey::ContractCode(LedgerKeyContractCode { hash: wasm_hash }),
-            self,
-        )
+        Ok(LedgerKey::ContractCode(LedgerKeyContractCode {
+            hash: wasm_hash,
+        }))
     }
 
     pub(crate) fn retrieve_wasm_from_storage(
@@ -183,7 +179,7 @@ impl Host {
         executable: ContractExecutable,
         instance_storage: Option<ScMap>,
         contract_id: ContractId,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
     ) -> Result<(), HostError> {
         let data = ContractDataEntry {
             contract: ScAddress::Contract(contract_id.metered_clone(self)?),
@@ -207,7 +203,7 @@ impl Host {
     /// Notes on metering: covered by modify_ledger_entry.
     pub(crate) fn modify_contract_instance<F, R>(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         f: F,
     ) -> Result<R, HostError>
     where
@@ -247,7 +243,7 @@ impl Host {
 
     pub(crate) fn extend_contract_code_ttl_from_contract_id(
         &self,
-        instance_key: Rc<LedgerKey>,
+        instance_key: LedgerKey,
         threshold: u32,
         extend_to: u32,
     ) -> Result<(), HostError> {
@@ -258,7 +254,7 @@ impl Host {
             ContractExecutable::Wasm(wasm_hash) => {
                 let key = self.contract_code_ledger_key(&wasm_hash)?;
                 self.try_borrow_storage_mut()?
-                    .extend_ttl(self, key, threshold, extend_to, None)?;
+                    .extend_ttl(self, &key, threshold, extend_to, None)?;
             }
             ContractExecutable::StellarAsset => {}
         }
@@ -267,13 +263,13 @@ impl Host {
 
     pub(crate) fn extend_contract_instance_ttl_from_contract_id(
         &self,
-        instance_key: Rc<LedgerKey>,
+        instance_key: LedgerKey,
         threshold: u32,
         extend_to: u32,
     ) -> Result<(), HostError> {
         self.try_borrow_storage_mut()?.extend_ttl(
             self,
-            instance_key.metered_clone(self)?,
+            &instance_key,
             threshold,
             extend_to,
             None,
@@ -283,7 +279,7 @@ impl Host {
 
     pub(crate) fn extend_contract_code_ttl_v2(
         &self,
-        instance_key: &Rc<LedgerKey>,
+        instance_key: &LedgerKey,
         extend_to: u32,
         min_extension: u32,
         max_extension: u32,
@@ -296,7 +292,7 @@ impl Host {
                 let key = self.contract_code_ledger_key(&wasm_hash)?;
                 self.try_borrow_storage_mut()?.extend_ttl_v2(
                     self,
-                    key,
+                    &key,
                     extend_to,
                     min_extension,
                     max_extension,
@@ -310,14 +306,14 @@ impl Host {
 
     pub(crate) fn extend_contract_instance_ttl_v2(
         &self,
-        instance_key: Rc<LedgerKey>,
+        instance_key: LedgerKey,
         extend_to: u32,
         min_extension: u32,
         max_extension: u32,
     ) -> Result<(), HostError> {
         self.try_borrow_storage_mut()?.extend_ttl_v2(
             self,
-            instance_key,
+            &instance_key,
             extend_to,
             min_extension,
             max_extension,
@@ -357,8 +353,8 @@ impl Host {
         })
     }
 
-    pub(crate) fn to_account_key(&self, account_id: AccountId) -> Result<Rc<LedgerKey>, HostError> {
-        Rc::metered_new(LedgerKey::Account(LedgerKeyAccount { account_id }), self)
+    pub(crate) fn to_account_key(&self, account_id: AccountId) -> Result<LedgerKey, HostError> {
+        Ok(LedgerKey::Account(LedgerKeyAccount { account_id }))
     }
 
     pub(crate) fn create_asset_4(&self, asset_code: [u8; 4], issuer: AccountId) -> Asset {
@@ -381,11 +377,11 @@ impl Host {
         &self,
         account_id: AccountId,
         asset: TrustLineAsset,
-    ) -> Result<Rc<LedgerKey>, HostError> {
-        Rc::metered_new(
-            LedgerKey::Trustline(LedgerKeyTrustLine { account_id, asset }),
-            self,
-        )
+    ) -> Result<LedgerKey, HostError> {
+        Ok(LedgerKey::Trustline(LedgerKeyTrustLine {
+            account_id,
+            asset,
+        }))
     }
 
     pub(crate) fn get_signer_weight_from_account(
@@ -501,7 +497,7 @@ impl Host {
         &self,
         k: Val,
         t: StorageType,
-    ) -> Result<(Rc<LedgerKey>, ContractDataDurability), HostError> {
+    ) -> Result<(LedgerKey, ContractDataDurability), HostError> {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
         Ok((key, durability))
@@ -564,7 +560,7 @@ impl Host {
     ) -> Result<(), HostError> {
         let (key, _) = self.storage_key_and_durability(k, t)?;
         self.try_borrow_storage_mut()?
-            .extend_ttl(self, key, threshold, extend_to, Some(k))
+            .extend_ttl(self, &key, threshold, extend_to, Some(k))
     }
 }
 
@@ -579,7 +575,7 @@ impl Host {
     /// entry with the same key.
     pub fn add_ledger_entry(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         val: &Rc<soroban_env_common::xdr::LedgerEntry>,
         live_until_ledger: Option<u32>,
     ) -> Result<(), HostError> {
@@ -599,7 +595,7 @@ impl Host {
     /// Returns `None` if the entry does not exist.
     pub fn get_ledger_entry(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
         self.with_mut_storage(|storage| storage.try_get_full(key, self, None))
     }
@@ -608,14 +604,14 @@ impl Host {
     #[allow(clippy::type_complexity)]
     pub fn get_stored_entries(
         &self,
-    ) -> Result<Vec<(Rc<LedgerKey>, Option<Rc<LedgerEntry>>)>, HostError> {
+    ) -> Result<Vec<(LedgerKey, Option<Rc<LedgerEntry>>)>, HostError> {
         self.with_mut_storage(|storage| {
             Ok(storage
                 .map
                 .iter_non_metered()
                 .map(|(k, storage_entry)| {
                     (
-                        Rc::clone(k),
+                        k.clone(),
                         storage_entry
                             .current_value(self)
                             .ok()
@@ -631,7 +627,7 @@ impl Host {
     // enforcing storage mode.
     pub fn setup_storage_entry(
         &self,
-        key: Rc<LedgerKey>,
+        key: LedgerKey,
         val: Option<(Rc<soroban_env_common::xdr::LedgerEntry>, Option<u32>)>,
         access_type: AccessType,
     ) -> Result<(), HostError> {
@@ -659,7 +655,7 @@ impl Host {
     // "testutils" are not covered by budget metering.
     pub fn setup_storage_footprint(
         &self,
-        footprint_entries: Vec<(Rc<LedgerKey>, AccessType)>,
+        footprint_entries: Vec<(LedgerKey, AccessType)>,
     ) -> Result<(), HostError> {
         for (key, access_type) in footprint_entries {
             self.setup_storage_entry(key, None, access_type)?;

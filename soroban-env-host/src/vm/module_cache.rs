@@ -101,7 +101,7 @@ impl ModuleCache {
         use crate::xdr::{ContractCodeEntry, ContractCodeEntryExt, LedgerEntryData, LedgerKey};
         let storage = host.try_borrow_storage()?;
         for (k, storage_entry) in storage.map.iter_non_metered() {
-            if let LedgerKey::ContractCode(_) = &**k {
+            if let LedgerKey::ContractCode(_) = k {
                 // Get the current value from the storage entry
                 if let Some(data) = storage_entry.current_value(host)? {
                     if let StorageLedgerEntryData::Entry(e) = data {

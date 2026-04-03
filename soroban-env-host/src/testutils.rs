@@ -119,18 +119,18 @@ pub fn generate_bytes_array(host: &Host) -> [u8; 32] {
     bytes
 }
 
-pub struct MockSnapshotSource(BTreeMap<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>);
+pub struct MockSnapshotSource(BTreeMap<LedgerKey, (Rc<LedgerEntry>, Option<u32>)>);
 
 impl MockSnapshotSource {
     pub fn new() -> Self {
-        Self(BTreeMap::<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>::new())
+        Self(BTreeMap::<LedgerKey, (Rc<LedgerEntry>, Option<u32>)>::new())
     }
 
     pub fn from_entries(entries: Vec<(LedgerEntry, Option<u32>)>) -> Self {
-        let mut map = BTreeMap::<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>::new();
+        let mut map = BTreeMap::<LedgerKey, (Rc<LedgerEntry>, Option<u32>)>::new();
         let dummy_budget = Budget::default();
         for (e, maybe_ttl) in entries {
-            let key = Rc::new(ledger_entry_to_ledger_key(&e, &dummy_budget).unwrap());
+            let key = ledger_entry_to_ledger_key(&e, &dummy_budget).unwrap();
             map.insert(key, (Rc::new(e), maybe_ttl));
         }
         Self(map)
@@ -138,7 +138,7 @@ impl MockSnapshotSource {
 }
 
 impl SnapshotSource for MockSnapshotSource {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &LedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError> {
         if let Some((entry, live_until)) = self.0.get(key) {
             Ok(Some((Rc::clone(entry), *live_until)))
         } else {
@@ -416,7 +416,7 @@ impl Host {
                 .map
                 .iter_non_metered()
                 .filter_map(|(k, entry)| {
-                    if let LedgerKey::ContractData(kcd) = k.as_ref() {
+                    if let LedgerKey::ContractData(kcd) = k {
                         if let Some((_, ro)) = data_keys.get(&kcd.key) {
                             let new_access = if *ro {
                                 crate::storage::AccessType::ReadOnly
@@ -446,7 +446,7 @@ impl Host {
             }
             // Reset any nonces so they can be consumed.
             for (k, storage_entry) in map.iter_mut() {
-                if let LedgerKey::ContractData(k) = k.as_ref() {
+                if let LedgerKey::ContractData(k) = k {
                     if let ScVal::LedgerKeyNonce(_) = &k.key {
                         // Clear the stacks to just have None at depth 0
                         storage_entry.reset_to_none_at_depth_zero();

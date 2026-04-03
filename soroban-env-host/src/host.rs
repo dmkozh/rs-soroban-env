@@ -804,7 +804,7 @@ impl Host {
 
     /// Returns the recorded footprint as a sorted vector of (key, access_type) pairs.
     #[cfg(any(test, feature = "recording_mode"))]
-    pub fn get_recorded_footprint(&self) -> Result<Vec<(Rc<LedgerKey>, AccessType)>, HostError> {
+    pub fn get_recorded_footprint(&self) -> Result<Vec<(LedgerKey, AccessType)>, HostError> {
         self.with_mut_storage(|storage| Ok(storage.sorted_footprint_entries()))
     }
 
@@ -2442,7 +2442,7 @@ impl VmCallerEnv for Host {
         let key = self.storage_key_from_val(k, t.try_into()?)?;
         self.try_borrow_storage_mut()?.extend_ttl_v2(
             self,
-            key,
+            &key,
             extend_to.into(),
             min_extension.into(),
             max_extension.into(),

@@ -1,13 +1,9 @@
-use std::rc::Rc;
-
 use crate::host_object::{MemHostObjectType, MuxedScAddress};
 use crate::{
     budget::{AsBudget, DepthLimiter},
     crypto::metered_scalar::MeteredScalar,
     err,
-    host::metered_clone::{
-        charge_shallow_copy, MeteredAlloc, MeteredClone, MeteredContainer, MeteredIterator,
-    },
+    host::metered_clone::{charge_shallow_copy, MeteredClone, MeteredContainer, MeteredIterator},
     host_object::{HostMap, HostObject, HostVec},
     num::{i256_from_pieces, i256_into_pieces, u256_from_pieces, u256_into_pieces},
     xdr::{
@@ -133,22 +129,19 @@ impl Host {
         contract: ScAddress,
         key: ScVal,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
-        Rc::metered_new(
-            LedgerKey::ContractData(LedgerKeyContractData {
-                contract,
-                key,
-                durability,
-            }),
-            self,
-        )
+    ) -> Result<LedgerKey, HostError> {
+        Ok(LedgerKey::ContractData(LedgerKeyContractData {
+            contract,
+            key,
+            durability,
+        }))
     }
 
     pub(crate) fn storage_key_from_scval(
         &self,
         key: ScVal,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LedgerKey, HostError> {
         let contract_id = self.get_current_contract_id_internal()?;
         self.storage_key_for_address(ScAddress::Contract(contract_id), key, durability)
     }
@@ -160,7 +153,7 @@ impl Host {
         &self,
         k: Val,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<LedgerKey, HostError> {
         let key_scval = self.from_host_val_for_storage(k)?;
         self.storage_key_from_scval(key_scval, durability)
     }

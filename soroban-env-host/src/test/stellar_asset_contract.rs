@@ -1,4 +1,4 @@
-use std::{convert::TryInto, rc::Rc};
+use std::convert::TryInto;
 
 use crate::builtin_contracts::base_types::BytesN;
 use crate::testutils::simple_account_sign_fn;
@@ -127,7 +127,7 @@ impl StellarAssetContractTest {
         );
     }
 
-    fn create_default_trustline(&self, user: &TestSigner) -> Rc<LedgerKey> {
+    fn create_default_trustline(&self, user: &TestSigner) -> LedgerKey {
         self.create_trustline(
             &user.account_id(),
             &signing_key_to_account_id(&self.issuer_key),
@@ -145,7 +145,7 @@ impl StellarAssetContractTest {
         account.balance
     }
 
-    fn get_trustline_balance(&self, key: &Rc<LedgerKey>) -> i64 {
+    fn get_trustline_balance(&self, key: &LedgerKey) -> i64 {
         self.host
             .with_mut_storage(|s| {
                 match &s
@@ -188,7 +188,7 @@ impl StellarAssetContractTest {
         );
     }
 
-    fn update_account_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
+    fn update_account_flags(&self, key: &LedgerKey, new_flags: u32) {
         self.host
             .try_borrow_storage_mut()
             .unwrap()
@@ -214,7 +214,7 @@ impl StellarAssetContractTest {
         flags: u32,
         // (buying, selling) liabilities
         liabilities: Option<(i64, i64)>,
-    ) -> Rc<LedgerKey> {
+    ) -> LedgerKey {
         let asset = match asset_code.len() {
             4 => {
                 let mut code = [0_u8; 4];
@@ -262,7 +262,7 @@ impl StellarAssetContractTest {
         key
     }
 
-    fn update_trustline_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
+    fn update_trustline_flags(&self, key: &LedgerKey, new_flags: u32) {
         self.host
             .try_borrow_storage_mut()
             .unwrap()
@@ -3630,8 +3630,8 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 839115,
-                mem_bytes: 1212226,
+                instructions: 821966,
+                mem_bytes: 1210730,
                 disk_read_entries: 0,
                 memory_read_entries: 1,
                 write_entries: 1,
@@ -3656,8 +3656,8 @@ fn test_custom_account_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 717587,
-                        mem_bytes: 1196547,
+                        instructions: 711015,
+                        mem_bytes: 1195867,
                         disk_read_entries: 0,
                         memory_read_entries: 0,
                         write_entries: 0,

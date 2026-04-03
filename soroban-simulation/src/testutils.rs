@@ -14,14 +14,14 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 pub struct MockSnapshotSource {
-    map: BTreeMap<Rc<LedgerKey>, EntryWithLiveUntil>,
+    map: BTreeMap<LedgerKey, EntryWithLiveUntil>,
 }
 
 impl MockSnapshotSource {
     pub fn from_entries(entries: Vec<(LedgerEntry, Option<u32>)>) -> Result<Self> {
-        let mut map = BTreeMap::<Rc<LedgerKey>, (Rc<LedgerEntry>, Option<u32>)>::new();
+        let mut map = BTreeMap::<LedgerKey, (Rc<LedgerEntry>, Option<u32>)>::new();
         for (e, maybe_ttl) in entries {
-            let key = Rc::new(ledger_entry_to_ledger_key(&e)?);
+            let key = ledger_entry_to_ledger_key(&e)?;
             map.insert(key, (Rc::new(e), maybe_ttl));
         }
         Ok(Self { map })
@@ -55,10 +55,7 @@ pub fn ledger_entry_to_ledger_key(entry: &LedgerEntry) -> Result<LedgerKey> {
 }
 
 impl SnapshotSource for MockSnapshotSource {
-    fn get(
-        &self,
-        key: &Rc<LedgerKey>,
-    ) -> std::result::Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &LedgerKey) -> std::result::Result<Option<EntryWithLiveUntil>, HostError> {
         if let Some((entry, live_until)) = self.map.get(key) {
             Ok(Some((entry.clone(), *live_until)))
         } else {

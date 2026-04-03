@@ -249,7 +249,7 @@ fn test_nested_bump() {
     let storage_contract_id = host.register_test_contract_wasm(CONTRACT_STORAGE);
 
     let contract_id_hash = host.contract_id_from_address(storage_contract_id).unwrap();
-    let storage_key: std::rc::Rc<LedgerKey> = host
+    let storage_key: LedgerKey = host
         .contract_instance_ledger_key(&contract_id_hash)
         .unwrap();
     host.with_mut_storage(|s: &mut Storage| {
@@ -461,8 +461,6 @@ mod ttl_extension_v2_tests {
     use crate::xdr::{ContractDataDurability, LedgerKeyContractData, ScSymbol, ScVal};
     use soroban_env_common::{ContractTtlExtension, StorageType};
     use soroban_test_wasms::CONTRACT_STORAGE_P26;
-    use std::rc::Rc;
-
     fn setup_host() -> Host {
         let host = Host::test_host_with_recording_footprint();
         host.set_ledger_info(crate::LedgerInfo {
@@ -475,7 +473,7 @@ mod ttl_extension_v2_tests {
         host
     }
 
-    fn get_live_until(host: &Host, key: &Rc<LedgerKey>) -> u32 {
+    fn get_live_until(host: &Host, key: &LedgerKey) -> u32 {
         host.with_mut_storage(|s| {
             let storage_entry = s.map.get(key, host.budget_ref())?.ok_or_else(|| {
                 host.err(
@@ -497,18 +495,18 @@ mod ttl_extension_v2_tests {
         .unwrap()
     }
 
-    fn make_data_key(host: &Host, contract_id: AddressObject, storage: &str) -> Rc<LedgerKey> {
+    fn make_data_key(host: &Host, contract_id: AddressObject, storage: &str) -> LedgerKey {
         let contract_id_hash = host.contract_id_from_address(contract_id).unwrap();
         let durability = match storage {
             "persistent" => ContractDataDurability::Persistent,
             "temporary" => ContractDataDurability::Temporary,
             _ => panic!("unexpected storage type"),
         };
-        Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
+        LedgerKey::ContractData(LedgerKeyContractData {
             contract: ScAddress::Contract(contract_id_hash),
             key: ScVal::Symbol(ScSymbol("key_1".try_into().unwrap())),
             durability,
-        }))
+        })
     }
 
     fn extend_v2_fn_name(host: &Host, storage: &str) -> Symbol {

@@ -44,12 +44,22 @@ use wasmi::Value;
 // guideline on type layout: https://doc.rust-lang.org/reference/type-layout.html
 pub trait DeclaredSizeForMetering {
     const DECLARED_SIZE: u64;
+    const DECLARED_SIZE_FOR_HASH: u64 = Self::DECLARED_SIZE;
 }
 
 macro_rules! impl_declared_size_type {
     ($t:ty, $size:expr) => {
         impl DeclaredSizeForMetering for $t {
             const DECLARED_SIZE: u64 = $size;
+        }
+    };
+}
+
+macro_rules! impl_declared_size_type_with_hash {
+    ($t:ty, $size:expr, $hash_size:expr) => {
+        impl DeclaredSizeForMetering for $t {
+            const DECLARED_SIZE: u64 = $size;
+            const DECLARED_SIZE_FOR_HASH: u64 = $hash_size;
         }
     };
 }
@@ -181,7 +191,7 @@ impl_declared_size_type!(ContractCodeEntryV1, 40);
 // TtlEntry must be declared as it's used in e2e to decode
 // TTL entries from XDR during storage population.
 impl_declared_size_type!(TtlEntry, 36);
-impl_declared_size_type!(LedgerKey, 120);
+impl_declared_size_type_with_hash!(LedgerKey, 120, 250);
 impl_declared_size_type!(LedgerEntry, 256);
 
 impl_declared_size_type!(LedgerFootprint, 48);

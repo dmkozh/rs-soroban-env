@@ -58,7 +58,7 @@ fn temp_entry_exceeds_max_ttl_error(host: &Host, extend_to: u32, max_ttl: u32) -
 pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
 /// Map from LedgerKey to optional LedgerEntry with live_until.
 /// Used to track initial and final ledger state for computing ledger changes.
-pub(crate) type LedgerEntryMap = MeteredHashMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>;
+pub(crate) type LedgerEntryMap = MeteredHashMap<LedgerKey, Option<EntryWithLiveUntil>>;
 
 /// A helper type used to designate which ways a given [LedgerKey] is accessed,
 /// or is allowed to be accessed, in a given transaction.
@@ -124,7 +124,7 @@ impl StorageEntryData {
 }
 
 /// The storage map type.
-pub(crate) type StorageMap = MeteredHashMap<Rc<LedgerKey>, StorageEntry>;
+pub(crate) type StorageMap = MeteredHashMap<LedgerKey, StorageEntry>;
 
 /// A storage entry containing mutable entry data (split by access type) and a
 /// mutable TTL for entries that have TTL.
@@ -917,7 +917,7 @@ impl InstanceStorageMap {
 pub trait SnapshotSource {
     /// Returns the ledger entry for the key and its live_until ledger if entry
     /// exists, or `None` otherwise.
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError>;
+    fn get(&self, key: &LedgerKey) -> Result<Option<EntryWithLiveUntil>, HostError>;
 }
 
 #[derive(Clone, Default)]
@@ -1038,7 +1038,7 @@ impl Storage {
             }
             let entry_with_live_until = match final_value {
                 Some(entry_data) => {
-                    let ledger_entry = entry_data.to_ledger_entry(key.as_ref(), host)?;
+                    let ledger_entry = entry_data.to_ledger_entry(&key, host)?;
                     let live_until = storage_entry.current_ttl();
                     Some((ledger_entry, live_until))
                 }
@@ -1064,7 +1064,7 @@ impl Storage {
     /// Footprint access type: read-only.
     fn with_entry_for_read<F, R>(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         key_val: Option<Val>,
         f: F,
@@ -1103,7 +1103,7 @@ impl Storage {
     /// Footprint access type: read-only.
     pub(crate) fn with_contract_data_val<F, R>(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         key_val: Option<Val>,
         f: F,
@@ -1138,7 +1138,7 @@ impl Storage {
     /// Footprint access type: read-only.
     pub(crate) fn with_ledger_entry<F, R>(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         f: F,
     ) -> Result<R, HostError>
@@ -1167,7 +1167,7 @@ impl Storage {
     /// Footprint access type: read-write.
     fn with_mut_entry<F, R>(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         key_val: Option<Val>,
         f: F,
@@ -1208,7 +1208,7 @@ impl Storage {
     /// Footprint access type: read-write.
     pub(crate) fn put_contract_data(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         val: Val,
         durability: ContractDataDurability,
         host: &Host,
@@ -1234,7 +1234,7 @@ impl Storage {
     /// Footprint access type: read-write.
     pub(crate) fn modify_ledger_entry<F, R>(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         f: F,
     ) -> Result<R, HostError>
@@ -1257,7 +1257,7 @@ impl Storage {
     /// Footprint access type: read-write.
     pub(crate) fn create_entry(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         entry: &Rc<LedgerEntry>,
         live_until: Option<u32>,
         host: &Host,
@@ -1282,7 +1282,7 @@ impl Storage {
     /// Footprint access type: read-write.
     pub(crate) fn modify_or_create_entry<F>(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         modify_or_create: F,
     ) -> Result<(), HostError>
@@ -1340,7 +1340,7 @@ impl Storage {
     /// Footprint access type: read-write.
     pub(crate) fn del(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<(), HostError> {
@@ -1361,7 +1361,7 @@ impl Storage {
     /// Footprint access type: read-only.
     pub(crate) fn has(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<bool, HostError> {
@@ -1377,7 +1377,7 @@ impl Storage {
     fn prepare_ttl_extension<'a>(
         &'a mut self,
         host: &Host,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         key_val: Option<Val>,
     ) -> Result<(&'a mut StorageEntry, TtlExtensionContext), HostError> {
         Self::check_supported_ledger_key_type(key)?;
@@ -1443,7 +1443,7 @@ impl Storage {
     pub(crate) fn extend_ttl(
         &mut self,
         host: &Host,
-        key: Rc<LedgerKey>,
+        key: &LedgerKey,
         threshold: u32,
         extend_to: u32,
         key_val: Option<Val>,
@@ -1514,7 +1514,7 @@ impl Storage {
     pub(crate) fn extend_ttl_v2(
         &mut self,
         host: &Host,
-        key: Rc<LedgerKey>,
+        key: &LedgerKey,
         extend_to: u32,
         min_extension: u32,
         max_extension: u32,
@@ -1636,14 +1636,14 @@ impl Storage {
 
     /// Returns the recorded footprint as a sorted vector of
     /// (key, access_type) pairs: read_write keys first, then read_only.
-    pub(crate) fn sorted_footprint_entries(&self) -> Vec<(Rc<LedgerKey>, AccessType)> {
-        let mut rw_entries: Vec<(Rc<LedgerKey>, AccessType)> = Vec::new();
-        let mut ro_entries: Vec<(Rc<LedgerKey>, AccessType)> = Vec::new();
+    pub(crate) fn sorted_footprint_entries(&self) -> Vec<(LedgerKey, AccessType)> {
+        let mut rw_entries: Vec<(LedgerKey, AccessType)> = Vec::new();
+        let mut ro_entries: Vec<(LedgerKey, AccessType)> = Vec::new();
         for (key, entry) in self.map.iter_non_metered() {
             let at = entry.access_type();
             match at {
-                AccessType::ReadWrite => rw_entries.push((Rc::clone(key), at)),
-                AccessType::ReadOnly => ro_entries.push((Rc::clone(key), at)),
+                AccessType::ReadWrite => rw_entries.push((key.clone(), at)),
+                AccessType::ReadOnly => ro_entries.push((key.clone(), at)),
             }
         }
         rw_entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1657,7 +1657,7 @@ impl Storage {
     pub(crate) fn is_key_live_in_snapshot(
         &self,
         host: &Host,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
     ) -> Result<bool, HostError> {
         match &self.mode {
             FootprintMode::Recording(snapshot) => {
@@ -1695,22 +1695,27 @@ impl Storage {
     /// - Non-existent entries: None value, no TTL
     fn maybe_prepare_recording_mode_access(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
     ) -> Result<(), HostError> {
-        let src = match &self.mode {
-            FootprintMode::Recording(src) => Rc::clone(src),
-            FootprintMode::Enforcing => return Ok(()),
-        };
+        // All the recording mode logic does not reflect any observable behavior
+        // in enforcing mode, so it should not be counted towards the actual
+        // budget. We still want to observe it to catch any errors.
+        host.budget_ref().with_observable_shadow_mode(|| {
+            let src = match &self.mode {
+                FootprintMode::Recording(src) => Rc::clone(src),
+                FootprintMode::Enforcing => return Ok(()),
+            };
 
-        // Handle expiration for the existing entries.
-        if let Some(storage_entry) = self.map.get_mut(key, host.budget_ref())? {
-            return Self::handle_expiration(storage_entry, key, host);
-        }
+            // Handle expiration for the existing entries.
+            if let Some(storage_entry) = self.map.get_mut(key, host.budget_ref())? {
+                return Self::handle_expiration(storage_entry, key, host);
+            }
 
-        // Load missing entries from snapshot, then handle expiration.
-        let storage_entry = self.load_entry_from_snapshot(key, &src, host)?;
-        Self::handle_expiration(storage_entry, key, host)
+            // Load missing entries from snapshot, then handle expiration.
+            let storage_entry = self.load_entry_from_snapshot(key, &src, host)?;
+            Self::handle_expiration(storage_entry, key, host)
+        })
     }
 
     /// Handles expiration logic for an entry in the storage map.
@@ -1719,10 +1724,10 @@ impl Storage {
     /// persistent entries are auto-restored with a new TTL.
     fn handle_expiration(
         storage_entry: &mut StorageEntry,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
     ) -> Result<(), HostError> {
-        let Some(durability) = get_key_durability(key.as_ref()) else {
+        let Some(durability) = get_key_durability(key) else {
             // Entry without durability is never expired, so nothing to do
             return Ok(());
         };
@@ -1797,12 +1802,12 @@ impl Storage {
     /// expiration is handled separately by `handle_expiration`.
     fn load_entry_from_snapshot(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         src: &Rc<dyn SnapshotSource>,
         host: &Host,
     ) -> Result<&mut StorageEntry, HostError> {
         let snapshot_value = src.get(key)?;
-        let durability = get_key_durability(key.as_ref());
+        let durability = get_key_durability(key);
         let has_ttl = durability.is_some();
 
         let entry_value = if let Some((ledger_entry, live_until_opt)) = snapshot_value {
@@ -1814,7 +1819,7 @@ impl Storage {
 
         let storage_entry = StorageEntry::new(AccessType::ReadOnly, has_ttl, entry_value);
         self.map
-            .insert_and_get_mut(Rc::clone(key), storage_entry, host.budget_ref())
+            .insert_and_get_mut(key.clone(), storage_entry, host.budget_ref())
     }
 }
 
@@ -1825,7 +1830,7 @@ impl Storage {
     /// This is a test-only helper for TTL verification.
     pub(crate) fn get_live_until(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<Option<u32>, HostError> {
@@ -1840,7 +1845,7 @@ impl Storage {
     /// Use typed helpers (with_contract_data_val, with_ledger_entry) for internal code.
     pub(crate) fn try_get_full(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
@@ -1858,7 +1863,7 @@ impl Storage {
     // Returns (entry, live_until) tuple.
     pub(crate) fn get_from_map(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &LedgerKey,
         host: &Host,
     ) -> Result<Option<(StorageLedgerEntryData, Option<u32>)>, HostError> {
         match self.map.get(key, host.budget_ref())? {
