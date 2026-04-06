@@ -3,6 +3,6 @@
   "   1 call vec_new()": "cpu:175494, mem:28262, objs:-/1@10432200, store:-/1@a324d858",
   "   2 ret vec_new -> Ok(Vec(obj#3))": "cpu:175997, mem:28342, objs:-/2@acf0be8f",
   "   3 call call(Address(obj#1), Symbol(test), Vec(obj#3))": "",
-  "   4 ret call -> Err(Error(Storage, ExceededLimit))": "cpu:188215, mem:28422",
-  "   5 end": "cpu:188215, mem:28422, prngs:-/-, objs:-/2@acf0be8f, vm:-/-, evt:-, store:-/1@a324d858, stk:-, auth:-/-"
+  "   4 ret call -> Err(Error(Storage, ExceededLimit))": "cpu:188165, mem:28422",
+  "   5 end": "cpu:188165, mem:28422, prngs:-/-, objs:-/2@acf0be8f, vm:-/-, evt:-, store:-/1@a324d858, stk:-, auth:-/-"
 }

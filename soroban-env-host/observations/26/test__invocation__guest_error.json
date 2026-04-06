@@ -11,16 +11,16 @@
   "   9 ret obj_cmp -> Ok(0)": "cpu:2420276",
   "  10 call get_ledger_network_id()": "cpu:2420328, auth:1@fe4a44f4/1@1e81c488",
   "  11 ret get_ledger_network_id -> Ok(Bytes(obj#11))": "cpu:2421360, mem:1601478, objs:-/6@3f2530c",
-  "  12 ret create_contract -> Ok(Address(obj#13))": "cpu:3095919, mem:2856920, objs:-/7@632cfd1, store:-/2@111166e9, auth:-/1@b21aa35f",
+  "  12 ret create_contract -> Ok(Address(obj#13))": "cpu:3095865, mem:2856920, objs:-/7@632cfd1, store:-/2@111166e9, auth:-/1@b21aa35f",
   "  13 call vec_new_from_slice(1)": " auth:-/-",
-  "  14 ret vec_new_from_slice -> Ok(Vec(obj#15))": "cpu:3096884, mem:2857024, objs:-/8@788f2893",
+  "  14 ret vec_new_from_slice -> Ok(Vec(obj#15))": "cpu:3096830, mem:2857024, objs:-/8@788f2893",
   "  15 call call(Address(obj#13), Symbol(divide), Vec(obj#15))": "",
-  "  16 push VM:e921e73a:divide(I32(0))": "cpu:3755815, mem:4110572, objs:-/9@a47a559b, vm:1114112@ba4a7cb7/15@ea6028ca, stk:1@7e643b7b, auth:1@2731dcec/-",
-  "  17 pop VM:e921e73a:divide -> Err(Error(WasmVm, InvalidAction))": "cpu:3758324, mem:4110618",
+  "  16 push VM:e921e73a:divide(I32(0))": "cpu:3755711, mem:4110572, objs:-/9@a47a559b, vm:1114112@ba4a7cb7/15@ea6028ca, stk:1@7e643b7b, auth:1@2731dcec/-",
+  "  17 pop VM:e921e73a:divide -> Err(Error(WasmVm, InvalidAction))": "cpu:3758220, mem:4110618",
   "  18 ret call -> Err(Error(WasmVm, InvalidAction))": " vm:-/-, stk:-, auth:-/-",
   "  19 call try_call(Address(obj#13), Symbol(divide), Vec(obj#15))": "",
-  "  20 push VM:e921e73a:divide(I32(0))": "cpu:4417255, mem:5364166, objs:-/10@4f3b1003, vm:1114112@ba4a7cb7/15@ea6028ca, stk:1@7e643b7b, auth:1@b746104b/-",
-  "  21 pop VM:e921e73a:divide -> Err(Error(WasmVm, InvalidAction))": "cpu:4419764, mem:5364212",
+  "  20 push VM:e921e73a:divide(I32(0))": "cpu:4417101, mem:5364166, objs:-/10@4f3b1003, vm:1114112@ba4a7cb7/15@ea6028ca, stk:1@7e643b7b, auth:1@b746104b/-",
+  "  21 pop VM:e921e73a:divide -> Err(Error(WasmVm, InvalidAction))": "cpu:4419610, mem:5364212",
   "  22 ret try_call -> Ok(Error(Context, InvalidAction))": " vm:-/-, stk:-, auth:-/-",
-  "  23 end": "cpu:4419764, mem:5364212, prngs:-/9b4a753, objs:-/10@4f3b1003, vm:-/-, evt:-, store:-/2@111166e9, stk:-, auth:-/-"
+  "  23 end": "cpu:4419610, mem:5364212, prngs:-/9b4a753, objs:-/10@4f3b1003, vm:-/-, evt:-, store:-/2@111166e9, stk:-, auth:-/-"
 }

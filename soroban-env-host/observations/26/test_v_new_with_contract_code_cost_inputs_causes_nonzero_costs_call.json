@@ -3,8 +3,8 @@
   "   1 call vec_new()": "cpu:135409, mem:28214, objs:-/1@10432200",
   "   2 ret vec_new -> Ok(Vec(obj#3))": "cpu:135912, mem:28294, objs:-/2@acf0be8f",
   "   3 call call(Address(obj#1), Symbol(test), Vec(obj#3))": "",
-  "   4 push VM:b0d6eb0c:test()": "cpu:218161, mem:169125, objs:-/3@2988da9d, vm:65536@b1cd98b9/2@2f94d90d, stk:1@4afb7079, auth:1@1d00dc6b/-",
-  "   5 pop VM:b0d6eb0c:test -> Ok(Symbol(pass))": "cpu:220658, mem:169155",
+  "   4 push VM:b0d6eb0c:test()": "cpu:218111, mem:169125, objs:-/3@2988da9d, vm:65536@b1cd98b9/2@2f94d90d, stk:1@4afb7079, auth:1@1d00dc6b/-",
+  "   5 pop VM:b0d6eb0c:test -> Ok(Symbol(pass))": "cpu:220608, mem:169155",
   "   6 ret call -> Ok(Symbol(pass))": " vm:-/-, stk:-, auth:-/-",
-  "   7 end": "cpu:220658, mem:169155, prngs:-/-, objs:-/3@2988da9d, vm:-/-, evt:-, store:-/2@380dc9ee, stk:-, auth:-/-"
+  "   7 end": "cpu:220608, mem:169155, prngs:-/-, objs:-/3@2988da9d, vm:-/-, evt:-, store:-/2@380dc9ee, stk:-, auth:-/-"
 }

@@ -11,14 +11,14 @@
   "   9 ret obj_cmp -> Ok(0)": "cpu:31883863",
   "  10 call get_ledger_network_id()": "cpu:31883915, auth:1@3b043f77/1@12ae538e",
   "  11 ret get_ledger_network_id -> Ok(Bytes(obj#11))": "cpu:31884947, mem:4074284, objs:-/6@2ab04a19",
-  "  12 call symbol_new_from_slice(13)": "cpu:32131719, mem:4404828, store:-/2@b846b39a",
-  "  13 ret symbol_new_from_slice -> Ok(Symbol(obj#13))": "cpu:32132729, mem:4404937, objs:-/7@4f4cfe4d",
-  "  14 push VM:f605a987:sym#13()": "cpu:32363561, mem:4733643, objs:-/8@d823bc50, vm:65536@b1cd98b9/2@2f94d90d, stk:1@2b138108, auth:2@e722ef76/1@53de828",
-  "  15 call symbol_len(Symbol(obj#13))": "cpu:32366030, mem:4733673",
-  "  16 ret symbol_len -> Ok(U32(13))": "cpu:32366152",
+  "  12 call symbol_new_from_slice(13)": "cpu:32131665, mem:4404828, store:-/2@b846b39a",
+  "  13 ret symbol_new_from_slice -> Ok(Symbol(obj#13))": "cpu:32132675, mem:4404937, objs:-/7@4f4cfe4d",
+  "  14 push VM:f605a987:sym#13()": "cpu:32363457, mem:4733643, objs:-/8@d823bc50, vm:65536@b1cd98b9/2@2f94d90d, stk:1@2b138108, auth:2@e722ef76/1@53de828",
+  "  15 call symbol_len(Symbol(obj#13))": "cpu:32365926, mem:4733673",
+  "  16 ret symbol_len -> Ok(U32(13))": "cpu:32366048",
   "  17 call symbol_copy_to_slice(Symbol(obj#13), U32(0), 13)": "",
-  "  18 ret symbol_copy_to_slice -> Ok(())": "cpu:32366256",
+  "  18 ret symbol_copy_to_slice -> Ok(())": "cpu:32366152",
   "  19 pop VM:f605a987:sym#13 -> Ok(Void)": "",
-  "  20 ret create_contract -> Ok(Address(obj#17))": "cpu:32366759, mem:4733753, objs:-/9@2c778f72, vm:-/-, stk:-, auth:-/-",
-  "  21 end": "cpu:32366759, mem:4733753, prngs:-/9b4a753, objs:-/9@2c778f72, vm:-/-, evt:-, store:-/2@b846b39a, stk:-, auth:-/-"
+  "  20 ret create_contract -> Ok(Address(obj#17))": "cpu:32366655, mem:4733753, objs:-/9@2c778f72, vm:-/-, stk:-, auth:-/-",
+  "  21 end": "cpu:32366655, mem:4733753, prngs:-/9b4a753, objs:-/9@2c778f72, vm:-/-, evt:-, store:-/2@b846b39a, stk:-, auth:-/-"
 }

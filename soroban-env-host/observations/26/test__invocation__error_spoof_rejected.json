@@ -11,16 +11,16 @@
   "   9 ret obj_cmp -> Ok(0)": "cpu:2420276",
   "  10 call get_ledger_network_id()": "cpu:2420328, auth:1@fe4a44f4/1@1e81c488",
   "  11 ret get_ledger_network_id -> Ok(Bytes(obj#11))": "cpu:2421360, mem:1601478, objs:-/6@3f2530c",
-  "  12 ret create_contract -> Ok(Address(obj#13))": "cpu:3095919, mem:2856920, objs:-/7@632cfd1, store:-/2@111166e9, auth:-/1@b21aa35f",
+  "  12 ret create_contract -> Ok(Address(obj#13))": "cpu:3095865, mem:2856920, objs:-/7@632cfd1, store:-/2@111166e9, auth:-/1@b21aa35f",
   "  13 call vec_new_from_slice(0)": " auth:-/-",
-  "  14 ret vec_new_from_slice -> Ok(Vec(obj#15))": "cpu:3096882, mem:2857016, objs:-/8@b419e0e4",
+  "  14 ret vec_new_from_slice -> Ok(Vec(obj#15))": "cpu:3096828, mem:2857016, objs:-/8@b419e0e4",
   "  15 call call(Address(obj#13), Symbol(spoof), Vec(obj#15))": "",
-  "  16 push VM:e921e73a:spoof()": "cpu:3755809, mem:4110548, objs:-/9@838273fa, vm:1114112@ba4a7cb7/15@ea6028ca, stk:1@81ee6bc4, auth:1@b714f5c3/-",
-  "  17 pop VM:e921e73a:spoof -> Err(Error(Context, InvalidAction))": "cpu:3758290, mem:4110578",
+  "  16 push VM:e921e73a:spoof()": "cpu:3755705, mem:4110548, objs:-/9@838273fa, vm:1114112@ba4a7cb7/15@ea6028ca, stk:1@81ee6bc4, auth:1@b714f5c3/-",
+  "  17 pop VM:e921e73a:spoof -> Err(Error(Context, InvalidAction))": "cpu:3758186, mem:4110578",
   "  18 ret call -> Err(Error(Context, InvalidAction))": " vm:-/-, stk:-, auth:-/-",
   "  19 call try_call(Address(obj#13), Symbol(spoof), Vec(obj#15))": "",
-  "  20 push VM:e921e73a:spoof()": "cpu:4417217, mem:5364110, objs:-/10@4ffb5bf8, vm:1114112@ba4a7cb7/15@ea6028ca, stk:1@81ee6bc4, auth:1@bb297f4a/-",
-  "  21 pop VM:e921e73a:spoof -> Err(Error(Context, InvalidAction))": "cpu:4419698, mem:5364140",
+  "  20 push VM:e921e73a:spoof()": "cpu:4417063, mem:5364110, objs:-/10@4ffb5bf8, vm:1114112@ba4a7cb7/15@ea6028ca, stk:1@81ee6bc4, auth:1@bb297f4a/-",
+  "  21 pop VM:e921e73a:spoof -> Err(Error(Context, InvalidAction))": "cpu:4419544, mem:5364140",
   "  22 ret try_call -> Ok(Error(Context, InvalidAction))": " vm:-/-, stk:-, auth:-/-",
-  "  23 end": "cpu:4419698, mem:5364140, prngs:-/9b4a753, objs:-/10@4ffb5bf8, vm:-/-, evt:-, store:-/2@111166e9, stk:-, auth:-/-"
+  "  23 end": "cpu:4419544, mem:5364140, prngs:-/9b4a753, objs:-/10@4ffb5bf8, vm:-/-, evt:-, store:-/2@111166e9, stk:-, auth:-/-"
 }
