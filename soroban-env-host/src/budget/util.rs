@@ -15,6 +15,7 @@ impl Budget {
         let b = self.inner_mut();
         b.cpu_insns.reset_models();
         b.mem_bytes.reset_models();
+        b.combined_models = super::BudgetImpl::build_combined_models(&b.cpu_insns, &b.mem_bytes);
         Ok(())
     }
 
@@ -130,6 +131,15 @@ impl Budget {
         let mem_model = b.mem_bytes.get_cost_model_mut(ty);
         mem_model.const_term = const_mem;
         mem_model.lin_term = lin_mem;
+
+        // Keep combined model in sync
+        let i = ty as usize;
+        b.combined_models[i] = super::model::CombinedCostModel {
+            cpu_const: const_cpu,
+            cpu_lin: lin_cpu,
+            mem_const: const_mem,
+            mem_lin: lin_mem,
+        };
         Ok(())
     }
 

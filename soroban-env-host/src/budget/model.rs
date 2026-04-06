@@ -136,6 +136,55 @@ impl HostCostModel for MeteredCostComponent {
     }
 }
 
+/// Combined CPU + MEM cost model for a single CostType. Evaluates both
+/// dimensions in one function call, sharing the `iterations * input`
+/// computation and avoiding a second array lookup.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CombinedCostModel {
+    pub cpu_const: u64,
+    pub cpu_lin: ScaledU64,
+    pub mem_const: u64,
+    pub mem_lin: ScaledU64,
+}
+
+impl CombinedCostModel {
+    pub const DEFAULT: Self = Self {
+        cpu_const: 0,
+        cpu_lin: ScaledU64(0),
+        mem_const: 0,
+        mem_lin: ScaledU64(0),
+    };
+
+    /// Evaluate both CPU and MEM costs in a single pass.
+    /// Returns (cpu_amount, mem_amount).
+    #[inline(always)]
+    pub fn evaluate(&self, iterations: u64, input: Option<u64>) -> (u64, u64) {
+        match input {
+            Some(input) => {
+                let cpu_const = self.cpu_const.saturating_mul(iterations);
+                let cpu_lin = self
+                    .cpu_lin
+                    .saturating_mul(input)
+                    .saturating_mul(iterations);
+                let cpu = cpu_const.saturating_add(cpu_lin.unscale());
+
+                let mem_const = self.mem_const.saturating_mul(iterations);
+                let mem_lin = self
+                    .mem_lin
+                    .saturating_mul(input)
+                    .saturating_mul(iterations);
+                let mem = mem_const.saturating_add(mem_lin.unscale());
+
+                (cpu, mem)
+            }
+            None => (
+                self.cpu_const.saturating_mul(iterations),
+                self.mem_const.saturating_mul(iterations),
+            ),
+        }
+    }
+}
+
 mod test {
     #[allow(unused)]
     use super::{HostCostModel, MeteredCostComponent, ScaledU64};

@@ -20,7 +20,7 @@ use crate::{
     Error, Host, HostError,
 };
 
-use dimension::{BudgetDimension, IsCpu, IsShadowMode};
+use dimension::BudgetDimension;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CostTracker {
@@ -197,6 +197,9 @@ impl BudgetTracker {
 pub(crate) struct BudgetImpl {
     pub(crate) cpu_insns: BudgetDimension,
     pub(crate) mem_bytes: BudgetDimension,
+    /// Combined CPU+MEM cost models for fast single-lookup evaluation.
+    /// Kept in sync with cpu_insns/mem_bytes cost models.
+    combined_models: [model::CombinedCostModel; ContractCostType::variants().len()],
     /// For the purpose of calibration and reporting; not used for budget-limiting nor does it affect consensus.
     /// Only updated when `tracking_enabled` is true.
     tracker: BudgetTracker,
@@ -210,6 +213,27 @@ pub(crate) struct BudgetImpl {
 }
 
 impl BudgetImpl {
+    /// Build the combined_models array from the per-dimension cost models.
+    fn build_combined_models(
+        cpu: &BudgetDimension,
+        mem: &BudgetDimension,
+    ) -> [model::CombinedCostModel; ContractCostType::variants().len()] {
+        let mut combined =
+            [model::CombinedCostModel::DEFAULT; ContractCostType::variants().len()];
+        for ct in ContractCostType::variants() {
+            let i = ct as usize;
+            let cpu_model = cpu.get_cost_model(ct);
+            let mem_model = mem.get_cost_model(ct);
+            combined[i] = model::CombinedCostModel {
+                cpu_const: cpu_model.const_term,
+                cpu_lin: cpu_model.lin_term,
+                mem_const: mem_model.const_term,
+                mem_lin: mem_model.lin_term,
+            };
+        }
+        combined
+    }
+
     /// Initializes the budget from network configuration settings.
     fn try_from_configs(
         cpu_limit: u64,
@@ -217,9 +241,13 @@ impl BudgetImpl {
         cpu_cost_params: ContractCostParams,
         mem_cost_params: ContractCostParams,
     ) -> Result<Self, HostError> {
+        let cpu_insns = BudgetDimension::try_from_config(cpu_cost_params, cpu_limit)?;
+        let mem_bytes = BudgetDimension::try_from_config(mem_cost_params, mem_limit)?;
+        let combined_models = Self::build_combined_models(&cpu_insns, &mem_bytes);
         Ok(Self {
-            cpu_insns: BudgetDimension::try_from_config(cpu_cost_params, cpu_limit)?,
-            mem_bytes: BudgetDimension::try_from_config(mem_cost_params, mem_limit)?,
+            cpu_insns,
+            mem_bytes,
+            combined_models,
             tracker: BudgetTracker::default(),
             tracking_enabled: false,
             is_in_shadow_mode: false,
@@ -250,18 +278,19 @@ impl BudgetImpl {
         }
     }
 
-    /// The normal (non-shadow) charge fast path. No shadow-mode checks.
+    /// The normal (non-shadow) charge fast path. Uses combined model for
+    /// single-lookup evaluation of both CPU and MEM costs.
     fn charge_normal(
         &mut self,
         ty: ContractCostType,
         iterations: u64,
         input: Option<u64>,
     ) -> Result<(), HostError> {
-        let cpu_charged = self.cpu_insns.charge(ty, iterations, input, IsCpu(true))?;
-        self.cpu_insns.check_budget_limit(IsShadowMode(false))?;
+        let cm = &self.combined_models[ty as usize];
+        let (cpu_charged, mem_charged) = cm.evaluate(iterations, input);
 
-        let mem_charged = self.mem_bytes.charge(ty, iterations, input, IsCpu(false))?;
-        self.mem_bytes.check_budget_limit(IsShadowMode(false))?;
+        self.cpu_insns.total_count = self.cpu_insns.total_count.saturating_add(cpu_charged);
+        self.mem_bytes.total_count = self.mem_bytes.total_count.saturating_add(mem_charged);
 
         if self.tracking_enabled {
             let tracker = &mut self.tracker.cost_trackers[ty as usize];
@@ -275,20 +304,38 @@ impl BudgetImpl {
                 _ => return Err((ScErrorType::Budget, ScErrorCode::InternalError).into()),
             };
         }
+
+        if self.cpu_insns.total_count > self.cpu_insns.limit
+            || self.mem_bytes.total_count > self.mem_bytes.limit
+        {
+            return Err((ScErrorType::Budget, ScErrorCode::ExceededLimit).into());
+        }
         Ok(())
     }
 
-    /// Shadow-mode charge path. Skips tracker updates, uses shadow counters/limits.
+    /// Shadow-mode charge path. Uses combined model, accumulates to shadow counters.
     fn charge_shadow(
         &mut self,
         ty: ContractCostType,
         iterations: u64,
         input: Option<u64>,
     ) -> Result<(), HostError> {
-        self.cpu_insns.charge_shadow(ty, iterations, input)?;
-        self.cpu_insns.check_budget_limit(IsShadowMode(true))?;
-        self.mem_bytes.charge_shadow(ty, iterations, input)?;
-        self.mem_bytes.check_budget_limit(IsShadowMode(true))
+        let cm = &self.combined_models[ty as usize];
+        let (cpu_charged, mem_charged) = cm.evaluate(iterations, input);
+
+        self.cpu_insns.shadow_total_count =
+            self.cpu_insns.shadow_total_count.saturating_add(cpu_charged);
+        if self.cpu_insns.shadow_total_count > self.cpu_insns.shadow_limit {
+            return Err((ScErrorType::Budget, ScErrorCode::ExceededLimit).into());
+        }
+
+        self.mem_bytes.shadow_total_count =
+            self.mem_bytes.shadow_total_count.saturating_add(mem_charged);
+        if self.mem_bytes.shadow_total_count > self.mem_bytes.shadow_limit {
+            return Err((ScErrorType::Budget, ScErrorCode::ExceededLimit).into());
+        }
+
+        Ok(())
     }
 
     fn get_wasmi_fuel_remaining(&self) -> Result<u64, HostError> {
@@ -318,6 +365,7 @@ impl Default for BudgetImpl {
         let mut b = Self {
             cpu_insns: BudgetDimension::default(),
             mem_bytes: BudgetDimension::default(),
+            combined_models: [model::CombinedCostModel::DEFAULT; ContractCostType::variants().len()],
             tracker: Default::default(),
             tracking_enabled: true,
             is_in_shadow_mode: false,
@@ -1054,6 +1102,9 @@ impl Default for BudgetImpl {
         // define the limits
         b.cpu_insns.reset(limits::DEFAULT_CPU_INSN_LIMIT);
         b.mem_bytes.reset(limits::DEFAULT_MEM_BYTES_LIMIT);
+
+        // build combined models from the per-dimension models
+        b.combined_models = Self::build_combined_models(&b.cpu_insns, &b.mem_bytes);
         b
     }
 }
@@ -1366,8 +1417,8 @@ impl Budget {
         let b = self.inner_mut();
         let prev = b.is_in_shadow_mode;
         b.is_in_shadow_mode = true;
-        let ok = b.cpu_insns.check_budget_limit(IsShadowMode(true)).is_ok()
-            && b.mem_bytes.check_budget_limit(IsShadowMode(true)).is_ok();
+        let ok = b.cpu_insns.shadow_total_count <= b.cpu_insns.shadow_limit
+            && b.mem_bytes.shadow_total_count <= b.mem_bytes.shadow_limit;
 
         if ok {
             let _ = f();

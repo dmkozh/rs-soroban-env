@@ -6,6 +6,7 @@ use core::fmt::Debug;
 /// Helper types to annotate boolean function arguments
 #[allow(dead_code)]
 pub(crate) struct IsCpu(pub(crate) bool);
+#[allow(dead_code)]
 pub(crate) struct IsShadowMode(pub(crate) bool);
 
 #[derive(Clone)]
@@ -128,6 +129,7 @@ impl BudgetDimension {
         self.shadow_total_count = 0;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn check_budget_limit(&self, is_shadow: IsShadowMode) -> Result<(), HostError> {
         let over_limit = if is_shadow.0 {
             self.shadow_total_count > self.shadow_limit
@@ -149,6 +151,7 @@ impl BudgetDimension {
     /// model, and amount charged is iterations * const_term.
     /// Returns the amount charged.
     /// Normal-mode charge: evaluates cost model and accumulates to total_count.
+    #[allow(dead_code)]
     pub(crate) fn charge(
         &mut self,
         ty: ContractCostType,
@@ -171,6 +174,7 @@ impl BudgetDimension {
     }
 
     /// Shadow-mode charge: evaluates cost model and accumulates to shadow_total_count.
+    #[allow(dead_code)]
     pub(crate) fn charge_shadow(
         &mut self,
         ty: ContractCostType,
