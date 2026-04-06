@@ -58,7 +58,7 @@ impl InstanceStorageMap {
                                 host.to_valid_host_val(&i.val)?,
                             ))
                         })
-                        .metered_collect::<Result<Vec<(Val, Val)>, HostError>>(host)?
+                        .metered_collect::<Result<Vec<(Val, Val)>, HostError>>(host.as_budget())?
                 },
             )?,
             host,

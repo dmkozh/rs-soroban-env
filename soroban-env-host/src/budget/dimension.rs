@@ -3,9 +3,8 @@ use crate::xdr::{ContractCostParams, ContractCostType, ScErrorCode, ScErrorType}
 use crate::{Error, HostError};
 use core::fmt::Debug;
 
-/// Helper types to annotate boolean function arguments
-#[allow(dead_code)]
-pub(crate) struct IsCpu(pub(crate) bool);
+/// Helper type to annotate boolean function argument for shadow mode checks.
+#[cfg(any(test, feature = "recording_mode", feature = "testutils"))]
 pub(crate) struct IsShadowMode(pub(crate) bool);
 
 #[derive(Clone)]
@@ -93,32 +92,20 @@ impl BudgetDimension {
         Ok(bd)
     }
 
+    // The cost_models array is statically sized to ContractCostType::variants().len(),
+    // so indexing by `ty as usize` is always in bounds.
     pub(crate) fn get_cost_model(
         &self,
         ty: ContractCostType,
-    ) -> Result<&MeteredCostComponent, HostError> {
-        self.cost_models.get(ty as usize).ok_or_else(|| {
-            // cost models are initialized with the static size of the
-            // ContractCostType, so this call should always succeed
-            HostError::from(Error::from_type_and_code(
-                ScErrorType::Budget,
-                ScErrorCode::InternalError,
-            ))
-        })
+    ) -> &MeteredCostComponent {
+        &self.cost_models[ty as usize]
     }
 
     pub(crate) fn get_cost_model_mut(
         &mut self,
         ty: ContractCostType,
-    ) -> Result<&mut MeteredCostComponent, HostError> {
-        self.cost_models.get_mut(ty as usize).ok_or_else(|| {
-            // cost models are initialized with the static size of the
-            // ContractCostType, so this call should always succeed
-            HostError::from(Error::from_type_and_code(
-                ScErrorType::Budget,
-                ScErrorCode::InternalError,
-            ))
-        })
+    ) -> &mut MeteredCostComponent {
+        &mut self.cost_models[ty as usize]
     }
 
     pub(crate) fn get_total_count(&self) -> u64 {
@@ -140,6 +127,7 @@ impl BudgetDimension {
         self.shadow_total_count = 0;
     }
 
+    #[cfg(any(test, feature = "recording_mode", feature = "testutils"))]
     pub(crate) fn check_budget_limit(&self, is_shadow: IsShadowMode) -> Result<(), HostError> {
         let over_limit = if is_shadow.0 {
             self.shadow_total_count > self.shadow_limit
@@ -154,46 +142,13 @@ impl BudgetDimension {
         }
     }
 
-    /// Performs a bulk charge to the budget under the specified `CostType`.
-    /// If the input is `Some`, then the total input charged is iterations *
-    /// input, assuming all batched units have the same input size. If input
-    /// is `None`, the input is ignored and the model is treated as a constant
-    /// model, and amount charged is iterations * const_term.
-    /// Returns the amount charged.
-    pub(crate) fn charge(
-        &mut self,
-        ty: ContractCostType,
-        iterations: u64,
-        input: Option<u64>,
-        _is_cpu: IsCpu,
-        is_shadow: IsShadowMode,
-    ) -> Result<u64, HostError> {
-        let cm = self.get_cost_model(ty)?;
-        let amount = cm.evaluate(iterations, input)?;
-
-        #[cfg(all(not(target_family = "wasm"), feature = "tracy"))]
-        if _is_cpu.0 {
-            let _span = tracy_span!("charge");
-            _span.emit_text(ty.name());
-            _span.emit_value(amount);
-        }
-
-        if is_shadow.0 {
-            self.shadow_total_count = self.shadow_total_count.saturating_add(amount);
-        } else {
-            self.total_count = self.total_count.saturating_add(amount);
-        }
-
-        Ok(amount)
-    }
-
     pub(crate) fn get_cost(
         &self,
         ty: ContractCostType,
         iterations: u64,
         input: Option<u64>,
-    ) -> Result<u64, HostError> {
-        self.get_cost_model(ty)?.evaluate(iterations, input)
+    ) -> u64 {
+        self.get_cost_model(ty).evaluate(iterations, input)
     }
 
     // Resets all model parameters to zero (so that we can override and test individual ones later).

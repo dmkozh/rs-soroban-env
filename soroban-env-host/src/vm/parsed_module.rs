@@ -258,7 +258,7 @@ impl ParsedModule {
         // parsing phase, so there is no DOS factor. We don't charge for
         // insertion/lookups, since they should be cheap and number of
         // operations on the set is limited.
-        Vec::<(&str, &str)>::charge_bulk_init_cpy(symbols.len() as u64, host)?;
+        Vec::<(&str, &str)>::charge_bulk_init_cpy(symbols.len() as u64, host.as_budget())?;
         callback(&symbols)
     }
 

@@ -1,6 +1,7 @@
 use std::hint::black_box;
 
 use crate::{
+    budget::AsBudget,
     cost_runner::{CostRunner, CostType},
     crypto::sha256_hash_from_bytes_raw,
     xdr::ContractCostType::ComputeSha256Hash,
@@ -16,7 +17,7 @@ impl CostRunner for ComputeSha256HashRun {
     type RecycledType = (Option<[u8; 32]>, Vec<u8>);
 
     fn run_iter(host: &crate::Host, _iter: u64, sample: Self::SampleType) -> Self::RecycledType {
-        let hash = black_box(sha256_hash_from_bytes_raw(sample.as_slice(), host).expect("sha256"));
+        let hash = black_box(sha256_hash_from_bytes_raw(sample.as_slice(), host.as_budget()).expect("sha256"));
         (Some(hash), sample)
     }
 

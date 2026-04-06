@@ -4,6 +4,7 @@ use crate::{
         metered_clone::{MeteredClone, MeteredIterator},
         metered_xdr::metered_write_xdr,
     },
+    host_object::{HostMap, HostVec},
     xdr::{ContractCostType, ScMap, ScMapEntry, ScVal},
     Env, ErrorHandler, Host, HostError, Symbol, Val,
 };
@@ -551,4 +552,324 @@ fn total_amount_charged_from_random_inputs() -> Result<(), HostError> {
     );
 
     Ok(())
+}
+
+// Wall-clock micro-benchmarks for budget charge overhead.
+// Run with: cargo test -p soroban-env-host --release bench_budget_ -- --nocapture --ignored
+
+fn make_unlimited_budget() -> Budget {
+    let budget = Budget::default();
+    budget.inner_mut().cpu_insns.reset(u64::MAX);
+    budget.inner_mut().mem_bytes.reset(u64::MAX);
+    budget
+}
+
+fn make_production_budget() -> Budget {
+    let budget = make_unlimited_budget();
+    budget.inner_mut().tracking_enabled = false;
+    budget
+}
+
+#[test]
+fn bench_budget_charge_constant() {
+    let budget = make_unlimited_budget();
+    // Warm up
+    for _ in 0..10_000 {
+        budget
+            .charge(ContractCostType::WasmInsnExec, None)
+            .unwrap();
+    }
+
+    let iterations = 10_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(
+            budget
+                .charge(ContractCostType::WasmInsnExec, None)
+                .unwrap(),
+        );
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.charge(WasmInsnExec, None): {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_budget_charge_linear() {
+    let budget = make_unlimited_budget();
+    for _ in 0..10_000 {
+        budget.charge(ContractCostType::MemCpy, Some(8)).unwrap();
+    }
+
+    let iterations = 10_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.charge(ContractCostType::MemCpy, Some(8)).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.charge(MemCpy, Some(8)): {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_metered_clone_val() {
+    let budget = make_unlimited_budget();
+    let val = Val::from_void();
+    for _ in 0..10_000 {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+
+    let iterations = 5_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "Val::metered_clone: {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_budget_bulk_charge() {
+    let budget = make_unlimited_budget();
+    for _ in 0..10_000 {
+        budget
+            .bulk_charge(ContractCostType::MemCpy, 10, Some(8))
+            .unwrap();
+    }
+
+    let iterations = 5_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(
+            budget
+                .bulk_charge(ContractCostType::MemCpy, 10, Some(8))
+                .unwrap(),
+        );
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.bulk_charge(MemCpy, 10, Some(8)): {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_budget_charge_production() {
+    let budget = make_production_budget();
+    for _ in 0..10_000 {
+        budget
+            .charge(ContractCostType::WasmInsnExec, None)
+            .unwrap();
+    }
+
+    let iterations = 10_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(
+            budget
+                .charge(ContractCostType::WasmInsnExec, None)
+                .unwrap(),
+        );
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.charge(WasmInsnExec, None) [production]: {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_budget_charge_linear_production() {
+    let budget = make_production_budget();
+    for _ in 0..10_000 {
+        budget.charge(ContractCostType::MemCpy, Some(8)).unwrap();
+    }
+
+    let iterations = 10_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.charge(ContractCostType::MemCpy, Some(8)).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.charge(MemCpy, Some(8)) [production]: {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+use crate::Compare;
+use soroban_env_common::xdr::{ScSymbol, ScVec};
+
+fn make_test_scval_map(n_entries: usize) -> ScVal {
+    let entries: Vec<ScMapEntry> = (0..n_entries)
+        .map(|i| ScMapEntry {
+            key: ScVal::Symbol(ScSymbol(format!("key_{i:03}").try_into().unwrap())),
+            val: ScVal::U64(i as u64),
+        })
+        .collect();
+    ScVal::Map(Some(ScMap(entries.try_into().unwrap())))
+}
+
+fn make_test_scval_vec(n_entries: usize) -> ScVal {
+    let entries: Vec<ScVal> = (0..n_entries)
+        .map(|i| ScVal::U64(i as u64))
+        .collect();
+    ScVal::Vec(Some(ScVec(entries.try_into().unwrap())))
+}
+
+#[test]
+fn bench_metered_clone_scval_map() {
+    let budget = make_unlimited_budget();
+    let val = make_test_scval_map(10);
+    for _ in 0..1_000 {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+
+    let iterations = 5_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "ScVal::Map(10 entries)::metered_clone: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_metered_compare_scval_map() {
+    let budget = make_unlimited_budget();
+    let val_a = make_test_scval_map(10);
+    let val_b = make_test_scval_map(10);
+    for _ in 0..1_000 {
+        std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
+    }
+
+    let iterations = 5_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "ScVal::Map(10 entries)::compare: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_metered_clone_scval_vec_u64() {
+    let budget = make_unlimited_budget();
+    let val = make_test_scval_vec(10);
+    for _ in 0..1_000 {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+
+    let iterations = 5_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "ScVal::Vec(10 x U64)::metered_clone: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_metered_compare_scval_vec_u64() {
+    let budget = make_unlimited_budget();
+    let val_a = make_test_scval_vec(10);
+    let val_b = make_test_scval_vec(10);
+    for _ in 0..1_000 {
+        std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
+    }
+
+    let iterations = 5_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "ScVal::Vec(10 x U64)::compare: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_from_host_val_map() {
+    let host = Host::test_host();
+    host.as_budget().reset_unlimited().unwrap();
+
+    // Create a map with 10 Symbol->U64 entries as a HostObject
+    let mut pairs = Vec::new();
+    for i in 0..10u32 {
+        let key = host
+            .to_host_val(&ScVal::Symbol(ScSymbol(
+                format!("key_{i:03}").try_into().unwrap(),
+            )))
+            .unwrap();
+        let val = host
+            .to_host_val(&ScVal::U64(i as u64))
+            .unwrap();
+        pairs.push((key, val));
+    }
+    let map = HostMap::from_map(pairs, &host).unwrap();
+    let map_obj = host.add_host_object(map).unwrap();
+
+    // Warm up
+    for _ in 0..1_000 {
+        std::hint::black_box(host.from_host_obj(map_obj).unwrap());
+    }
+
+    let iterations = 200_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(host.from_host_obj(map_obj).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "from_host_obj(Map(10)): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_from_host_val_vec_u64() {
+    let host = Host::test_host();
+    host.as_budget().reset_unlimited().unwrap();
+
+    // Create a vec with 10 U64 entries as a HostObject
+    let mut vals = Vec::new();
+    for i in 0..10u32 {
+        vals.push(Val::from_u32(i).into());
+    }
+    let vec = HostVec::from_vec(vals).unwrap();
+    let vec_obj = host.add_host_object(vec).unwrap();
+
+    // Warm up
+    for _ in 0..1_000 {
+        std::hint::black_box(host.from_host_obj(vec_obj).unwrap());
+    }
+
+    let iterations = 500_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(host.from_host_obj(vec_obj).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "from_host_obj(Vec(10 x U64)): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
 }

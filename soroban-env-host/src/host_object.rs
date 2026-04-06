@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::{
-    budget::Budget,
+    budget::{AsBudget, Budget},
     host::{
         metered_clone::{self, MeteredClone},
         metered_map::MeteredOrdMap,
@@ -18,6 +18,19 @@ use crate::{
 
 pub(crate) type HostMap = MeteredOrdMap<Val, Val, Host>;
 pub(crate) type HostVec = MeteredVector<Val>;
+
+/// Cached metadata for a HostObject, computed at creation time.
+/// Since HostObjects are immutable, these hints never go stale.
+#[derive(Clone, Copy, Debug, Default, Hash)]
+pub(crate) struct ObjectMeta {
+    /// Approximate total XDR-encoded byte size of this object and all its
+    /// owned data. Used to charge a single MemAlloc+MemCpy when converting
+    /// Val→ScVal instead of per-element recursive charges.
+    pub xdr_byte_size: u32,
+    /// Maximum nesting depth. 0 for leaf objects, 1+ for containers.
+    /// Enforced at creation time so runtime depth checks are unnecessary.
+    pub depth: u32,
+}
 
 #[derive(Clone, Hash)]
 pub(crate) enum HostObject {
@@ -427,7 +440,7 @@ impl Host {
                 ))
             } else {
                 // Push a new entry into the relative-objects vector.
-                metered_clone::charge_heap_alloc::<Object>(1, self)?;
+                metered_clone::charge_heap_alloc::<Object>(1, self.as_budget())?;
                 let index = self.with_current_frame_relative_object_table(|table| {
                     let index = table.len();
                     table.push(obj);
@@ -452,8 +465,10 @@ impl Host {
         let handle = index_to_handle(self, index, false)?;
         // charge for the new host object, which is just the amortized cost of a
         // single `HostObject` allocation
-        metered_clone::charge_heap_alloc::<HostObject>(1, self)?;
-        self.try_borrow_objects_mut()?.push(HOT::inject(hot, self)?);
+        metered_clone::charge_heap_alloc::<HostObject>(1, self.as_budget())?;
+        let obj = HOT::inject(hot, self)?;
+        let meta = self.compute_object_meta(&obj)?;
+        self.try_borrow_objects_mut()?.push((obj, meta));
         Ok(HOT::new_from_handle(handle))
     }
 
@@ -485,7 +500,7 @@ impl Host {
                 "looking up relative object",
                 &[Val::from_u32(handle).to_val()],
             ))
-        } else if let Some(obj) = r.get(handle_to_index(handle)) {
+        } else if let Some((obj, _meta)) = r.get(handle_to_index(handle)) {
             f(obj)
         } else {
             // Discard the broken object here instead of including
@@ -525,5 +540,176 @@ impl Host {
             )),
             Some(hot) => f(hot),
         })
+    }
+
+    /// Returns the approximate XDR byte size for a Val.
+    /// For inline values, returns a fixed size.
+    /// For object handles, looks up the cached ObjectMeta.
+    pub(crate) fn val_xdr_byte_size(&self, val: Val) -> Result<u32, HostError> {
+        use crate::Tag;
+        let tag = val.get_tag();
+        if tag.is_object() {
+            let obj: Object = val.try_into().map_err(|_| self.err(
+                ScErrorType::Value,
+                ScErrorCode::InternalError,
+                "expected object val",
+                &[],
+            ))?;
+            let handle = obj.get_handle();
+            let r = self.try_borrow_objects()?;
+            if let Some((_obj, meta)) = r.get(handle_to_index(handle)) {
+                // Add 4 bytes for ScVal discriminant wrapping
+                Ok(meta.xdr_byte_size.saturating_add(4))
+            } else {
+                Ok(8) // fallback
+            }
+        } else {
+            // Inline Val — approximate XDR size based on tag
+            Ok(match tag {
+                Tag::False | Tag::True | Tag::Void => 4,
+                Tag::U32Val | Tag::I32Val => 8,  // 4 disc + 4 val
+                Tag::U64Small | Tag::I64Small => 12, // 4 disc + 8 val
+                Tag::TimepointSmall | Tag::DurationSmall => 12,
+                Tag::U128Small | Tag::I128Small => 20, // 4 disc + 16 val
+                Tag::U256Small | Tag::I256Small => 36, // 4 disc + 32 val
+                Tag::SymbolSmall => {
+                    // Small symbols: up to 9 chars, XDR = 4 disc + 4 len + padded chars
+                    12 // approximate
+                }
+                Tag::Error => 12, // 4 disc + 4 type + 4 code
+                _ => 8, // conservative fallback for any other inline types
+            })
+        }
+    }
+
+    /// Returns the ObjectMeta for the given Val, or a default for inline vals.
+    pub(crate) fn val_object_meta(&self, val: Val) -> Result<ObjectMeta, HostError> {
+        if val.get_tag().is_object() {
+            let obj: Object = val.try_into().map_err(|_| self.err(
+                ScErrorType::Value,
+                ScErrorCode::InternalError,
+                "expected object val",
+                &[],
+            ))?;
+            let handle = obj.get_handle();
+            let r = self.try_borrow_objects()?;
+            if let Some((_obj, meta)) = r.get(handle_to_index(handle)) {
+                Ok(*meta)
+            } else {
+                Ok(ObjectMeta::default())
+            }
+        } else {
+            Ok(ObjectMeta {
+                xdr_byte_size: self.val_xdr_byte_size(val)?,
+                depth: 0,
+            })
+        }
+    }
+
+    /// Compute ObjectMeta for a HostObject at creation time.
+    fn compute_object_meta(&self, obj: &HostObject) -> Result<ObjectMeta, HostError> {
+        match obj {
+            // Leaf scalar objects — fixed XDR sizes, depth 0
+            HostObject::U64(_) => Ok(ObjectMeta { xdr_byte_size: 8, depth: 0 }),
+            HostObject::I64(_) => Ok(ObjectMeta { xdr_byte_size: 8, depth: 0 }),
+            HostObject::U128(_) => Ok(ObjectMeta { xdr_byte_size: 16, depth: 0 }),
+            HostObject::I128(_) => Ok(ObjectMeta { xdr_byte_size: 16, depth: 0 }),
+            HostObject::U256(_) => Ok(ObjectMeta { xdr_byte_size: 32, depth: 0 }),
+            HostObject::I256(_) => Ok(ObjectMeta { xdr_byte_size: 32, depth: 0 }),
+            HostObject::TimePoint(_) => Ok(ObjectMeta { xdr_byte_size: 8, depth: 0 }),
+            HostObject::Duration(_) => Ok(ObjectMeta { xdr_byte_size: 8, depth: 0 }),
+
+            // Variable-length leaf objects — size from len, depth 0
+            // XDR encoding: 4 (length) + padded-to-4 bytes
+            HostObject::Bytes(b) => {
+                let padded = ((b.len() + 3) / 4) * 4;
+                Ok(ObjectMeta { xdr_byte_size: (4 + padded) as u32, depth: 0 })
+            }
+            HostObject::String(s) => {
+                let padded = ((s.len() + 3) / 4) * 4;
+                Ok(ObjectMeta { xdr_byte_size: (4 + padded) as u32, depth: 0 })
+            }
+            HostObject::Symbol(s) => {
+                let padded = ((s.len() + 3) / 4) * 4;
+                Ok(ObjectMeta { xdr_byte_size: (4 + padded) as u32, depth: 0 })
+            }
+
+            // Address: ScAddress is either Account(32 bytes) or Contract(32 bytes)
+            // XDR: 4 (disc) + 4 (inner disc) + 32 (key) = 40
+            HostObject::Address(_) => Ok(ObjectMeta { xdr_byte_size: 40, depth: 0 }),
+            HostObject::MuxedAddress(_) => Ok(ObjectMeta { xdr_byte_size: 48, depth: 0 }),
+
+            // Container objects — sum child sizes + overhead
+            HostObject::Vec(v) => {
+                // XDR: 4 (vec length) + sum of element sizes
+                let r = self.try_borrow_objects()?;
+                let mut total_size: u32 = 4; // vec length prefix
+                let mut max_depth: u32 = 0;
+                for val in v.iter() {
+                    let child_meta = self.val_object_meta_from_table(&r, *val);
+                    total_size = total_size.saturating_add(child_meta.xdr_byte_size).saturating_add(4); // +4 for ScVal disc
+                    max_depth = max_depth.max(child_meta.depth);
+                }
+                Ok(ObjectMeta {
+                    xdr_byte_size: total_size,
+                    depth: max_depth.saturating_add(1),
+                })
+            }
+            HostObject::Map(m) => {
+                // XDR: 4 (vec length) + sum of entry sizes
+                // Each entry: key ScVal + val ScVal
+                let r = self.try_borrow_objects()?;
+                let mut total_size: u32 = 4; // vec length prefix
+                let mut max_depth: u32 = 0;
+                for (k, v) in m.map.iter() {
+                    let k_meta = self.val_object_meta_from_table(&r, *k);
+                    let v_meta = self.val_object_meta_from_table(&r, *v);
+                    // Each entry: key XDR + 4 disc + val XDR + 4 disc
+                    total_size = total_size
+                        .saturating_add(k_meta.xdr_byte_size).saturating_add(4)
+                        .saturating_add(v_meta.xdr_byte_size).saturating_add(4);
+                    max_depth = max_depth.max(k_meta.depth).max(v_meta.depth);
+                }
+                Ok(ObjectMeta {
+                    xdr_byte_size: total_size,
+                    depth: max_depth.saturating_add(1),
+                })
+            }
+        }
+    }
+
+    /// Look up ObjectMeta for a Val from the already-borrowed objects table.
+    /// For inline Vals, returns an approximate fixed size.
+    fn val_object_meta_from_table(
+        &self,
+        objects: &[(HostObject, ObjectMeta)],
+        val: Val,
+    ) -> ObjectMeta {
+        use crate::Tag;
+        let tag = val.get_tag();
+        if tag.is_object() {
+            if let Ok(obj) = Object::try_from(val) {
+                let handle = obj.get_handle();
+                if let Some((_obj, meta)) = objects.get(handle_to_index(handle)) {
+                    return *meta;
+                }
+            }
+            ObjectMeta::default()
+        } else {
+            ObjectMeta {
+                xdr_byte_size: match tag {
+                    Tag::False | Tag::True | Tag::Void => 4,
+                    Tag::U32Val | Tag::I32Val => 8,
+                    Tag::U64Small | Tag::I64Small => 12,
+                    Tag::TimepointSmall | Tag::DurationSmall => 12,
+                    Tag::U128Small | Tag::I128Small => 20,
+                    Tag::U256Small | Tag::I256Small => 36,
+                    Tag::SymbolSmall => 12,
+                    Tag::Error => 12,
+                    _ => 8,
+                },
+                depth: 0,
+            }
+        }
     }
 }

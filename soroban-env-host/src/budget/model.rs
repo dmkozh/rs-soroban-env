@@ -28,7 +28,7 @@ use core::fmt::{Debug, Display};
 /// The parameters for a `CostModel` are calibrated empirically. See this
 /// crate's benchmarks for more details.
 pub trait HostCostModel {
-    fn evaluate(&self, iterations: u64, input: Option<u64>) -> Result<u64, HostError>;
+    fn evaluate(&self, iterations: u64, input: Option<u64>) -> u64;
 
     #[cfg(any(test, feature = "testutils", feature = "bench"))]
     fn reset(&mut self);
@@ -114,21 +114,18 @@ impl TryFrom<ContractCostParamEntry> for MeteredCostComponent {
 }
 
 impl HostCostModel for MeteredCostComponent {
-    fn evaluate(&self, iterations: u64, input: Option<u64>) -> Result<u64, HostError> {
+    #[inline(always)]
+    fn evaluate(&self, iterations: u64, input: Option<u64>) -> u64 {
         let const_term = self.const_term.saturating_mul(iterations);
         match input {
             Some(input) => {
-                let mut res = const_term;
-                if !self.lin_term.is_zero() {
-                    let lin_cost = self
-                        .lin_term
-                        .saturating_mul(input)
-                        .saturating_mul(iterations);
-                    res = res.saturating_add(lin_cost.unscale())
-                }
-                Ok(res)
+                let lin_cost = self
+                    .lin_term
+                    .saturating_mul(input)
+                    .saturating_mul(iterations);
+                const_term.saturating_add(lin_cost.unscale())
             }
-            None => Ok(const_term),
+            None => const_term,
         }
     }
 
@@ -136,6 +133,55 @@ impl HostCostModel for MeteredCostComponent {
     fn reset(&mut self) {
         self.const_term = 0;
         self.lin_term = ScaledU64(0);
+    }
+}
+
+/// Combined CPU + MEM cost model for a single CostType. Evaluates both
+/// dimensions in one function call, sharing the `iterations * input`
+/// computation and avoiding a second array lookup.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CombinedCostModel {
+    pub cpu_const: u64,
+    pub cpu_lin: ScaledU64,
+    pub mem_const: u64,
+    pub mem_lin: ScaledU64,
+}
+
+impl CombinedCostModel {
+    pub const DEFAULT: Self = Self {
+        cpu_const: 0,
+        cpu_lin: ScaledU64(0),
+        mem_const: 0,
+        mem_lin: ScaledU64(0),
+    };
+
+    /// Evaluate both CPU and MEM costs in a single pass.
+    /// Returns (cpu_amount, mem_amount).
+    #[inline(always)]
+    pub fn evaluate(&self, iterations: u64, input: Option<u64>) -> (u64, u64) {
+        match input {
+            Some(input) => {
+                let cpu_const = self.cpu_const.saturating_mul(iterations);
+                let cpu_lin = self
+                    .cpu_lin
+                    .saturating_mul(input)
+                    .saturating_mul(iterations);
+                let cpu = cpu_const.saturating_add(cpu_lin.unscale());
+
+                let mem_const = self.mem_const.saturating_mul(iterations);
+                let mem_lin = self
+                    .mem_lin
+                    .saturating_mul(input)
+                    .saturating_mul(iterations);
+                let mem = mem_const.saturating_add(mem_lin.unscale());
+
+                (cpu, mem)
+            }
+            None => (
+                self.cpu_const.saturating_mul(iterations),
+                self.mem_const.saturating_mul(iterations),
+            ),
+        }
     }
 }
 
@@ -151,12 +197,12 @@ mod test {
         };
         // low iteration + low input
         // the constant part is 3, the linear part is 5 >> 7 == 0, total is 3
-        assert_eq!(3, test_model.evaluate(1, Some(1)).unwrap());
+        assert_eq!(3, test_model.evaluate(1, Some(1)));
         // low iteration + high input
         // the contant part is 3, the linear part is (26 * 5) >> 7 == 1, total is 4
-        assert_eq!(4, test_model.evaluate(1, Some(26)).unwrap());
+        assert_eq!(4, test_model.evaluate(1, Some(26)));
         // high iteration + low input
         // the constant part is 26 * 3 == 78, the linear part is (26 * 5) >> 7 == 1, total is 79
-        assert_eq!(79, test_model.evaluate(26, Some(1)).unwrap());
+        assert_eq!(79, test_model.evaluate(26, Some(1)));
     }
 }

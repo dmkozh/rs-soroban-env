@@ -4,24 +4,22 @@ mod model;
 mod util;
 mod wasmi_helper;
 
-pub(crate) use limits::DepthLimiter;
 pub use limits::{DEFAULT_HOST_DEPTH_LIMIT, DEFAULT_XDR_RW_LIMITS};
 pub use model::{MeteredCostComponent, ScaledU64};
 pub(crate) use wasmi_helper::{get_wasmi_config, load_calibrated_fuel_costs};
 
 use std::{
-    cell::{RefCell, RefMut},
+    cell::UnsafeCell,
     fmt::{Debug, Display},
     rc::Rc,
 };
 
 use crate::{
-    host::error::TryBorrowOrErr,
     xdr::{ContractCostParams, ContractCostType, ScErrorCode, ScErrorType},
     Error, Host, HostError,
 };
 
-use dimension::{BudgetDimension, IsCpu, IsShadowMode};
+use dimension::BudgetDimension;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CostTracker {
@@ -196,16 +194,45 @@ impl BudgetTracker {
 
 #[derive(Clone)]
 pub(crate) struct BudgetImpl {
-    cpu_insns: BudgetDimension,
-    mem_bytes: BudgetDimension,
-    /// For the purpose of calibration and reporting; not used for budget-limiting nor does it affect consensus
+    pub(crate) cpu_insns: BudgetDimension,
+    pub(crate) mem_bytes: BudgetDimension,
+    /// Combined CPU+MEM cost models for fast single-lookup evaluation.
+    /// Kept in sync with cpu_insns/mem_bytes cost models.
+    combined_models: [model::CombinedCostModel; ContractCostType::variants().len()],
+    /// For the purpose of calibration and reporting; not used for budget-limiting nor does it affect consensus.
+    /// Only updated when `tracking_enabled` is true.
     tracker: BudgetTracker,
+    /// When true, per-CostType tracker updates are performed on every charge.
+    /// This is only needed for calibration, diagnostics, and tests — not for
+    /// consensus-critical budget enforcement.
+    pub(crate) tracking_enabled: bool,
     is_in_shadow_mode: bool,
     fuel_costs: wasmi::FuelCosts,
     depth_limit: u32,
 }
 
 impl BudgetImpl {
+    /// Build the combined_models array from the per-dimension cost models.
+    fn build_combined_models(
+        cpu: &BudgetDimension,
+        mem: &BudgetDimension,
+    ) -> [model::CombinedCostModel; ContractCostType::variants().len()] {
+        let mut combined =
+            [model::CombinedCostModel::DEFAULT; ContractCostType::variants().len()];
+        for ct in ContractCostType::variants() {
+            let i = ct as usize;
+            let cpu_model = cpu.get_cost_model(ct);
+            let mem_model = mem.get_cost_model(ct);
+            combined[i] = model::CombinedCostModel {
+                cpu_const: cpu_model.const_term,
+                cpu_lin: cpu_model.lin_term,
+                mem_const: mem_model.const_term,
+                mem_lin: mem_model.lin_term,
+            };
+        }
+        combined
+    }
+
     /// Initializes the budget from network configuration settings.
     fn try_from_configs(
         cpu_limit: u64,
@@ -213,10 +240,15 @@ impl BudgetImpl {
         cpu_cost_params: ContractCostParams,
         mem_cost_params: ContractCostParams,
     ) -> Result<Self, HostError> {
+        let cpu_insns = BudgetDimension::try_from_config(cpu_cost_params, cpu_limit)?;
+        let mem_bytes = BudgetDimension::try_from_config(mem_cost_params, mem_limit)?;
+        let combined_models = Self::build_combined_models(&cpu_insns, &mem_bytes);
         Ok(Self {
-            cpu_insns: BudgetDimension::try_from_config(cpu_cost_params, cpu_limit)?,
-            mem_bytes: BudgetDimension::try_from_config(mem_cost_params, mem_limit)?,
+            cpu_insns,
+            mem_bytes,
+            combined_models,
             tracker: BudgetTracker::default(),
+            tracking_enabled: false,
             is_in_shadow_mode: false,
             fuel_costs: load_calibrated_fuel_costs(),
             depth_limit: DEFAULT_HOST_DEPTH_LIMIT,
@@ -228,7 +260,7 @@ impl BudgetImpl {
         ty: ContractCostType,
         iterations: u64,
         input: Option<u64>,
-    ) -> Result<u64, HostError> {
+    ) -> u64 {
         self.mem_bytes.get_cost(ty, iterations, input)
     }
 
@@ -238,56 +270,78 @@ impl BudgetImpl {
         iterations: u64,
         input: Option<u64>,
     ) -> Result<(), HostError> {
-        let tracker = self
-            .tracker
-            .cost_trackers
-            .get_mut(ty as usize)
-            .ok_or_else(|| HostError::from((ScErrorType::Budget, ScErrorCode::InternalError)))?;
+        if self.is_in_shadow_mode {
+            self.charge_shadow(ty, iterations, input)
+        } else {
+            self.charge_normal(ty, iterations, input)
+        }
+    }
 
-        if !self.is_in_shadow_mode {
-            // update tracker for reporting
+    /// The normal (non-shadow) charge fast path. Uses combined model for
+    /// single-lookup evaluation of both CPU and MEM costs.
+    fn charge_normal(
+        &mut self,
+        ty: ContractCostType,
+        iterations: u64,
+        input: Option<u64>,
+    ) -> Result<(), HostError> {
+        let cm = &self.combined_models[ty as usize];
+        let (cpu_charged, mem_charged) = cm.evaluate(iterations, input);
+
+        self.cpu_insns.total_count = self.cpu_insns.total_count.saturating_add(cpu_charged);
+        self.mem_bytes.total_count = self.mem_bytes.total_count.saturating_add(mem_charged);
+
+        if self.tracking_enabled {
+            let tracker = &mut self.tracker.cost_trackers[ty as usize];
             self.tracker.meter_count = self.tracker.meter_count.saturating_add(1);
             tracker.iterations = tracker.iterations.saturating_add(iterations);
+            tracker.cpu = tracker.cpu.saturating_add(cpu_charged);
+            tracker.mem = tracker.mem.saturating_add(mem_charged);
             match (&mut tracker.inputs, input) {
                 (None, None) => (),
                 (Some(t), Some(i)) => *t = t.saturating_add(i.saturating_mul(iterations)),
-                // internal logic error, a wrong cost type has been passed in
                 _ => return Err((ScErrorType::Budget, ScErrorCode::InternalError).into()),
             };
         }
 
-        let cpu_charged = self.cpu_insns.charge(
-            ty,
-            iterations,
-            input,
-            IsCpu(true),
-            IsShadowMode(self.is_in_shadow_mode),
-        )?;
-        if !self.is_in_shadow_mode {
-            tracker.cpu = tracker.cpu.saturating_add(cpu_charged);
+        if self.cpu_insns.total_count > self.cpu_insns.limit
+            || self.mem_bytes.total_count > self.mem_bytes.limit
+        {
+            return Err((ScErrorType::Budget, ScErrorCode::ExceededLimit).into());
         }
-        self.cpu_insns
-            .check_budget_limit(IsShadowMode(self.is_in_shadow_mode))?;
+        Ok(())
+    }
 
-        let mem_charged = self.mem_bytes.charge(
-            ty,
-            iterations,
-            input,
-            IsCpu(false),
-            IsShadowMode(self.is_in_shadow_mode),
-        )?;
-        if !self.is_in_shadow_mode {
-            tracker.mem = tracker.mem.saturating_add(mem_charged);
+    /// Shadow-mode charge path. Uses combined model, accumulates to shadow counters.
+    fn charge_shadow(
+        &mut self,
+        ty: ContractCostType,
+        iterations: u64,
+        input: Option<u64>,
+    ) -> Result<(), HostError> {
+        let cm = &self.combined_models[ty as usize];
+        let (cpu_charged, mem_charged) = cm.evaluate(iterations, input);
+
+        self.cpu_insns.shadow_total_count =
+            self.cpu_insns.shadow_total_count.saturating_add(cpu_charged);
+        if self.cpu_insns.shadow_total_count > self.cpu_insns.shadow_limit {
+            return Err((ScErrorType::Budget, ScErrorCode::ExceededLimit).into());
         }
-        self.mem_bytes
-            .check_budget_limit(IsShadowMode(self.is_in_shadow_mode))
+
+        self.mem_bytes.shadow_total_count =
+            self.mem_bytes.shadow_total_count.saturating_add(mem_charged);
+        if self.mem_bytes.shadow_total_count > self.mem_bytes.shadow_limit {
+            return Err((ScErrorType::Budget, ScErrorCode::ExceededLimit).into());
+        }
+
+        Ok(())
     }
 
     fn get_wasmi_fuel_remaining(&self) -> Result<u64, HostError> {
         let cpu_remaining = self.cpu_insns.get_remaining();
         let cost_model = self
             .cpu_insns
-            .get_cost_model(ContractCostType::WasmInsnExec)?;
+            .get_cost_model(ContractCostType::WasmInsnExec);
         let cpu_per_fuel = cost_model.const_term.max(1);
         // Due to rounding, the amount of cpu converted to fuel will be slightly
         // less than the total cpu available. This is okay because 1. that rounded-off
@@ -310,7 +364,9 @@ impl Default for BudgetImpl {
         let mut b = Self {
             cpu_insns: BudgetDimension::default(),
             mem_bytes: BudgetDimension::default(),
+            combined_models: [model::CombinedCostModel::DEFAULT; ContractCostType::variants().len()],
             tracker: Default::default(),
+            tracking_enabled: true,
             is_in_shadow_mode: false,
             fuel_costs: load_calibrated_fuel_costs(),
             depth_limit: DEFAULT_HOST_DEPTH_LIMIT,
@@ -318,9 +374,7 @@ impl Default for BudgetImpl {
 
         for ct in ContractCostType::variants() {
             // define the cpu cost model parameters
-            let Ok(cpu) = b.cpu_insns.get_cost_model_mut(ct) else {
-                continue;
-            };
+            let cpu = b.cpu_insns.get_cost_model_mut(ct);
             match ct {
                 // This is the host cpu insn cost per wasm "fuel". Every "base" wasm
                 // instruction costs 1 fuel (by default), and some particular types of
@@ -690,9 +744,7 @@ impl Default for BudgetImpl {
             }
 
             // define the memory cost model parameters
-            let Ok(mem) = b.mem_bytes.get_cost_model_mut(ct) else {
-                continue;
-            };
+            let mem = b.mem_bytes.get_cost_model_mut(ct);
             match ct {
                 // This type is designated to the cpu cost. By definition, the memory cost
                 // of a (cpu) fuel is zero.
@@ -1049,6 +1101,9 @@ impl Default for BudgetImpl {
         // define the limits
         b.cpu_insns.reset(limits::DEFAULT_CPU_INSN_LIMIT);
         b.mem_bytes.reset(limits::DEFAULT_MEM_BYTES_LIMIT);
+
+        // build combined models from the per-dimension models
+        b.combined_models = Self::build_combined_models(&b.cpu_insns, &b.mem_bytes);
         b
     }
 }
@@ -1175,9 +1230,7 @@ impl BudgetImpl {
         println!();
         println!();
         for ct in ContractCostType::variants() {
-            let Ok(cpu) = self.cpu_insns.get_cost_model(ct) else {
-                continue;
-            };
+            let cpu = self.cpu_insns.get_cost_model(ct);
             println!("case {}:", ct.name());
             println!(
                 "params[val] = ContractCostParamEntry{{ExtensionPoint{{0}}, {}, {}}};",
@@ -1190,9 +1243,7 @@ impl BudgetImpl {
         println!();
         println!();
         for ct in ContractCostType::variants() {
-            let Ok(mem) = self.mem_bytes.get_cost_model(ct) else {
-                continue;
-            };
+            let mem = self.mem_bytes.get_cost_model(ct);
             println!("case {}:", ct.name());
             println!(
                 "params[val] = ContractCostParamEntry{{ExtensionPoint{{0}}, {}, {}}};",
@@ -1207,26 +1258,54 @@ impl BudgetImpl {
 }
 
 #[derive(Clone)]
-pub struct Budget(pub(crate) Rc<RefCell<BudgetImpl>>);
+pub struct Budget(pub(crate) Rc<UnsafeCell<BudgetImpl>>);
+
+// Safety: Budget is only used in single-threaded (Rc-based) contexts.
+// UnsafeCell replaces RefCell to eliminate runtime borrow-checking overhead
+// on the hot charge path. The host is single-threaded and Budget is never
+// borrowed reentrantly during charge.
+
+impl Budget {
+    /// Returns a shared reference to the inner BudgetImpl.
+    ///
+    /// # Safety contract
+    /// Caller must not hold a mutable reference to the same BudgetImpl.
+    /// This is guaranteed by the single-threaded, non-reentrant usage pattern.
+    #[inline(always)]
+    pub(crate) fn inner(&self) -> &BudgetImpl {
+        unsafe { &*self.0.get() }
+    }
+
+    /// Returns a mutable reference to the inner BudgetImpl.
+    ///
+    /// # Safety contract
+    /// Caller must not hold any other reference (shared or mutable) to the
+    /// same BudgetImpl. This is guaranteed by the single-threaded,
+    /// non-reentrant usage pattern.
+    #[inline(always)]
+    pub(crate) fn inner_mut(&self) -> &mut BudgetImpl {
+        unsafe { &mut *self.0.get() }
+    }
+}
 
 #[allow(clippy::derivable_impls)]
 impl Default for Budget {
     fn default() -> Self {
         #[cfg(all(not(target_family = "wasm"), feature = "tracy"))]
         let _client = tracy_client::Client::start();
-        Self(Default::default())
+        Self(Rc::new(UnsafeCell::new(BudgetImpl::default())))
     }
 }
 
 impl Debug for Budget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{:?}", self.0.try_borrow().map_err(|_| std::fmt::Error)?)
+        writeln!(f, "{:?}", self.inner())
     }
 }
 
 impl Display for Budget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}", self.0.try_borrow().map_err(|_| std::fmt::Error)?)
+        writeln!(f, "{}", self.inner())
     }
 }
 
@@ -1266,7 +1345,7 @@ impl Budget {
         cpu_cost_params: ContractCostParams,
         mem_cost_params: ContractCostParams,
     ) -> Result<Self, HostError> {
-        Ok(Self(Rc::new(RefCell::new(BudgetImpl::try_from_configs(
+        Ok(Self(Rc::new(UnsafeCell::new(BudgetImpl::try_from_configs(
             cpu_limit,
             mem_limit,
             cpu_cost_params,
@@ -1290,14 +1369,6 @@ impl Budget {
         Ok(budget)
     }
 
-    // Helper function to avoid panics from multiple borrow_muts
-    fn with_mut_budget<T, F>(&self, f: F) -> Result<T, HostError>
-    where
-        F: FnOnce(RefMut<BudgetImpl>) -> Result<T, HostError>,
-    {
-        f(self.0.try_borrow_mut_or_err()?)
-    }
-
     /// Performs a bulk charge to the budget under the specified [`CostType`].
     /// The `iterations` is the batch size. The caller needs to ensure:
     /// 1. the batched charges have identical costs (having the same
@@ -1310,9 +1381,7 @@ impl Budget {
         iterations: u64,
         input: Option<u64>,
     ) -> Result<(), HostError> {
-        self.0
-            .try_borrow_mut_or_err()?
-            .charge(ty, iterations, input)
+        self.inner_mut().charge(ty, iterations, input)
     }
 
     /// Charges the budget under the specified [`CostType`]. The actual amount
@@ -1321,7 +1390,7 @@ impl Budget {
     /// Otherwise it is a linear model.  The caller needs to ensure the input
     /// passed is consistent with the inherent model underneath.
     pub fn charge(&self, ty: ContractCostType, input: Option<u64>) -> Result<(), HostError> {
-        self.0.try_borrow_mut_or_err()?.charge(ty, 1, input)
+        self.inner_mut().charge(ty, 1, input)
     }
 
     pub(crate) fn get_memory_cost(
@@ -1329,9 +1398,7 @@ impl Budget {
         ty: ContractCostType,
         input: Option<u64>,
     ) -> Result<u64, HostError> {
-        self.0
-            .try_borrow_mut_or_err()?
-            .get_memory_cost(ty, 1, input)
+        Ok(self.inner().get_memory_cost(ty, 1, input))
     }
 
     /// Runs a user provided closure in shadow mode -- all metering is done
@@ -1346,91 +1413,76 @@ impl Budget {
     where
         F: FnOnce() -> Result<T, HostError>,
     {
-        let mut prev = false;
+        let b = self.inner_mut();
+        let prev = b.is_in_shadow_mode;
+        b.is_in_shadow_mode = true;
+        let ok = b.cpu_insns.shadow_total_count <= b.cpu_insns.shadow_limit
+            && b.mem_bytes.shadow_total_count <= b.mem_bytes.shadow_limit;
 
-        if self
-            .with_mut_budget(|mut b| {
-                prev = b.is_in_shadow_mode;
-                b.is_in_shadow_mode = true;
-                b.cpu_insns.check_budget_limit(IsShadowMode(true))?;
-                b.mem_bytes.check_budget_limit(IsShadowMode(true))
-            })
-            .is_ok()
-        {
+        if ok {
             let _ = f();
         }
 
-        let _ = self.with_mut_budget(|mut b| {
-            b.is_in_shadow_mode = prev;
-            Ok(())
-        });
+        self.inner_mut().is_in_shadow_mode = prev;
     }
 
     pub(crate) fn is_in_shadow_mode(&self) -> Result<bool, HostError> {
-        Ok(self.0.try_borrow_or_err()?.is_in_shadow_mode)
+        Ok(self.inner().is_in_shadow_mode)
     }
 
     pub(crate) fn set_shadow_limits(&self, cpu: u64, mem: u64) -> Result<(), HostError> {
-        self.0.try_borrow_mut_or_err()?.cpu_insns.shadow_limit = cpu;
-        self.0.try_borrow_mut_or_err()?.mem_bytes.shadow_limit = mem;
+        let b = self.inner_mut();
+        b.cpu_insns.shadow_limit = cpu;
+        b.mem_bytes.shadow_limit = mem;
         Ok(())
     }
 
     pub(crate) fn ensure_shadow_cpu_limit_factor(&self, factor: u64) -> Result<(), HostError> {
-        let mut b = self.0.try_borrow_mut_or_err()?;
+        let b = self.inner_mut();
         b.cpu_insns.shadow_limit = b.cpu_insns.limit.saturating_mul(factor);
         Ok(())
     }
 
     pub(crate) fn ensure_shadow_mem_limit_factor(&self, factor: u64) -> Result<(), HostError> {
-        let mut b = self.0.try_borrow_mut_or_err()?;
+        let b = self.inner_mut();
         b.mem_bytes.shadow_limit = b.mem_bytes.limit.saturating_mul(factor);
         Ok(())
     }
 
     pub fn get_tracker(&self, ty: ContractCostType) -> Result<CostTracker, HostError> {
-        self.0
-            .try_borrow_or_err()?
-            .tracker
-            .cost_trackers
-            .get(ty as usize)
-            .map(|x| *x)
-            .ok_or_else(|| (ScErrorType::Budget, ScErrorCode::InternalError).into())
+        Ok(self.inner().tracker.cost_trackers[ty as usize])
     }
 
     pub fn get_time(&self, ty: ContractCostType) -> Result<u64, HostError> {
-        self.0.try_borrow_or_err()?.tracker.get_time(ty)
+        self.inner().tracker.get_time(ty)
     }
 
     pub fn track_time(&self, ty: ContractCostType, duration: u64) -> Result<(), HostError> {
-        self.0
-            .try_borrow_mut_or_err()?
-            .tracker
-            .track_time(ty, duration)
+        self.inner_mut().tracker.track_time(ty, duration)
     }
 
     pub fn get_cpu_insns_consumed(&self) -> Result<u64, HostError> {
-        Ok(self.0.try_borrow_or_err()?.cpu_insns.get_total_count())
+        Ok(self.inner().cpu_insns.get_total_count())
     }
 
     pub fn get_mem_bytes_consumed(&self) -> Result<u64, HostError> {
-        Ok(self.0.try_borrow_or_err()?.mem_bytes.get_total_count())
+        Ok(self.inner().mem_bytes.get_total_count())
     }
 
     pub fn get_cpu_insns_remaining(&self) -> Result<u64, HostError> {
-        Ok(self.0.try_borrow_or_err()?.cpu_insns.get_remaining())
+        Ok(self.inner().cpu_insns.get_remaining())
     }
 
     pub fn get_mem_bytes_remaining(&self) -> Result<u64, HostError> {
-        Ok(self.0.try_borrow_or_err()?.mem_bytes.get_remaining())
+        Ok(self.inner().mem_bytes.get_remaining())
     }
 
     pub(crate) fn get_wasmi_fuel_remaining(&self) -> Result<u64, HostError> {
-        self.0.try_borrow_mut_or_err()?.get_wasmi_fuel_remaining()
+        self.inner_mut().get_wasmi_fuel_remaining()
     }
 
     pub fn reset_default(&self) -> Result<(), HostError> {
-        *self.0.try_borrow_mut_or_err()? = BudgetImpl::default();
+        *self.inner_mut() = BudgetImpl::default();
         Ok(())
     }
 }
@@ -1478,19 +1530,19 @@ fn test_budget_initialization() -> Result<(), HostError> {
 
     let budget = Budget::try_from_configs(100, 100, cpu_cost_params, mem_cost_params)?;
     assert_eq!(
-        budget.0.try_borrow_or_err()?.cpu_insns.cost_models.len(),
+        budget.inner().cpu_insns.cost_models.len(),
         ContractCostType::variants().len()
     );
     assert_eq!(
-        budget.0.try_borrow_or_err()?.mem_bytes.cost_models.len(),
+        budget.inner().mem_bytes.cost_models.len(),
         ContractCostType::variants().len()
     );
     assert_eq!(
-        budget.0.try_borrow_or_err()?.tracker.cost_trackers.len(),
+        budget.inner().tracker.cost_trackers.len(),
         ContractCostType::variants().len()
     );
     assert_eq!(
-        budget.0.try_borrow_or_err()?.tracker.time_tracker.len(),
+        budget.inner().tracker.time_tracker.len(),
         ContractCostType::variants().len()
     );
 

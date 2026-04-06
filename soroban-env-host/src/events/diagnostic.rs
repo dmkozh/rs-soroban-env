@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
+    budget::AsBudget,
     events::{
         internal::{InternalDiagnosticArg, InternalDiagnosticEvent},
         InternalEvent, InternalEventsBuffer,
@@ -36,7 +37,7 @@ impl Host {
                     topics,
                     args,
                 },
-                self,
+                self.as_budget(),
             )?;
             self.with_events_mut(|events| events.record(InternalEvent::Diagnostic(de), self))
         });
@@ -47,14 +48,14 @@ impl Host {
         self.with_debug_mode(|| {
             let calling_contract = self.get_current_contract_id_opt_internal()?;
             let log_sym = SymbolSmall::try_from_str("log")?;
-            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(1, self)?;
+            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(1, self.as_budget())?;
             let topics = vec![InternalDiagnosticArg::HostVal(log_sym.to_val())];
             let msg = ScVal::String(ScString::from(StringM::try_from(
                 self.metered_slice_to_vec(msg.as_bytes())?,
             )?));
             let args: Vec<_> = std::iter::once(InternalDiagnosticArg::XdrVal(msg))
                 .chain(args.iter().map(|rv| InternalDiagnosticArg::HostVal(*rv)))
-                .metered_collect(self)?;
+                .metered_collect(self.as_budget())?;
             self.record_diagnostic_event(calling_contract, topics, args)
         })
     }
@@ -73,7 +74,7 @@ impl Host {
             }
             let error_sym = SymbolSmall::try_from_str("error")?;
             let contract_id = self.get_current_contract_id_opt_internal()?;
-            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(2, self)?;
+            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(2, self.as_budget())?;
             let topics = vec![
                 InternalDiagnosticArg::HostVal(error_sym.to_val()),
                 InternalDiagnosticArg::HostVal(error.to_val()),
@@ -83,7 +84,7 @@ impl Host {
             )?));
             let args: Vec<_> = std::iter::once(InternalDiagnosticArg::XdrVal(msg))
                 .chain(args.iter().map(|rv| InternalDiagnosticArg::HostVal(*rv)))
-                .metered_collect(self)?;
+                .metered_collect(self.as_budget())?;
 
             // We do the event-recording ourselves here rather than calling
             // self.record_system_debug_contract_event because we can/should
@@ -95,7 +96,7 @@ impl Host {
                     topics,
                     args,
                 },
-                self,
+                self.as_budget(),
             )?;
             events.record(InternalEvent::Diagnostic(ce), self)
         })
@@ -113,7 +114,7 @@ impl Host {
     ) {
         self.with_debug_mode(|| {
             let calling_contract = self.get_current_contract_id_opt_internal()?;
-            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(3, self)?;
+            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(3, self.as_budget())?;
             let topics = vec![
                 InternalDiagnosticArg::HostVal(SymbolSmall::try_from_str("fn_call")?.into()),
                 InternalDiagnosticArg::XdrVal(ScVal::Bytes(ScBytes::try_from(
@@ -124,7 +125,7 @@ impl Host {
             let args = args
                 .iter()
                 .map(|rv| InternalDiagnosticArg::HostVal(*rv))
-                .metered_collect(self)?;
+                .metered_collect(self.as_budget())?;
             self.record_diagnostic_event(calling_contract, topics, args)
         })
     }
@@ -133,14 +134,14 @@ impl Host {
     // data = [return_val]
     pub(crate) fn fn_return_diagnostics(&self, contract_id: &ContractId, func: &Symbol, res: &Val) {
         self.with_debug_mode(|| {
-            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(2, self)?;
+            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(2, self.as_budget())?;
             let topics = vec![
                 InternalDiagnosticArg::HostVal(SymbolSmall::try_from_str("fn_return")?.into()),
                 InternalDiagnosticArg::HostVal(func.into()),
             ];
-            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(1, self)?;
+            Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(1, self.as_budget())?;
             let args = vec![InternalDiagnosticArg::HostVal(*res)];
-            self.record_diagnostic_event(Some(contract_id.metered_clone(self)?), topics, args)
+            self.record_diagnostic_event(Some(contract_id.metered_clone(self.as_budget())?), topics, args)
         })
     }
 }

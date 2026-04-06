@@ -1,5 +1,5 @@
 use crate::{
-    budget::Budget,
+    budget::{AsBudget, Budget},
     crypto::sha256_hash_from_bytes_raw,
     xdr::{ContractCostType, Limited, ReadXdr, ScBytes, ScErrorCode, ScErrorType, WriteXdr},
     BytesObject, Host, HostError, DEFAULT_XDR_RW_LIMITS,
@@ -34,7 +34,7 @@ impl Host {
         let _span = tracy_span!("hash xdr");
         let mut buf = vec![];
         metered_write_xdr(self.budget_ref(), obj, &mut buf)?;
-        sha256_hash_from_bytes_raw(&buf, self)
+        sha256_hash_from_bytes_raw(&buf, self.as_budget())
     }
 
     pub fn metered_from_xdr<T: ReadXdr>(&self, bytes: &[u8]) -> Result<T, HostError> {

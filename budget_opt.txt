@@ -1,0 +1,6 @@
+Refactor the hot Budget path first while preserving charge totals. In budget.rs, split normal-mode and shadow-mode charging so the common path stops rechecking shadow state several times and becomes a straight-line fast path.
+Add an internal grouped-charge path around Budget::with_mut_budget in budget.rs so hot helpers can perform several charges while holding one RefCell borrow instead of reacquiring it for every tiny charge.
+Trim per-charge arithmetic overhead in model.rs and dimension.rs, especially for constant-cost and zero-linear-term cases. The goal is to make constant charges approach a counter increment plus limit check.
+Separate diagnostic tracking cost from enforcement cost. BudgetTracker in budget.rs is valuable for tests and calibration, but it should not stay on the hottest production path unchanged if the baseline shows it dominates charge cost.
+Rework recursive depth-limited operations so compare and deep clone reuse one budget context or guard rather than cloning Budget handles and reborrowing on every recursive checkpoint. The relevant paths are in limits.rs, comparison.rs, and metered_clone.rs.
+Once grouped charging exists, update the common metered helpers to use it. The first targets should be MeteredClone bulk paths in metered_clone.rs, then container access and rebuild paths in metered_vector.rs and metered_map.rs.

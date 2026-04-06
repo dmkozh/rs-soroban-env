@@ -1,4 +1,5 @@
 use crate::{
+    budget::AsBudget,
     crypto::{
         metered_scalar::MeteredScalar,
         poseidon::{poseidon2_params::Poseidon2Params, utils, INVALID_INPUT, VEC_OOB},
@@ -30,7 +31,7 @@ impl<F: MeteredScalar> Poseidon2<F> {
             ));
         }
 
-        let mut current_state = input.metered_clone(host)?;
+        let mut current_state = input.metered_clone(host.as_budget())?;
 
         // Linear layer at beginning
         self.matmul_external(host, &mut current_state)?;
@@ -189,7 +190,7 @@ impl<F: MeteredScalar> Poseidon2<F> {
 
                 // Applying second cheap matrix for t > 4
                 let t4 = t / 4;
-                Vec::<F>::charge_bulk_init_cpy(4, host)?;
+                Vec::<F>::charge_bulk_init_cpy(4, host.as_budget())?;
                 let mut stored = [F::zero(); 4];
                 for l in 0..4 {
                     // input length is greater than 4 (min. 8), indexing is safe

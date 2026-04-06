@@ -580,12 +580,12 @@ impl AuthStackFrame {
             AuthStackFrame::Contract(contract_frame) => {
                 Ok(AuthorizedFunction::ContractFn(ContractFunction {
                     contract_address: contract_frame.contract_address,
-                    function_name: contract_frame.function_name.metered_clone(host)?,
+                    function_name: contract_frame.function_name.metered_clone(host.as_budget())?,
                     args,
                 }))
             }
             AuthStackFrame::CreateContractHostFn(args) => Ok(
-                AuthorizedFunction::CreateContractHostFn(args.metered_clone(host)?),
+                AuthorizedFunction::CreateContractHostFn(args.metered_clone(host.as_budget())?),
             ),
         }
     }
@@ -628,7 +628,7 @@ impl AuthorizedFunction {
             }
             AuthorizedFunction::CreateContractHostFn(create_contract_args) => {
                 Ok(SorobanAuthorizedFunction::CreateContractV2HostFn(
-                    create_contract_args.metered_clone(host)?,
+                    create_contract_args.metered_clone(host.as_budget())?,
                 ))
             }
         }
@@ -645,7 +645,7 @@ impl AuthorizedInvocation {
         let sub_invocations = sub_invocations_xdr
             .into_iter()
             .map(|a| AuthorizedInvocation::from_xdr(host, a))
-            .metered_collect::<Result<Vec<_>, _>>(host)??;
+            .metered_collect::<Result<Vec<_>, _>>(host.as_budget())??;
         Ok(Self {
             function: AuthorizedFunction::from_xdr(host, xdr_invocation.function)?,
             sub_invocations,
@@ -688,7 +688,7 @@ impl AuthorizedInvocation {
                 .iter()
                 .filter(|i| i.is_exhausted || !exhausted_sub_invocations_only)
                 .map(|i| i.to_xdr(host, exhausted_sub_invocations_only))
-                .metered_collect::<Result<Vec<xdr::SorobanAuthorizedInvocation>, HostError>>(host)??
+                .metered_collect::<Result<Vec<xdr::SorobanAuthorizedInvocation>, HostError>>(host.as_budget())??
                 .try_into()?,
         })
     }
@@ -775,7 +775,7 @@ impl AuthorizationManager {
     ) -> Result<Self, HostError> {
         let mut trackers = Vec::<RefCell<AccountAuthorizationTracker>>::with_metered_capacity(
             auth_entries.len(),
-            host,
+            host.as_budget(),
         )?;
         for auth_entry in auth_entries {
             trackers.push(RefCell::new(
@@ -860,7 +860,7 @@ impl AuthorizationManager {
         let mut trackers = self.try_borrow_invoker_contract_trackers_mut(host)?;
         Vec::<InvokerContractAuthorizationTracker>::charge_bulk_init_cpy(
             auth_entries.len() as u64,
-            host,
+            host.as_budget(),
         )?;
         trackers.reserve(auth_entries.len());
         for e in auth_entries {
@@ -1173,7 +1173,7 @@ impl AuthorizationManager {
                 let len = self.try_borrow_account_trackers(host)?.len();
                 let mut snapshots =
                     Vec::<Option<AccountAuthorizationTrackerSnapshot>>::with_metered_capacity(
-                        len, host,
+                        len, host.as_budget(),
                     )?;
                 for t in self.try_borrow_account_trackers(host)?.iter() {
                     let sp = if let Ok(tracker) = t.try_borrow() {
@@ -1200,7 +1200,7 @@ impl AuthorizationManager {
             .try_borrow_invoker_contract_trackers(host)?
             .iter()
             .map(|t| t.invocation_tracker.snapshot(host.as_budget()))
-            .metered_collect::<Result<Vec<AuthorizedInvocationSnapshot>, HostError>>(host)??;
+            .metered_collect::<Result<Vec<AuthorizedInvocationSnapshot>, HostError>>(host.as_budget())??;
         #[cfg(any(test, feature = "recording_mode"))]
         let tracker_by_address_handle = match &self.mode {
             AuthorizationMode::Enforcing => None,
@@ -1327,7 +1327,7 @@ impl AuthorizationManager {
         host: &Host,
         args: CreateContractArgsV2,
     ) -> Result<(), HostError> {
-        Vec::<CreateContractArgsV2>::charge_bulk_init_cpy(1, host)?;
+        Vec::<CreateContractArgsV2>::charge_bulk_init_cpy(1, host.as_budget())?;
         self.try_borrow_call_stack_mut(host)?
             .push(AuthStackFrame::CreateContractHostFn(args));
         self.push_tracker_frame(host)
@@ -1345,7 +1345,7 @@ impl AuthorizationManager {
         let _span = tracy_span!("push auth frame");
         let (contract_id, function_name) = match frame {
             Frame::ContractVM { vm, fn_name, .. } => {
-                (vm.contract_id.metered_clone(host)?, *fn_name)
+                (vm.contract_id.metered_clone(host.as_budget())?, *fn_name)
             }
             // Skip the top-level host function stack frames as they don't
             // contain all the necessary information.
@@ -1353,12 +1353,12 @@ impl AuthorizationManager {
             // `push_create_contract_host_fn_frame`) functions instead to push
             // the frame with the required info.
             Frame::HostFunction(_) => return self.snapshot(host),
-            Frame::StellarAssetContract(id, fn_name, ..) => (id.metered_clone(host)?, *fn_name),
+            Frame::StellarAssetContract(id, fn_name, ..) => (id.metered_clone(host.as_budget())?, *fn_name),
             #[cfg(any(test, feature = "testutils"))]
-            Frame::TestContract(tc) => (tc.id.metered_clone(host)?, tc.func),
+            Frame::TestContract(tc) => (tc.id.metered_clone(host.as_budget())?, tc.func),
         };
         let contract_address = host.add_host_object(ScAddress::Contract(contract_id))?;
-        Vec::<ContractInvocation>::charge_bulk_init_cpy(1, host)?;
+        Vec::<ContractInvocation>::charge_bulk_init_cpy(1, host.as_budget())?;
         self.try_borrow_call_stack_mut(host)?
             .push(AuthStackFrame::Contract(ContractInvocation {
                 contract_address,
@@ -1514,7 +1514,7 @@ impl AuthorizationManager {
                                 .unwrap(),
                         )
                     })
-                    .metered_collect(host)
+                    .metered_collect(host.as_budget())
             })
             .unwrap()
     }
@@ -1966,7 +1966,7 @@ impl AccountAuthorizationTracker {
         host.as_budget().with_observable_shadow_mode(|| {
             Ok(RecordedAuthPayload {
                 address: if !self.is_transaction_source_account {
-                    Some(host.visit_obj(self.address, |a: &ScAddress| a.metered_clone(host))?)
+                    Some(host.visit_obj(self.address, |a: &ScAddress| a.metered_clone(host.as_budget()))?)
                 } else {
                     None
                 },
@@ -2064,7 +2064,7 @@ impl AccountAuthorizationTracker {
         })?;
         let payload_preimage =
             HashIdPreimage::SorobanAuthorization(HashIdPreimageSorobanAuthorization {
-                network_id: Hash(host.with_ledger_info(|li| li.network_id.metered_clone(host))?),
+                network_id: Hash(host.with_ledger_info(|li| li.network_id.metered_clone(host.as_budget()))?),
                 nonce,
                 signature_expiration_ledger: live_until_ledger,
                 invocation: self.root_invocation_to_xdr(host)?,
@@ -2154,7 +2154,7 @@ impl AccountAuthorizationTracker {
                 let instance = if let Some(entry) = entry {
                     match &entry.data {
                         LedgerEntryData::ContractData(e) => match &e.val {
-                            ScVal::ContractInstance(instance) => instance.metered_clone(host)?,
+                            ScVal::ContractInstance(instance) => instance.metered_clone(host.as_budget())?,
                             _ => {
                                 return Ok(());
                             }
@@ -2285,8 +2285,8 @@ impl Host {
         let nonce_key_scval = ScVal::LedgerKeyNonce(ScNonceKey { nonce });
         let sc_address = self.scaddress_from_address(address)?;
         let nonce_key = self.storage_key_for_address(
-            sc_address.metered_clone(self)?,
-            nonce_key_scval.metered_clone(self)?,
+            sc_address.metered_clone(self.as_budget())?,
+            nonce_key_scval.metered_clone(self.as_budget())?,
             xdr::ContractDataDurability::Temporary,
         )?;
         let live_until_ledger = live_until_ledger
@@ -2326,7 +2326,7 @@ impl Host {
             };
             storage.put(
                 &nonce_key,
-                &Rc::metered_new(entry, self)?,
+                &Rc::metered_new(entry, self.as_budget())?,
                 Some(live_until_ledger),
                 self,
                 None,
