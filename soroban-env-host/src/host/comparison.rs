@@ -49,9 +49,7 @@ impl Compare<HostObject> for Host {
     fn compare(&self, a: &HostObject, b: &HostObject) -> Result<Ordering, Self::Error> {
         use HostObject::*;
         let _span = tracy_span!("Compare<HostObject>");
-        // This is the depth limit checkpoint for `Val` comparison.
-        self.budget_ref().with_limited_depth(|| {
-            match (a, b) {
+        match (a, b) {
                 (U64(a), U64(b)) => self.as_budget().compare(a, b),
                 (I64(a), I64(b)) => self.as_budget().compare(a, b),
                 (TimePoint(a), TimePoint(b)) => self.as_budget().compare(a, b),
@@ -60,8 +58,9 @@ impl Compare<HostObject> for Host {
                 (I128(a), I128(b)) => self.as_budget().compare(a, b),
                 (U256(a), U256(b)) => self.as_budget().compare(a, b),
                 (I256(a), I256(b)) => self.as_budget().compare(a, b),
-                (Vec(a), Vec(b)) => self.compare(a, b),
-                (Map(a), Map(b)) => self.compare(a, b),
+                // Only Vec and Map can recurse — depth limit only here.
+                (Vec(a), Vec(b)) => self.budget_ref().with_limited_depth(|| self.compare(a, b)),
+                (Map(a), Map(b)) => self.budget_ref().with_limited_depth(|| self.compare(a, b)),
                 (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
                 (String(a), String(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
                 (Symbol(a), Symbol(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
@@ -91,7 +90,6 @@ impl Compare<HostObject> for Host {
                     Ok(a.cmp(&b))
                 }
             }
-        })
     }
 }
 
@@ -295,10 +293,15 @@ impl Compare<ScVal> for Budget {
 
     fn compare(&self, a: &ScVal, b: &ScVal) -> Result<Ordering, Self::Error> {
         use ScVal::*;
-        // This is the depth limit checkpoint for `ScVal` comparison.
-        self.with_limited_depth(|| match (a, b) {
-            (Vec(Some(a)), Vec(Some(b))) => self.compare(a, b),
-            (Map(Some(a)), Map(Some(b))) => self.compare(a, b),
+        match (a, b) {
+            // Only Vec and Map can recurse into more ScVal, so only they
+            // need the depth limit checkpoint.
+            (Vec(Some(a)), Vec(Some(b))) => {
+                self.with_limited_depth(|| self.compare(a, b))
+            }
+            (Map(Some(a)), Map(Some(b))) => {
+                self.with_limited_depth(|| self.compare(a, b))
+            }
 
             (Vec(None), _) | (_, Vec(None)) | (Map(None), _) | (_, Map(None)) => {
                 Err((ScErrorType::Value, ScErrorCode::InvalidInput).into())
@@ -363,7 +366,7 @@ impl Compare<ScVal> for Budget {
             | (Address(_), _)
             | (LedgerKeyContractInstance, _)
             | (LedgerKeyNonce(_), _) => Ok(a.discriminant().cmp(&b.discriminant())),
-        })
+        }
     }
 }
 

@@ -441,40 +441,28 @@ impl MeteredClone for ScVal {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        // This is the depth limit checkpoint for `ScVal` cloning.
-        let budget = budget.as_budget();
-        budget.with_limited_depth(|| {
             match self {
-                ScVal::Vec(Some(v)) => ScVec::charge_for_substructure(v, budget),
-                ScVal::Map(Some(m)) => ScMap::charge_for_substructure(m, budget),
+            // Only Vec and Map can recurse into more ScVal, so only they
+            // need the depth limit checkpoint.
+            ScVal::Vec(Some(v)) => budget.with_limited_depth(|| {
+                ScVec::charge_for_substructure(v, budget)
+            }),
+            ScVal::Map(Some(m)) => budget.with_limited_depth(|| {
+                ScMap::charge_for_substructure(m, budget)
+            }),
                 ScVal::Vec(None) | ScVal::Map(None) => {
                     Err((ScErrorType::Value, ScErrorCode::InvalidInput).into())
                 }
+            // Non-recursive substructure: no depth limit needed.
                 ScVal::Bytes(b) => BytesM::charge_for_substructure(b, budget),
                 ScVal::String(s) => StringM::charge_for_substructure(s, budget),
                 ScVal::Symbol(s) => StringM::charge_for_substructure(s, budget),
                 ScVal::ContractInstance(i) => {
                     ScContractInstance::charge_for_substructure(i, budget)
                 }
-                // Everything else was handled by the memcpy above.
-                ScVal::U64(_)
-                | ScVal::I64(_)
-                | ScVal::U128(_)
-                | ScVal::I128(_)
-                | ScVal::Address(_)
-                | ScVal::U32(_)
-                | ScVal::I32(_)
-                | ScVal::Error(_)
-                | ScVal::Bool(_)
-                | ScVal::Void
-                | ScVal::Timepoint(_)
-                | ScVal::Duration(_)
-                | ScVal::U256(_)
-                | ScVal::I256(_)
-                | ScVal::LedgerKeyContractInstance
-                | ScVal::LedgerKeyNonce(_) => Ok(()),
+            // Everything else is shallow — no substructure to charge.
+            _ => Ok(()),
             }
-        })
     }
 }
 
