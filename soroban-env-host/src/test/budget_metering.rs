@@ -570,7 +570,6 @@ fn make_production_budget() -> Budget {
 }
 
 #[test]
-#[ignore]
 fn bench_budget_charge_constant() {
     let budget = make_unlimited_budget();
     // Warm up
@@ -597,7 +596,6 @@ fn bench_budget_charge_constant() {
 }
 
 #[test]
-#[ignore]
 fn bench_budget_charge_linear() {
     let budget = make_unlimited_budget();
     for _ in 0..10_000 {
@@ -617,7 +615,6 @@ fn bench_budget_charge_linear() {
 }
 
 #[test]
-#[ignore]
 fn bench_metered_clone_val() {
     let budget = make_unlimited_budget();
     let val = Val::from_void();
@@ -638,7 +635,6 @@ fn bench_metered_clone_val() {
 }
 
 #[test]
-#[ignore]
 fn bench_budget_bulk_charge() {
     let budget = make_unlimited_budget();
     for _ in 0..10_000 {
@@ -664,7 +660,6 @@ fn bench_budget_bulk_charge() {
 }
 
 #[test]
-#[ignore]
 fn bench_budget_charge_production() {
     let budget = make_production_budget();
     for _ in 0..10_000 {
@@ -690,7 +685,6 @@ fn bench_budget_charge_production() {
 }
 
 #[test]
-#[ignore]
 fn bench_budget_charge_linear_production() {
     let budget = make_production_budget();
     for _ in 0..10_000 {
@@ -705,6 +699,108 @@ fn bench_budget_charge_linear_production() {
     let elapsed = start.elapsed();
     eprintln!(
         "budget.charge(MemCpy, Some(8)) [production]: {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+use crate::Compare;
+use soroban_env_common::xdr::{ScSymbol, ScVec};
+
+fn make_test_scval_map(n_entries: usize) -> ScVal {
+    let entries: Vec<ScMapEntry> = (0..n_entries)
+        .map(|i| ScMapEntry {
+            key: ScVal::Symbol(ScSymbol(format!("key_{i:03}").try_into().unwrap())),
+            val: ScVal::U64(i as u64),
+        })
+        .collect();
+    ScVal::Map(Some(ScMap(entries.try_into().unwrap())))
+}
+
+fn make_test_scval_vec(n_entries: usize) -> ScVal {
+    let entries: Vec<ScVal> = (0..n_entries)
+        .map(|i| ScVal::U64(i as u64))
+        .collect();
+    ScVal::Vec(Some(ScVec(entries.try_into().unwrap())))
+}
+
+#[test]
+fn bench_metered_clone_scval_map() {
+    let budget = make_unlimited_budget();
+    let val = make_test_scval_map(10);
+    for _ in 0..1_000 {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+
+    let iterations = 200_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "ScVal::Map(10 entries)::metered_clone: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_metered_compare_scval_map() {
+    let budget = make_unlimited_budget();
+    let val_a = make_test_scval_map(10);
+    let val_b = make_test_scval_map(10);
+    for _ in 0..1_000 {
+        std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
+    }
+
+    let iterations = 500_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "ScVal::Map(10 entries)::compare: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_metered_clone_scval_vec_u64() {
+    let budget = make_unlimited_budget();
+    let val = make_test_scval_vec(10);
+    for _ in 0..1_000 {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+
+    let iterations = 500_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "ScVal::Vec(10 x U64)::metered_clone: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_metered_compare_scval_vec_u64() {
+    let budget = make_unlimited_budget();
+    let val_a = make_test_scval_vec(10);
+    let val_b = make_test_scval_vec(10);
+    for _ in 0..1_000 {
+        std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
+    }
+
+    let iterations = 500_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "ScVal::Vec(10 x U64)::compare: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
         elapsed.as_nanos() as f64 / iterations as f64
     );
 }
