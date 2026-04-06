@@ -21,7 +21,7 @@ use ark_bn254::Fr as BnScalar;
 use std::{cell::RefCell, mem, rc::Rc};
 
 use crate::{
-    budget::{AsBudget, DepthLimiter},
+    budget::AsBudget,
     builtin_contracts::base_types::Address,
     host_object::MuxedScAddress,
     storage::AccessType,
@@ -442,8 +442,8 @@ impl MeteredClone for ScVal {
 
     fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
         // This is the depth limit checkpoint for `ScVal` cloning.
-        let mut budget_clone = budget.as_budget().clone();
-        budget_clone.with_limited_depth(|_| {
+        let b = budget.as_budget().clone();
+        b.with_limited_depth(|| {
             match self {
                 ScVal::Vec(Some(v)) => ScVec::charge_for_substructure(v, budget),
                 ScVal::Map(Some(m)) => ScMap::charge_for_substructure(m, budget),

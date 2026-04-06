@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::host_object::{MemHostObjectType, MuxedScAddress};
 use crate::{
-    budget::{AsBudget, DepthLimiter},
+    budget::AsBudget,
     crypto::metered_scalar::MeteredScalar,
     err,
     host::metered_clone::{
@@ -409,7 +409,7 @@ impl Host {
         // Metering of val conversion happens only if an object is encountered,
         // and is done inside `from_host_obj`.
         let _span = tracy_span!("Val to ScVal");
-        let scval = self.budget_cloned().with_limited_depth(|_| {
+        let scval = self.budget_ref().with_limited_depth(|| {
             ScVal::try_from_val(self, &val)
                 .map_err(|cerr| self.error(cerr, "failed to convert host value to ScVal", &[val]))
         })?;
@@ -422,7 +422,7 @@ impl Host {
     pub(crate) fn from_host_val_for_storage(&self, val: Val) -> Result<ScVal, HostError> {
         let _span = tracy_span!("Val to ScVal");
         *self.try_borrow_storage_key_conversion_active_mut()? = true;
-        let scval_res = self.budget_cloned().with_limited_depth(|_| {
+        let scval_res = self.budget_ref().with_limited_depth(|| {
             ScVal::try_from_val(self, &val)
                 .map_err(|cerr| self.error(cerr, "failed to convert host value to ScVal", &[val]))
         });
@@ -437,7 +437,7 @@ impl Host {
         // This is the depth limit checkpoint for `ScVal`->`Val` conversion.
         // Metering of val conversion happens only if an object is encountered,
         // and is done inside `to_host_obj`.
-        self.budget_cloned().with_limited_depth(|_| {
+        self.budget_ref().with_limited_depth(|| {
             v.try_into_val(self)
                 .map_err(|cerr| self.error(cerr, "failed to convert ScVal to host value", &[]))
         })

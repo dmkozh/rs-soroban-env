@@ -47,6 +47,7 @@ pub(crate) const DEFAULT_MEM_BYTES_LIMIT: u64 = 40 * 1024 * 1024; // 40MB
 /// `DepthLimiter` is a trait designed for managing the depth of recursive operations.
 /// It provides a mechanism to limit recursion depth, and defines the behavior upon
 /// entering and leaving a recursion level.
+#[allow(dead_code)]
 pub(crate) trait DepthLimiter {
     /// Defines the behavior for entering a new recursion level.
     /// An `ExceededLimit` is returned if the new level exceeds the depth limit.
@@ -109,5 +110,20 @@ impl DepthLimiter for Budget {
 
     fn leave(&mut self) -> Result<(), HostError> {
         self.inner_mut().leave()
+    }
+}
+
+impl Budget {
+    /// Depth-limited execution without requiring `&mut self` or cloning.
+    /// Uses the interior mutability of Budget (UnsafeCell) to avoid
+    /// the Rc clone overhead of `budget_cloned().with_limited_depth(...)`.
+    pub(crate) fn with_limited_depth<T, F>(&self, f: F) -> Result<T, HostError>
+    where
+        F: FnOnce() -> Result<T, HostError>,
+    {
+        self.inner_mut().enter()?;
+        let res = f();
+        self.inner_mut().leave()?;
+        res
     }
 }

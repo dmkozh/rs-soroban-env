@@ -1,7 +1,7 @@
 use core::cmp::{min, Ordering};
 
 use crate::{
-    budget::{AsBudget, Budget, DepthLimiter},
+    budget::{AsBudget, Budget},
     host_object::{HostObject, MuxedScAddress},
     storage::Storage,
     xdr::{
@@ -50,7 +50,7 @@ impl Compare<HostObject> for Host {
         use HostObject::*;
         let _span = tracy_span!("Compare<HostObject>");
         // This is the depth limit checkpoint for `Val` comparison.
-        self.budget_cloned().with_limited_depth(|_| {
+        self.budget_ref().with_limited_depth(|| {
             match (a, b) {
                 (U64(a), U64(b)) => self.as_budget().compare(a, b),
                 (I64(a), I64(b)) => self.as_budget().compare(a, b),
@@ -296,7 +296,7 @@ impl Compare<ScVal> for Budget {
     fn compare(&self, a: &ScVal, b: &ScVal) -> Result<Ordering, Self::Error> {
         use ScVal::*;
         // This is the depth limit checkpoint for `ScVal` comparison.
-        self.clone().with_limited_depth(|_| match (a, b) {
+        self.with_limited_depth(|| match (a, b) {
             (Vec(Some(a)), Vec(Some(b))) => self.compare(a, b),
             (Map(Some(a)), Map(Some(b))) => self.compare(a, b),
 

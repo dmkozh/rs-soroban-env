@@ -4,6 +4,7 @@ mod model;
 mod util;
 mod wasmi_helper;
 
+#[allow(unused_imports)]
 pub(crate) use limits::DepthLimiter;
 pub use limits::{DEFAULT_HOST_DEPTH_LIMIT, DEFAULT_XDR_RW_LIMITS};
 pub use model::{MeteredCostComponent, ScaledU64};
