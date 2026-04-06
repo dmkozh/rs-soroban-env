@@ -196,8 +196,8 @@ impl BudgetTracker {
 
 #[derive(Clone)]
 pub(crate) struct BudgetImpl {
-    cpu_insns: BudgetDimension,
-    mem_bytes: BudgetDimension,
+    pub(crate) cpu_insns: BudgetDimension,
+    pub(crate) mem_bytes: BudgetDimension,
     /// For the purpose of calibration and reporting; not used for budget-limiting nor does it affect consensus
     tracker: BudgetTracker,
     is_in_shadow_mode: bool,

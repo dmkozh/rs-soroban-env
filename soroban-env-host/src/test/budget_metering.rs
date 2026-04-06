@@ -552,3 +552,107 @@ fn total_amount_charged_from_random_inputs() -> Result<(), HostError> {
 
     Ok(())
 }
+
+// Wall-clock micro-benchmarks for budget charge overhead.
+// Run with: cargo test -p soroban-env-host --release bench_budget_ -- --nocapture --ignored
+
+fn make_unlimited_budget() -> Budget {
+    let budget = Budget::default();
+    budget.0.borrow_mut().cpu_insns.reset(u64::MAX);
+    budget.0.borrow_mut().mem_bytes.reset(u64::MAX);
+    budget
+}
+
+#[test]
+#[ignore]
+fn bench_budget_charge_constant() {
+    let budget = make_unlimited_budget();
+    // Warm up
+    for _ in 0..10_000 {
+        budget
+            .charge(ContractCostType::WasmInsnExec, None)
+            .unwrap();
+    }
+
+    let iterations = 10_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(
+            budget
+                .charge(ContractCostType::WasmInsnExec, None)
+                .unwrap(),
+        );
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.charge(WasmInsnExec, None): {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_budget_charge_linear() {
+    let budget = make_unlimited_budget();
+    for _ in 0..10_000 {
+        budget.charge(ContractCostType::MemCpy, Some(8)).unwrap();
+    }
+
+    let iterations = 10_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.charge(ContractCostType::MemCpy, Some(8)).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.charge(MemCpy, Some(8)): {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_metered_clone_val() {
+    let budget = make_unlimited_budget();
+    let val = Val::from_void();
+    for _ in 0..10_000 {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+
+    let iterations = 5_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(val.metered_clone(&budget).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "Val::metered_clone: {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_budget_bulk_charge() {
+    let budget = make_unlimited_budget();
+    for _ in 0..10_000 {
+        budget
+            .bulk_charge(ContractCostType::MemCpy, 10, Some(8))
+            .unwrap();
+    }
+
+    let iterations = 5_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(
+            budget
+                .bulk_charge(ContractCostType::MemCpy, 10, Some(8))
+                .unwrap(),
+        );
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.bulk_charge(MemCpy, 10, Some(8)): {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
