@@ -1,6 +1,5 @@
 use crate::{
     budget::{Budget, BudgetImpl},
-    host::error::TryBorrowOrErr,
     xdr::{Limits, ScErrorCode, ScErrorType},
     Error, HostError,
 };
@@ -105,10 +104,10 @@ impl DepthLimiter for BudgetImpl {
 
 impl DepthLimiter for Budget {
     fn enter(&mut self) -> Result<(), HostError> {
-        self.0.try_borrow_mut_or_err()?.enter()
+        self.inner_mut().enter()
     }
 
     fn leave(&mut self) -> Result<(), HostError> {
-        self.0.try_borrow_mut_or_err()?.leave()
+        self.inner_mut().leave()
     }
 }

@@ -558,14 +558,14 @@ fn total_amount_charged_from_random_inputs() -> Result<(), HostError> {
 
 fn make_unlimited_budget() -> Budget {
     let budget = Budget::default();
-    budget.0.borrow_mut().cpu_insns.reset(u64::MAX);
-    budget.0.borrow_mut().mem_bytes.reset(u64::MAX);
+    budget.inner_mut().cpu_insns.reset(u64::MAX);
+    budget.inner_mut().mem_bytes.reset(u64::MAX);
     budget
 }
 
 fn make_production_budget() -> Budget {
     let budget = make_unlimited_budget();
-    budget.0.borrow_mut().tracking_enabled = false;
+    budget.inner_mut().tracking_enabled = false;
     budget
 }
 
