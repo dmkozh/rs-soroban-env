@@ -198,8 +198,13 @@ impl BudgetTracker {
 pub(crate) struct BudgetImpl {
     pub(crate) cpu_insns: BudgetDimension,
     pub(crate) mem_bytes: BudgetDimension,
-    /// For the purpose of calibration and reporting; not used for budget-limiting nor does it affect consensus
+    /// For the purpose of calibration and reporting; not used for budget-limiting nor does it affect consensus.
+    /// Only updated when `tracking_enabled` is true.
     tracker: BudgetTracker,
+    /// When true, per-CostType tracker updates are performed on every charge.
+    /// This is only needed for calibration, diagnostics, and tests — not for
+    /// consensus-critical budget enforcement.
+    pub(crate) tracking_enabled: bool,
     is_in_shadow_mode: bool,
     fuel_costs: wasmi::FuelCosts,
     depth_limit: u32,
@@ -217,6 +222,7 @@ impl BudgetImpl {
             cpu_insns: BudgetDimension::try_from_config(cpu_cost_params, cpu_limit)?,
             mem_bytes: BudgetDimension::try_from_config(mem_cost_params, mem_limit)?,
             tracker: BudgetTracker::default(),
+            tracking_enabled: false,
             is_in_shadow_mode: false,
             fuel_costs: load_calibrated_fuel_costs(),
             depth_limit: DEFAULT_HOST_DEPTH_LIMIT,
@@ -252,25 +258,25 @@ impl BudgetImpl {
         iterations: u64,
         input: Option<u64>,
     ) -> Result<(), HostError> {
-        let tracker = &mut self.tracker.cost_trackers[ty as usize];
-
-        // update tracker for reporting
-        self.tracker.meter_count = self.tracker.meter_count.saturating_add(1);
-        tracker.iterations = tracker.iterations.saturating_add(iterations);
-        match (&mut tracker.inputs, input) {
-            (None, None) => (),
-            (Some(t), Some(i)) => *t = t.saturating_add(i.saturating_mul(iterations)),
-            // internal logic error, a wrong cost type has been passed in
-            _ => return Err((ScErrorType::Budget, ScErrorCode::InternalError).into()),
-        };
-
         let cpu_charged = self.cpu_insns.charge(ty, iterations, input, IsCpu(true))?;
-        tracker.cpu = tracker.cpu.saturating_add(cpu_charged);
         self.cpu_insns.check_budget_limit(IsShadowMode(false))?;
 
         let mem_charged = self.mem_bytes.charge(ty, iterations, input, IsCpu(false))?;
-        tracker.mem = tracker.mem.saturating_add(mem_charged);
-        self.mem_bytes.check_budget_limit(IsShadowMode(false))
+        self.mem_bytes.check_budget_limit(IsShadowMode(false))?;
+
+        if self.tracking_enabled {
+            let tracker = &mut self.tracker.cost_trackers[ty as usize];
+            self.tracker.meter_count = self.tracker.meter_count.saturating_add(1);
+            tracker.iterations = tracker.iterations.saturating_add(iterations);
+            tracker.cpu = tracker.cpu.saturating_add(cpu_charged);
+            tracker.mem = tracker.mem.saturating_add(mem_charged);
+            match (&mut tracker.inputs, input) {
+                (None, None) => (),
+                (Some(t), Some(i)) => *t = t.saturating_add(i.saturating_mul(iterations)),
+                _ => return Err((ScErrorType::Budget, ScErrorCode::InternalError).into()),
+            };
+        }
+        Ok(())
     }
 
     /// Shadow-mode charge path. Skips tracker updates, uses shadow counters/limits.
@@ -314,6 +320,7 @@ impl Default for BudgetImpl {
             cpu_insns: BudgetDimension::default(),
             mem_bytes: BudgetDimension::default(),
             tracker: Default::default(),
+            tracking_enabled: true,
             is_in_shadow_mode: false,
             fuel_costs: load_calibrated_fuel_costs(),
             depth_limit: DEFAULT_HOST_DEPTH_LIMIT,

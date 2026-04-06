@@ -563,6 +563,12 @@ fn make_unlimited_budget() -> Budget {
     budget
 }
 
+fn make_production_budget() -> Budget {
+    let budget = make_unlimited_budget();
+    budget.0.borrow_mut().tracking_enabled = false;
+    budget
+}
+
 #[test]
 #[ignore]
 fn bench_budget_charge_constant() {
@@ -653,6 +659,52 @@ fn bench_budget_bulk_charge() {
     let elapsed = start.elapsed();
     eprintln!(
         "budget.bulk_charge(MemCpy, 10, Some(8)): {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_budget_charge_production() {
+    let budget = make_production_budget();
+    for _ in 0..10_000 {
+        budget
+            .charge(ContractCostType::WasmInsnExec, None)
+            .unwrap();
+    }
+
+    let iterations = 10_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(
+            budget
+                .charge(ContractCostType::WasmInsnExec, None)
+                .unwrap(),
+        );
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.charge(WasmInsnExec, None) [production]: {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_budget_charge_linear_production() {
+    let budget = make_production_budget();
+    for _ in 0..10_000 {
+        budget.charge(ContractCostType::MemCpy, Some(8)).unwrap();
+    }
+
+    let iterations = 10_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.charge(ContractCostType::MemCpy, Some(8)).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "budget.charge(MemCpy, Some(8)) [production]: {:.1} ns/call ({iterations} iters, {elapsed:.2?})",
         elapsed.as_nanos() as f64 / iterations as f64
     );
 }
