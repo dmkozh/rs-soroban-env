@@ -985,7 +985,7 @@ fn test_two_authorized_trees() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 3529262,
+                instructions: 3528912,
                 mem_bytes: 8469284,
                 disk_read_entries: 0,
                 memory_read_entries: 2,
@@ -1011,7 +1011,7 @@ fn test_two_authorized_trees() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1570789,
+                        instructions: 1570639,
                         mem_bytes: 3630648,
                         disk_read_entries: 0,
                         memory_read_entries: 1,
@@ -1037,7 +1037,7 @@ fn test_two_authorized_trees() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 362150,
+                                instructions: 362100,
                                 mem_bytes: 1207044,
                                 disk_read_entries: 0,
                                 memory_read_entries: 0,
@@ -1064,7 +1064,7 @@ fn test_two_authorized_trees() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 361856,
+                                instructions: 361806,
                                 mem_bytes: 1207044,
                                 disk_read_entries: 0,
                                 memory_read_entries: 0,
@@ -1093,7 +1093,7 @@ fn test_two_authorized_trees() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1572259,
+                        instructions: 1572109,
                         mem_bytes: 3630648,
                         disk_read_entries: 0,
                         memory_read_entries: 1,
@@ -1119,7 +1119,7 @@ fn test_two_authorized_trees() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 362738,
+                                instructions: 362688,
                                 mem_bytes: 1207044,
                                 disk_read_entries: 0,
                                 memory_read_entries: 0,
@@ -1146,7 +1146,7 @@ fn test_two_authorized_trees() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 362444,
+                                instructions: 362394,
                                 mem_bytes: 1207044,
                                 disk_read_entries: 0,
                                 memory_read_entries: 0,
@@ -2467,7 +2467,7 @@ fn test_require_auth_within_check_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 1418539,
+                instructions: 1418389,
                 mem_bytes: 3610660,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -2493,7 +2493,7 @@ fn test_require_auth_within_check_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1038786,
+                        instructions: 1038686,
                         mem_bytes: 2398134,
                         disk_read_entries: 0,
                         memory_read_entries: 2,
@@ -2519,7 +2519,7 @@ fn test_require_auth_within_check_auth() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 727456,
+                                instructions: 727406,
                                 mem_bytes: 1198761,
                                 disk_read_entries: 0,
                                 memory_read_entries: 1,

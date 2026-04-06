@@ -948,12 +948,12 @@ mod cap_54_55_56 {
 
     fn clobber_refined_cost_model(host: &Host, contract_id: ContractId) -> Result<(), HostError> {
         let contract_key = host.contract_instance_ledger_key(&contract_id)?;
-        let ContractExecutable::Wasm(wasm_hash) = host
-            .retrieve_contract_instance_from_storage(&contract_key)?
-            .executable
-        else {
-            panic!("expected Wasm executable");
-        };
+        let wasm_hash = host.with_contract_instance_from_storage(&contract_key, |instance| {
+            let ContractExecutable::Wasm(wasm_hash) = &instance.executable else {
+                panic!("expected Wasm executable");
+            };
+            Ok(wasm_hash.clone())
+        })?;
         let code_key = Rc::new(LedgerKey::ContractCode(xdr::LedgerKeyContractCode {
             hash: wasm_hash,
         }));
@@ -1875,7 +1875,7 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 886204,
+                            instructions: 886050,
                             mem_bytes: 3464111,
                             disk_read_entries: 0,
                             memory_read_entries: 2,
@@ -1901,7 +1901,7 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 615463,
+                                    instructions: 615363,
                                     mem_bytes: 2333844,
                                     disk_read_entries: 0,
                                     memory_read_entries: 2,
@@ -1927,7 +1927,7 @@ mod cap_58_constructor {
                                             ),
                                         ),
                                         resources: SubInvocationResources {
-                                            instructions: 348852,
+                                            instructions: 348802,
                                             mem_bytes: 1206620,
                                             disk_read_entries: 0,
                                             memory_read_entries: 0,
@@ -2033,8 +2033,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2390131,
-                            mem_bytes: 5937209,
+                            instructions: 2388893,
+                            mem_bytes: 5937046,
                             disk_read_entries: 0,
                             memory_read_entries: 3,
                             write_entries: 3,
@@ -2059,7 +2059,7 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 899189,
+                                    instructions: 899089,
                                     mem_bytes: 2380622,
                                     disk_read_entries: 0,
                                     memory_read_entries: 2,
@@ -2085,7 +2085,7 @@ mod cap_58_constructor {
                                             ),
                                         ),
                                         resources: SubInvocationResources {
-                                            instructions: 349375,
+                                            instructions: 349325,
                                             mem_bytes: 1206644,
                                             disk_read_entries: 0,
                                             memory_read_entries: 0,
@@ -2114,8 +2114,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 546555,
-                                    mem_bytes: 1173464,
+                                    instructions: 545521,
+                                    mem_bytes: 1173301,
                                     disk_read_entries: 0,
                                     memory_read_entries: 0,
                                     write_entries: 0,

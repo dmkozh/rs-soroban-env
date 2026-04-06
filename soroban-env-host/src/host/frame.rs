@@ -9,8 +9,8 @@ use crate::{
     storage::InstanceStorageMap,
     xdr::{
         ContractExecutable, ContractId, ContractIdPreimage, CreateContractArgsV2, Hash,
-        HostFunction, HostFunctionType, ScAddress, ScContractInstance, ScErrorCode, ScErrorType,
-        ScVal,
+        HostFunction, HostFunctionType, LedgerKey, ScAddress, ScContractInstance, ScErrorCode,
+        ScErrorType, ScVal,
     },
     AddressObject, Error, ErrorHandler, Host, HostError, Object, Symbol, SymbolStr, TryFromVal,
     TryIntoVal, Val, Vm, DEFAULT_HOST_DEPTH_LIMIT,
@@ -755,7 +755,9 @@ impl Host {
         args: Vec<Val>,
     ) -> Result<TestContractFrame, HostError> {
         let instance_key = self.contract_instance_ledger_key(&id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&instance_key)?;
+        let instance = self.with_contract_instance_from_storage(&instance_key, |instance| {
+            instance.metered_clone(self)
+        })?;
         Ok(TestContractFrame::new(id, func, args.to_vec(), instance))
     }
 
@@ -769,7 +771,9 @@ impl Host {
     ) -> Result<Val, HostError> {
         // Create key for storage
         let storage_key = self.contract_instance_ledger_key(id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&storage_key)?;
+        let instance = self.with_contract_instance_from_storage(&storage_key, |instance| {
+            instance.metered_clone(self)
+        })?;
         Vec::<Val>::charge_bulk_init_cpy(args.len() as u64, self.as_budget())?;
         let args_vec = args.to_vec();
         match &instance.executable {
@@ -918,13 +922,28 @@ impl Host {
             return self.get_ledger_protocol_version();
         }
         let storage_key = self.contract_instance_ledger_key(contract_id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&storage_key)?;
-        match &instance.executable {
-            ContractExecutable::Wasm(wasm_hash) => {
-                let vm = self.instantiate_vm(contract_id, wasm_hash)?;
+        let code_key = self.with_contract_instance_from_storage(&storage_key, |instance| {
+            match &instance.executable {
+                ContractExecutable::Wasm(wasm_hash) => {
+                    Ok(Some(self.contract_code_ledger_key(wasm_hash)?))
+                }
+                ContractExecutable::StellarAsset => Ok(None),
+            }
+        })?;
+        match code_key {
+            Some(code_key) => {
+                let LedgerKey::ContractCode(ref code) = code_key else {
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected ContractCode ledger key",
+                        &[],
+                    ));
+                };
+                let vm = self.instantiate_vm(contract_id, &code.hash)?;
                 Ok(vm.module.proto_version)
             }
-            ContractExecutable::StellarAsset => self.get_ledger_protocol_version(),
+            None => self.get_ledger_protocol_version(),
         }
     }
 
@@ -1230,9 +1249,11 @@ impl Host {
             ));
         };
         let instance_key = self.contract_instance_ledger_key(&contract_id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&instance_key)?;
+        let storage = self.with_contract_instance_from_storage(&instance_key, |instance| {
+            InstanceStorageMap::from_instance_xdr(instance, self)
+        })?;
 
-        ctx.storage = Some(InstanceStorageMap::from_instance_xdr(&instance, self)?);
+        ctx.storage = Some(storage);
         Ok(())
     }
 

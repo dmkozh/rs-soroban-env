@@ -542,13 +542,13 @@ fn excessive_logging() -> Result<(), HostError> {
         );
         expect![[r#"
             =================================================================
-            Cpu limit: 2000000; used: 217635
+            Cpu limit: 2000000; used: 217585
             Mem limit: 500000; used: 166300
             =================================================================
             CostType                           cpu_insns      mem_bytes      
             WasmInsnExec                       300            0              
             MemAlloc                           14840          66880          
-            MemCpy                             1593           0              
+            MemCpy                             1543           0              
             MemCmp                             225            0              
             DispatchHostFunction               310            0              
             VisitObject                        244            0              

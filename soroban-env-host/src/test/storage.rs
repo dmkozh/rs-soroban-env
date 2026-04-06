@@ -704,14 +704,14 @@ mod ttl_extension_v2_tests {
             .contract_instance_ledger_key(&contract_id_hash)
             .unwrap();
 
-        let code_hash = match &host
-            .retrieve_contract_instance_from_storage(&instance_key)
-            .unwrap()
-            .executable
-        {
-            crate::xdr::ContractExecutable::Wasm(hash) => hash.clone(),
-            _ => panic!("Expected Wasm executable"),
-        };
+        let code_hash = host
+            .with_contract_instance_from_storage(&instance_key, |instance| {
+                match &instance.executable {
+                    crate::xdr::ContractExecutable::Wasm(hash) => Ok(hash.clone()),
+                    _ => panic!("Expected Wasm executable"),
+                }
+            })
+            .unwrap();
         let code_key = host.contract_code_ledger_key(&code_hash).unwrap();
 
         let get_ttls = || {

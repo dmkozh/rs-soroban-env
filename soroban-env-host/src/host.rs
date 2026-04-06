@@ -3795,18 +3795,18 @@ impl VmCallerEnv for Host {
             }
             ScAddress::Contract(id) => {
                 let instance_key = self.contract_instance_ledger_key(&id)?;
-                self.try_borrow_storage_mut()?
-                    .with_ledger_entry(&instance_key, self, |opt| match opt {
-                        Some(entry) => {
-                            let instance =
-                                self.extract_contract_instance_from_ledger_entry(entry)?;
-                            Ok(Some(AddressExecutable::from_contract_executable_xdr(
-                                &self,
-                                &instance.executable,
-                            )?))
-                        }
-                        None => Ok(None),
-                    })?
+                if !self
+                    .try_borrow_storage_mut()?
+                    .has(&instance_key, &self, None)?
+                {
+                    return Ok(Val::VOID.into());
+                }
+                self.with_contract_instance_from_storage(&instance_key, |instance| {
+                    Ok(Some(AddressExecutable::from_contract_executable_xdr(
+                        &self,
+                        &instance.executable,
+                    )?))
+                })?
             }
             _ => {
                 return Err(self.err(
@@ -3957,31 +3957,29 @@ impl Host {
     ) -> Result<u32, HostError> {
         let contract_id = self.contract_id_from_address(contract)?;
         let key = self.contract_instance_ledger_key(&contract_id)?;
-        match self
-            .retrieve_contract_instance_from_storage(&key)?
-            .executable
-        {
-            ContractExecutable::Wasm(wasm_hash) => {
-                let key = self.contract_code_ledger_key(&wasm_hash)?;
-                let live_until = self
-                    .try_borrow_storage_mut()?
-                    .get_live_until(&key, self, None)?;
-                live_until.ok_or_else(|| {
-                    self.err(
+        let code_key =
+            self.with_contract_instance_from_storage(&key, |instance| {
+                match &instance.executable {
+                    ContractExecutable::Wasm(wasm_hash) => self.contract_code_ledger_key(wasm_hash),
+                    ContractExecutable::StellarAsset => Err(self.err(
                         ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "unexpected contract code without TTL for a contract",
-                        &[contract.into()],
-                    )
-                })
-            }
-            ContractExecutable::StellarAsset => Err(self.err(
+                        ScErrorCode::InvalidInput,
+                        "Stellar Asset Contracts don't have contract code",
+                        &[],
+                    )),
+                }
+            })?;
+        let live_until = self
+            .try_borrow_storage_mut()?
+            .get_live_until(&code_key, self, None)?;
+        live_until.ok_or_else(|| {
+            self.err(
                 ScErrorType::Storage,
-                ScErrorCode::InvalidInput,
-                "Stellar Asset Contracts don't have contract code",
-                &[],
-            )),
-        }
+                ScErrorCode::InternalError,
+                "unexpected contract code without TTL for a contract",
+                &[contract.into()],
+            )
+        })
     }
 
     /// Returns the ledger number until a current contract's data entry

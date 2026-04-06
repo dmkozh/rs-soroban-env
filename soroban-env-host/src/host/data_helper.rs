@@ -84,37 +84,34 @@ impl Host {
         }))
     }
 
-    pub(crate) fn extract_contract_instance_from_ledger_entry(
-        &self,
-        entry: &LedgerEntry,
-    ) -> Result<ScContractInstance, HostError> {
-        match &entry.data {
-            LedgerEntryData::ContractData(e) => match &e.val {
-                ScVal::ContractInstance(instance) => instance.metered_clone(self),
-                _ => Err(self.err(
-                    ScErrorType::Storage,
-                    ScErrorCode::InternalError,
-                    "ledger entry for contract instance does not contain contract instance",
-                    &[],
-                )),
-            },
-            _ => Err(self.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "expected ContractData ledger entry",
-                &[],
-            )),
-        }
-    }
-
     // Notes on metering: retrieving from storage covered. Rest are free.
-    pub(crate) fn retrieve_contract_instance_from_storage(
+    pub(crate) fn with_contract_instance_from_storage<F, U>(
         &self,
         key: &LedgerKey,
-    ) -> Result<ScContractInstance, HostError> {
+        f: F,
+    ) -> Result<U, HostError>
+    where
+        F: FnOnce(&ScContractInstance) -> Result<U, HostError>,
+    {
         self.try_borrow_storage_mut()?
             .with_ledger_entry(key, self, |opt| match opt {
-                Some(entry) => self.extract_contract_instance_from_ledger_entry(entry),
+                Some(entry) => match &entry.data {
+                    LedgerEntryData::ContractData(e) => match &e.val {
+                        ScVal::ContractInstance(instance) => f(instance),
+                        _ => Err(self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                            "ledger entry for contract instance does not contain contract instance",
+                            &[],
+                        )),
+                    },
+                    _ => Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected ContractData ledger entry",
+                        &[],
+                    )),
+                },
                 None => Err(self.storage_error_missing_value(key, None)),
             })
     }
@@ -247,16 +244,17 @@ impl Host {
         threshold: u32,
         extend_to: u32,
     ) -> Result<(), HostError> {
-        match self
-            .retrieve_contract_instance_from_storage(&instance_key)?
-            .executable
-        {
-            ContractExecutable::Wasm(wasm_hash) => {
-                let key = self.contract_code_ledger_key(&wasm_hash)?;
-                self.try_borrow_storage_mut()?
-                    .extend_ttl(self, &key, threshold, extend_to, None)?;
+        let code_key = self.with_contract_instance_from_storage(&instance_key, |instance| {
+            match &instance.executable {
+                ContractExecutable::Wasm(wasm_hash) => {
+                    Ok(Some(self.contract_code_ledger_key(wasm_hash)?))
+                }
+                ContractExecutable::StellarAsset => Ok(None),
             }
-            ContractExecutable::StellarAsset => {}
+        })?;
+        if let Some(code_key) = code_key {
+            self.try_borrow_storage_mut()?
+                .extend_ttl(self, &code_key, threshold, extend_to, None)?;
         }
         Ok(())
     }
@@ -284,22 +282,23 @@ impl Host {
         min_extension: u32,
         max_extension: u32,
     ) -> Result<(), HostError> {
-        match self
-            .retrieve_contract_instance_from_storage(instance_key)?
-            .executable
-        {
-            ContractExecutable::Wasm(wasm_hash) => {
-                let key = self.contract_code_ledger_key(&wasm_hash)?;
-                self.try_borrow_storage_mut()?.extend_ttl_v2(
-                    self,
-                    &key,
-                    extend_to,
-                    min_extension,
-                    max_extension,
-                    None,
-                )?;
+        let code_key = self.with_contract_instance_from_storage(instance_key, |instance| {
+            match &instance.executable {
+                ContractExecutable::Wasm(wasm_hash) => {
+                    Ok(Some(self.contract_code_ledger_key(wasm_hash)?))
+                }
+                ContractExecutable::StellarAsset => Ok(None),
             }
-            ContractExecutable::StellarAsset => {}
+        })?;
+        if let Some(code_key) = code_key {
+            self.try_borrow_storage_mut()?.extend_ttl_v2(
+                self,
+                &code_key,
+                extend_to,
+                min_extension,
+                max_extension,
+                None,
+            )?;
         }
         Ok(())
     }
@@ -670,7 +669,6 @@ impl Host {
         contract_id: &ContractId,
     ) -> Result<bool, HostError> {
         let key = self.contract_instance_ledger_key(contract_id)?;
-        let instance = self.retrieve_contract_instance_from_storage(&key)?;
         let test_contract_executable = ContractExecutable::Wasm(
             crypto::sha256_hash_from_bytes(&[], self)?
                 .try_into()
@@ -683,7 +681,9 @@ impl Host {
                     )
                 })?,
         );
-        Ok(test_contract_executable == instance.executable)
+        self.with_contract_instance_from_storage(&key, |instance| {
+            Ok(test_contract_executable == instance.executable)
+        })
     }
 
     #[cfg(test)]
