@@ -116,9 +116,9 @@ fn externalize_args(host: &Host, args: &[InternalDiagnosticArg]) -> Result<Vec<S
     args.iter()
         .map(|arg| match arg {
             InternalDiagnosticArg::HostVal(h) => host.from_host_val(*h),
-            InternalDiagnosticArg::XdrVal(v) => v.metered_clone(host),
+            InternalDiagnosticArg::XdrVal(v) => v.metered_clone(host.as_budget()),
         })
-        .metered_collect::<Result<Vec<ScVal>, HostError>>(host)?
+        .metered_collect::<Result<Vec<ScVal>, HostError>>(host.as_budget())?
 }
 
 impl InternalDiagnosticEvent {
@@ -143,7 +143,7 @@ impl InternalDiagnosticEvent {
         };
         Ok(xdr::ContractEvent {
             ext: xdr::ExtensionPoint::V0,
-            contract_id: self.contract_id.metered_clone(host)?,
+            contract_id: self.contract_id.metered_clone(host.as_budget())?,
             type_: xdr::ContractEventType::Diagnostic,
             body: xdr::ContractEventBody::V0(xdr::ContractEventV0 { topics, data }),
         })
@@ -179,7 +179,7 @@ impl InternalEventsBuffer {
             // may be different on different instances due to diagnostic events
             // and we need a deterministic cost across all instances, the cost
             // needs to be amortized and buffer size-independent.
-            Vec::<(InternalEvent, EventError)>::charge_bulk_init_cpy(1, host)?;
+            Vec::<(InternalEvent, EventError)>::charge_bulk_init_cpy(1, host.as_budget())?;
             self.vec.push((e, EventError::FromSuccessfulCall));
             Ok(())
         };
@@ -226,7 +226,7 @@ impl InternalEventsBuffer {
                 // different on different instances (due to diagnostic events)
                 // and we need a deterministic cost across all instances, the
                 // cost needs to be amortized and buffer size-independent.
-                Vec::<HostEvent>::charge_bulk_init_cpy(1, host)?;
+                Vec::<HostEvent>::charge_bulk_init_cpy(1, host.as_budget())?;
                 vec.push(HostEvent {
                     event,
                     failed_call: *status == EventError::FromFailedCall,

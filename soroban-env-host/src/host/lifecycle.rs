@@ -1,4 +1,5 @@
 use crate::{
+    budget::AsBudget,
     crypto, err,
     host::{
         metered_clone::{MeteredAlloc, MeteredClone},
@@ -146,7 +147,7 @@ impl Host {
         let has_deployer = deployer.is_some();
         if has_deployer {
             self.try_borrow_authorization_manager()?
-                .push_create_contract_host_fn_frame(self, args.metered_clone(self)?)?;
+                .push_create_contract_host_fn_frame(self, args.metered_clone(self.as_budget())?)?;
         }
         // Make sure that even in case of operation failure we still pop the
         // stack frame.
@@ -197,11 +198,11 @@ impl Host {
         }?;
 
         let id_preimage =
-            self.get_full_contract_id_preimage(args.contract_id_preimage.metered_clone(self)?)?;
+            self.get_full_contract_id_preimage(args.contract_id_preimage.metered_clone(self.as_budget())?)?;
         let contract_id = ContractId(Hash(self.metered_hash_xdr(&id_preimage)?));
         self.create_contract_with_id(
-            contract_id.metered_clone(self)?,
-            args.executable.metered_clone(self)?,
+            contract_id.metered_clone(self.as_budget())?,
+            args.executable.metered_clone(self.as_budget())?,
         )?;
         self.maybe_initialize_stellar_asset_contract(&contract_id, &args.contract_id_preimage)?;
         if matches!(args.executable, ContractExecutable::Wasm(_)) {
@@ -216,12 +217,12 @@ impl Host {
         salt: BytesObject,
     ) -> Result<ContractId, HostError> {
         let contract_id_preimage = ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-            address: self.visit_obj(deployer, |addr: &ScAddress| addr.metered_clone(self))?,
+            address: self.visit_obj(deployer, |addr: &ScAddress| addr.metered_clone(self.as_budget()))?,
             salt: self.u256_from_bytesobj_input("contract_id_salt", salt)?,
         });
 
         let id_preimage =
-            self.get_full_contract_id_preimage(contract_id_preimage.metered_clone(self)?)?;
+            self.get_full_contract_id_preimage(contract_id_preimage.metered_clone(self.as_budget())?)?;
         Ok(ContractId(Hash(self.metered_hash_xdr(&id_preimage)?)))
     }
 
@@ -232,7 +233,7 @@ impl Host {
     }
 
     pub(crate) fn upload_contract_wasm(&self, wasm: Vec<u8>) -> Result<BytesObject, HostError> {
-        let hash_bytes: [u8; 32] = crypto::sha256_hash_from_bytes(wasm.as_slice(), self)?
+        let hash_bytes: [u8; 32] = crypto::sha256_hash_from_bytes(wasm.as_slice(), self.as_budget())?
             .try_into()
             .map_err(|_| {
                 self.err(
@@ -270,7 +271,7 @@ impl Host {
         } else {
             let _check_vm = Vm::new(
                 self,
-                ContractId(Hash(hash_bytes.metered_clone(self)?)),
+                ContractId(Hash(hash_bytes.metered_clone(self.as_budget())?)),
                 wasm_bytes_m.as_slice(),
             )?;
             // At this point we do a secondary parse on what we've checked to be a valid
@@ -289,9 +290,9 @@ impl Host {
         let hash_obj = self.add_host_object(self.scbytes_from_slice(hash_bytes.as_slice())?)?;
         let code_key = Rc::metered_new(
             LedgerKey::ContractCode(LedgerKeyContractCode {
-                hash: Hash(hash_bytes.metered_clone(self)?),
+                hash: Hash(hash_bytes.metered_clone(self.as_budget())?),
             }),
-            self,
+            self.as_budget(),
         )?;
 
         let mut storage = self.try_borrow_storage_mut()?;

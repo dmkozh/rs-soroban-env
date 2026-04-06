@@ -1,4 +1,5 @@
 use crate::{
+    budget::AsBudget,
     crypto::{
         metered_scalar::MeteredScalar,
         poseidon::{poseidon_params::PoseidonParams, utils, INVALID_INPUT, VEC_OOB},
@@ -30,7 +31,7 @@ impl<S: MeteredScalar> Poseidon<S> {
             ));
         }
 
-        let mut current_state = input.metered_clone(host)?;
+        let mut current_state = input.metered_clone(host.as_budget())?;
 
         for r in 0..self.params.rounds_f_beginning {
             let rc = self.params.round_constants.get(r).ok_or_else(|| {
@@ -85,7 +86,7 @@ impl<S: MeteredScalar> Poseidon<S> {
         }
 
         // Allocate output vector
-        Vec::<S>::charge_bulk_init_cpy(t as u64, host)?;
+        Vec::<S>::charge_bulk_init_cpy(t as u64, host.as_budget())?;
         let mut out = vec![S::zero(); t];
 
         // Perform matrix-vector multiplication: out[i] = sum(mat[i][j] * input[j])

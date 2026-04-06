@@ -3,6 +3,7 @@ use std::hint::black_box;
 use rand_chacha::ChaCha20Rng;
 
 use crate::{
+    budget::AsBudget,
     cost_runner::{CostRunner, CostType},
     crypto::chacha20_fill_bytes,
     xdr::ContractCostType::ChaCha20DrawBytes,
@@ -23,7 +24,7 @@ impl CostRunner for ChaCha20DrawBytesRun {
         mut sample: Self::SampleType,
     ) -> Self::RecycledType {
         black_box(
-            chacha20_fill_bytes(&mut sample.0, sample.1.as_mut_slice(), host)
+            chacha20_fill_bytes(&mut sample.0, sample.1.as_mut_slice(), host.as_budget())
                 .expect("chacha20 draw byte"),
         );
         black_box(sample)

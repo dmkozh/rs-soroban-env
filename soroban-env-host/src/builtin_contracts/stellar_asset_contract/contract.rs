@@ -1,6 +1,7 @@
 use core::cmp::Ordering;
 
 use crate::{
+    budget::AsBudget,
     builtin_contracts::{
         base_types::{Address, BytesN, MuxedAddress, String},
         contract_error::ContractError,
@@ -92,7 +93,7 @@ impl StellarAssetContract {
         validate_asset(e, &asset)?;
 
         let curr_contract_id = e.get_current_contract_id_internal()?;
-        let expected_contract_id = e.get_asset_contract_id_hash(asset.metered_clone(e)?)?;
+        let expected_contract_id = e.get_asset_contract_id_hash(asset.metered_clone(e.as_budget())?)?;
         if curr_contract_id != expected_contract_id {
             return Err(e.err(
                 ScErrorType::Context,
@@ -173,8 +174,8 @@ impl StellarAssetContract {
 
         write_allowance(
             e,
-            from.metered_clone(e)?,
-            spender.metered_clone(e)?,
+            from.metered_clone(e.as_budget())?,
+            spender.metered_clone(e.as_budget())?,
             amount,
             live_until_ledger,
         )?;
@@ -219,8 +220,8 @@ impl StellarAssetContract {
             INSTANCE_EXTEND_AMOUNT.into(),
         )?;
 
-        spend_balance(e, from.metered_clone(e)?, amount)?;
-        receive_balance(e, to.metered_clone(e)?, amount)?;
+        spend_balance(e, from.metered_clone(e.as_budget())?, amount)?;
+        receive_balance(e, to.metered_clone(e.as_budget())?, amount)?;
         event::transfer_maybe_with_issuer(e, from, to, to_mux.id()?, amount)?;
         Ok(())
     }
@@ -242,9 +243,9 @@ impl StellarAssetContract {
             INSTANCE_EXTEND_AMOUNT.into(),
         )?;
 
-        spend_allowance(e, from.metered_clone(e)?, spender, amount)?;
-        spend_balance(e, from.metered_clone(e)?, amount)?;
-        receive_balance(e, to.metered_clone(e)?, amount)?;
+        spend_allowance(e, from.metered_clone(e.as_budget())?, spender, amount)?;
+        spend_balance(e, from.metered_clone(e.as_budget())?, amount)?;
+        receive_balance(e, to.metered_clone(e.as_budget())?, amount)?;
         event::transfer_maybe_with_issuer(e, from, to, None, amount)?;
         Ok(())
     }
@@ -263,7 +264,7 @@ impl StellarAssetContract {
             INSTANCE_EXTEND_AMOUNT.into(),
         )?;
 
-        spend_balance(e, from.metered_clone(e)?, amount)?;
+        spend_balance(e, from.metered_clone(e.as_budget())?, amount)?;
         event::burn(e, from, amount)?;
         Ok(())
     }
@@ -287,8 +288,8 @@ impl StellarAssetContract {
             INSTANCE_EXTEND_AMOUNT.into(),
         )?;
 
-        spend_allowance(e, from.metered_clone(e)?, spender, amount)?;
-        spend_balance(e, from.metered_clone(e)?, amount)?;
+        spend_allowance(e, from.metered_clone(e.as_budget())?, spender, amount)?;
+        spend_balance(e, from.metered_clone(e.as_budget())?, amount)?;
         event::burn(e, from, amount)?;
         Ok(())
     }
@@ -297,7 +298,7 @@ impl StellarAssetContract {
     pub(crate) fn clawback(e: &Host, from: Address, amount: i128) -> Result<(), HostError> {
         let _span = tracy_span!("SAC clawback");
         check_nonnegative_amount(e, amount)?;
-        check_clawbackable(e, from.metered_clone(e)?)?;
+        check_clawbackable(e, from.metered_clone(e.as_budget())?)?;
         check_not_issuer(e, &from)?;
 
         let admin = read_administrator(e)?;
@@ -308,7 +309,7 @@ impl StellarAssetContract {
             INSTANCE_EXTEND_AMOUNT.into(),
         )?;
 
-        spend_balance_no_authorization_check(e, from.metered_clone(e)?, amount)?;
+        spend_balance_no_authorization_check(e, from.metered_clone(e.as_budget())?, amount)?;
         event::clawback(e, from, amount)?;
         Ok(())
     }
@@ -328,7 +329,7 @@ impl StellarAssetContract {
             INSTANCE_EXTEND_AMOUNT.into(),
         )?;
 
-        write_authorization(e, addr.metered_clone(e)?, authorize)?;
+        write_authorization(e, addr.metered_clone(e.as_budget())?, authorize)?;
         event::set_authorized(e, addr, authorize)?;
         Ok(())
     }
@@ -347,7 +348,7 @@ impl StellarAssetContract {
             INSTANCE_EXTEND_AMOUNT.into(),
         )?;
 
-        receive_balance(e, to.metered_clone(e)?, amount)?;
+        receive_balance(e, to.metered_clone(e.as_budget())?, amount)?;
         event::mint(e, to, None, amount)?;
         Ok(())
     }
@@ -363,7 +364,7 @@ impl StellarAssetContract {
             INSTANCE_EXTEND_AMOUNT.into(),
         )?;
 
-        write_administrator(e, new_admin.metered_clone(e)?)?;
+        write_administrator(e, new_admin.metered_clone(e.as_budget())?)?;
         event::set_admin(e, admin, new_admin)?;
         Ok(())
     }

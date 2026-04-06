@@ -193,7 +193,7 @@ impl Host {
         let auth_snapshot = auth_manager.push_frame(self, &ctx.frame)?;
         // Establish the rp first, since this might run out of gas and fail.
         let rp = RollbackPoint {
-            storage: self.try_borrow_storage()?.map.metered_clone(self)?,
+            storage: self.try_borrow_storage()?.map.metered_clone(self.as_budget())?,
             events: self.try_borrow_events()?.vec.len(),
             auth: auth_snapshot,
         };
@@ -606,7 +606,7 @@ impl Host {
         self.with_current_frame_opt(|opt_frame| match opt_frame {
             Some(frame) => frame
                 .contract_id()
-                .map(|id| id.metered_clone(self))
+                .map(|id| id.metered_clone(self.as_budget()))
                 .transpose(),
             None => Ok(None),
         })
@@ -775,7 +775,7 @@ impl Host {
                 )
             }
             ContractExecutable::StellarAsset => self.with_frame(
-                Frame::StellarAssetContract(id.metered_clone(self)?, *func, args_vec, instance),
+                Frame::StellarAssetContract(id.metered_clone(self.as_budget())?, *func, args_vec, instance),
                 || {
                     use crate::builtin_contracts::{BuiltinContract, StellarAssetContract};
                     StellarAssetContract.call(func, self, args)
@@ -785,7 +785,7 @@ impl Host {
     }
 
     fn instantiate_vm(&self, id: &ContractId, wasm_hash: &Hash) -> Result<Rc<Vm>, HostError> {
-        let contract_id = id.metered_clone(self)?;
+        let contract_id = id.metered_clone(self.as_budget())?;
         if let Some(cache) = &*self.try_borrow_module_cache()? {
             // Check that storage thinks the entry exists before
             // checking the cache: this seems like overkill but it
@@ -1146,7 +1146,7 @@ impl Host {
             HostFunction::CreateContract(args) => self.with_frame(frame, || {
                 let deployer: Option<AddressObject> = match &args.contract_id_preimage {
                     ContractIdPreimage::Address(preimage_from_addr) => {
-                        Some(self.add_host_object(preimage_from_addr.address.metered_clone(self)?)?)
+                        Some(self.add_host_object(preimage_from_addr.address.metered_clone(self.as_budget())?)?)
                     }
                     ContractIdPreimage::Asset(_) => None,
                 };
@@ -1164,7 +1164,7 @@ impl Host {
             HostFunction::CreateContractV2(args) => self.with_frame(frame, || {
                 let deployer: Option<AddressObject> = match &args.contract_id_preimage {
                     ContractIdPreimage::Address(preimage_from_addr) => {
-                        Some(self.add_host_object(preimage_from_addr.address.metered_clone(self)?)?)
+                        Some(self.add_host_object(preimage_from_addr.address.metered_clone(self.as_budget())?)?)
                     }
                     ContractIdPreimage::Asset(_) => None,
                 };

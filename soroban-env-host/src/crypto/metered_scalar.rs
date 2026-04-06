@@ -1,4 +1,5 @@
 use crate::{
+    budget::AsBudget,
     host::metered_clone::MeteredClone, xdr::ContractCostType, ConversionError, ErrorHandler, Host,
     HostError, TryFromVal, U256Object, U256Small, U256Val, U256,
 };
@@ -29,7 +30,7 @@ pub trait MeteredScalar: PrimeField + Sized + Clone + PartialEq + MeteredClone {
     /// Performs metered addition, charging the budget for the operation.
     /// Returns a new element that is the sum of `self` and `other`.
     fn metered_add(&self, other: &Self, host: &Host) -> Result<Self, HostError> {
-        let mut result = self.metered_clone(host)?;
+        let mut result = self.metered_clone(host.as_budget())?;
         result.metered_add_assign(other, host)?;
         Ok(result)
     }
@@ -50,7 +51,7 @@ impl MeteredScalar for BlsScalar {
 
     fn metered_double_in_place(&mut self, host: &Host) -> Result<(), HostError> {
         // Double is essentially add self to self
-        host.fr_add_internal(self, &self.metered_clone(host)?)
+        host.fr_add_internal(self, &self.metered_clone(host.as_budget())?)
     }
 
     fn metered_pow(&self, exp: &u64, host: &Host) -> Result<Self, HostError> {
@@ -98,7 +99,7 @@ impl MeteredScalar for BnScalar {
 
     fn metered_double_in_place(&mut self, host: &Host) -> Result<(), HostError> {
         // Double is essentially add self to self
-        host.bn254_fr_add_internal(self, &self.metered_clone(host)?)
+        host.bn254_fr_add_internal(self, &self.metered_clone(host.as_budget())?)
     }
 
     fn metered_pow(&self, exp: &u64, host: &Host) -> Result<Self, HostError> {

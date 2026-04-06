@@ -1,4 +1,5 @@
 use crate::{
+    budget::AsBudget,
     builtin_contracts::{
         base_types::Address,
         contract_error::ContractError,
@@ -120,8 +121,8 @@ fn write_allowance_amount(
     amount: i128,
 ) -> Result<(), HostError> {
     let key = DataKey::Allowance(AllowanceDataKey {
-        from: from.metered_clone(e)?,
-        spender: spender.metered_clone(e)?,
+        from: from.metered_clone(e.as_budget())?,
+        spender: spender.metered_clone(e.as_budget())?,
     });
 
     let allowance: AllowanceValue = e
@@ -137,7 +138,7 @@ pub(crate) fn spend_allowance(
     spender: Address,
     amount: i128,
 ) -> Result<(), HostError> {
-    let allowance = read_allowance(e, from.metered_clone(e)?, spender.metered_clone(e)?)?;
+    let allowance = read_allowance(e, from.metered_clone(e.as_budget())?, spender.metered_clone(e.as_budget())?)?;
     if allowance < amount {
         return Err(err!(
             e,

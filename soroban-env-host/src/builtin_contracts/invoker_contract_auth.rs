@@ -91,7 +91,7 @@ impl InvokerContractAuthEntry {
                 let function = AuthorizedFunction::CreateContractHostFn(CreateContractArgsV2 {
                     contract_id_preimage: ContractIdPreimage::Address(
                         ContractIdPreimageFromAddress {
-                            address: invoker_contract_addr.metered_clone(host)?,
+                            address: invoker_contract_addr.metered_clone(host.as_budget())?,
                             salt: host.u256_from_bytesobj_input(
                                 "salt",
                                 create_contract_fn.salt.as_object(),
@@ -120,7 +120,7 @@ impl InvokerContractAuthEntry {
                 let function = AuthorizedFunction::CreateContractHostFn(CreateContractArgsV2 {
                     contract_id_preimage: ContractIdPreimage::Address(
                         ContractIdPreimageFromAddress {
-                            address: invoker_contract_addr.metered_clone(host)?,
+                            address: invoker_contract_addr.metered_clone(host.as_budget())?,
                             salt: host.u256_from_bytesobj_input(
                                 "salt",
                                 create_contract_fn.salt.as_object(),

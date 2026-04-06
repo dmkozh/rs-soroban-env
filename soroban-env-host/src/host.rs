@@ -459,7 +459,7 @@ impl Host {
 
     #[cfg(any(test, feature = "testutils"))]
     pub(crate) fn source_account_id(&self) -> Result<Option<AccountId>, HostError> {
-        self.try_borrow_source_account()?.metered_clone(self)
+        self.try_borrow_source_account()?.metered_clone(self.as_budget())
     }
 
     #[cfg(any(test, feature = "testutils"))]
@@ -501,7 +501,7 @@ impl Host {
     pub fn source_account_address(&self) -> Result<Option<AddressObject>, HostError> {
         if let Some(acc) = self.try_borrow_source_account()?.as_ref() {
             Ok(Some(self.add_host_object(ScAddress::Account(
-                acc.metered_clone(self)?,
+                acc.metered_clone(self.as_budget())?,
             ))?))
         } else {
             Ok(None)
@@ -767,7 +767,7 @@ impl Host {
         constructor_args: Option<VecObject>,
     ) -> Result<AddressObject, HostError> {
         let contract_id_preimage = ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-            address: self.visit_obj(deployer, |addr: &ScAddress| addr.metered_clone(self))?,
+            address: self.visit_obj(deployer, |addr: &ScAddress| addr.metered_clone(self.as_budget()))?,
             salt: self.u256_from_bytesobj_input("contract_id_salt", salt)?,
         });
         let executable =
@@ -1028,7 +1028,7 @@ impl EnvBase for Host {
                 &[],
             ));
         }
-        Vec::<(Val, Val)>::charge_bulk_init_cpy(keys.len() as u64, self)?;
+        Vec::<(Val, Val)>::charge_bulk_init_cpy(keys.len() as u64, self.as_budget())?;
         let map_vec = keys
             .iter()
             .zip(vals.iter().copied())
@@ -1074,7 +1074,7 @@ impl EnvBase for Host {
                 self.check_symbol_matches(ik.as_bytes(), sym)?;
             }
 
-            metered_clone::charge_shallow_copy::<Val>(keys.len() as u64, self)?;
+            metered_clone::charge_shallow_copy::<Val>(keys.len() as u64, self.as_budget())?;
             for (iv, mv) in vals.iter_mut().zip(hm.values(self)?) {
                 *iv = *mv;
             }
@@ -1107,7 +1107,7 @@ impl EnvBase for Host {
                     &[],
                 ));
             }
-            metered_clone::charge_shallow_copy::<Val>(hv.len() as u64, self)?;
+            metered_clone::charge_shallow_copy::<Val>(hv.len() as u64, self.as_budget())?;
             vals.copy_from_slice(hv.as_slice());
             Ok(())
         })?;
@@ -1194,15 +1194,15 @@ impl VmCallerEnv for Host {
     ) -> Result<Void, HostError> {
         self.with_debug_mode(|| {
             let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(msg_pos, msg_len)?;
-            Vec::<u8>::charge_bulk_init_cpy(len as u64, self)?;
+            Vec::<u8>::charge_bulk_init_cpy(len as u64, self.as_budget())?;
             let mut msg: Vec<u8> = vec![0u8; len as usize];
             self.metered_vm_read_bytes_from_linear_memory(vmcaller, &vm, pos, &mut msg)?;
             // `String::from_utf8_lossy` iternally allocates a `String` which is a `Vec<u8>`
-            Vec::<u8>::charge_bulk_init_cpy(len as u64, self)?;
+            Vec::<u8>::charge_bulk_init_cpy(len as u64, self.as_budget())?;
             let msg = String::from_utf8_lossy(&msg);
 
             let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(vals_pos, vals_len)?;
-            Vec::<Val>::charge_bulk_init_cpy((len as u64).saturating_add(1), self)?;
+            Vec::<Val>::charge_bulk_init_cpy((len as u64).saturating_add(1), self.as_budget())?;
             let mut vals: Vec<Val> = vec![Val::VOID.to_val(); len as usize];
             // charge for conversion from bytes to `Val`s
             self.charge_budget(
@@ -1816,7 +1816,7 @@ impl VmCallerEnv for Host {
             pos: keys_pos,
             len,
         } = self.get_mem_fn_args(keys_pos, len)?;
-        let mut key_syms = Vec::<Symbol>::with_metered_capacity(len as usize, self)?;
+        let mut key_syms = Vec::<Symbol>::with_metered_capacity(len as usize, self.as_budget())?;
         self.metered_vm_scan_slices_in_linear_memory(
             vmcaller,
             &vm,
@@ -1830,7 +1830,7 @@ impl VmCallerEnv for Host {
 
         // Step 2: extract all val Vals.
         let vals_pos: u32 = vals_pos.into();
-        Vec::<Val>::charge_bulk_init_cpy(len as u64, self)?;
+        Vec::<Val>::charge_bulk_init_cpy(len as u64, self.as_budget())?;
         let mut vals: Vec<Val> = vec![Val::VOID.into(); len as usize];
         // The full slice memcpy is charged twice (2 *):
         // - charge for conversion from bytes to `Val`s (1x)
@@ -2131,7 +2131,7 @@ impl VmCallerEnv for Host {
         len: U32Val,
     ) -> Result<VecObject, HostError> {
         let MemFnArgs { vm, pos, len } = self.get_mem_fn_args(vals_pos, len)?;
-        Vec::<Val>::charge_bulk_init_cpy(len as u64, self)?;
+        Vec::<Val>::charge_bulk_init_cpy(len as u64, self.as_budget())?;
         let mut vals: Vec<Val> = vec![Val::VOID.to_val(); len as usize];
         // charge for conversion from bytes to `Val`s (1x) and for per-element
         // relative-to-absolute object handle translation (1x), hence 2 * len
@@ -2537,7 +2537,7 @@ impl VmCallerEnv for Host {
         );
 
         let wasm_vec =
-            self.visit_obj(wasm, |bytes: &ScBytes| bytes.as_vec().metered_clone(self))?;
+            self.visit_obj(wasm, |bytes: &ScBytes| bytes.as_vec().metered_clone(self.as_budget()))?;
         self.upload_contract_wasm(wasm_vec)
     }
 
@@ -2836,7 +2836,7 @@ impl VmCallerEnv for Host {
         let i: u32 = iv.into();
         let u = self.u8_from_u32val_input("u", u)?;
         let vnew = self.visit_obj(b, |hv: &ScBytes| {
-            let mut vnew: Vec<u8> = hv.metered_clone(self)?.into();
+            let mut vnew: Vec<u8> = hv.metered_clone(self.as_budget())?.into();
             match vnew.get_mut(i as usize) {
                 None => Err(self.err(
                     ScErrorType::Object,
@@ -2884,14 +2884,14 @@ impl VmCallerEnv for Host {
         let i: u32 = i.into();
         let vnew = self.visit_obj(b, |hv: &ScBytes| {
             self.validate_index_lt_bound(i, hv.len())?;
-            let mut vnew: Vec<u8> = hv.metered_clone(self)?.into();
+            let mut vnew: Vec<u8> = hv.metered_clone(self.as_budget())?.into();
             // len > i has been verified above but use checked_sub just in case
             let n_elts = (hv.len() as u64).checked_sub(i as u64).ok_or_else(|| {
                 Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InternalError)
             })?;
             // remove elements incurs the cost of moving bytes, it does not incur
             // allocation/deallocation
-            metered_clone::charge_shallow_copy::<u8>(n_elts, self)?;
+            metered_clone::charge_shallow_copy::<u8>(n_elts, self.as_budget())?;
             vnew.remove(i as usize);
             Ok(ScBytes(vnew.try_into()?))
         })?;
@@ -2940,7 +2940,7 @@ impl VmCallerEnv for Host {
             // we allocate the new vector to be able to hold `len + 1` bytes, so that the push
             // will not trigger a reallocation, causing data to be cloned twice.
             let len = self.validate_usize_sum_fits_in_u32(hv.len(), 1)?;
-            let mut vnew = Vec::<u8>::with_metered_capacity(len, self)?;
+            let mut vnew = Vec::<u8>::with_metered_capacity(len, self.as_budget())?;
             vnew.extend_from_slice(hv.as_slice());
             vnew.push(u);
             Ok(ScBytes(vnew.try_into()?))
@@ -2955,7 +2955,7 @@ impl VmCallerEnv for Host {
         b: BytesObject,
     ) -> Result<BytesObject, HostError> {
         let vnew = self.visit_obj(b, |hv: &ScBytes| {
-            let mut vnew: Vec<u8> = hv.metered_clone(self)?.into();
+            let mut vnew: Vec<u8> = hv.metered_clone(self.as_budget())?.into();
             // Popping will not trigger reallocation. Here we don't charge anything since this is
             // just a `len` reduction.
             if vnew.pop().is_none() {
@@ -3025,7 +3025,7 @@ impl VmCallerEnv for Host {
             // we allocate the new vector to be able to hold `len + 1` bytes, so that the insert
             // will not trigger a reallocation, causing data to be cloned twice.
             let len = self.validate_usize_sum_fits_in_u32(hv.len(), 1)?;
-            let mut vnew = Vec::<u8>::with_metered_capacity(len, self)?;
+            let mut vnew = Vec::<u8>::with_metered_capacity(len, self.as_budget())?;
             vnew.extend_from_slice(hv.as_slice());
             vnew.insert(i as usize, u);
             Ok(ScBytes(vnew.try_into()?))
@@ -3044,7 +3044,7 @@ impl VmCallerEnv for Host {
                 // we allocate large enough memory to hold the new combined vector, so that
                 // allocation only happens once, and charge for it upfront.
                 let len = self.validate_usize_sum_fits_in_u32(sb1.len(), sb2.len())?;
-                let mut vnew = Vec::<u8>::with_metered_capacity(len, self)?;
+                let mut vnew = Vec::<u8>::with_metered_capacity(len, self.as_budget())?;
                 vnew.extend_from_slice(sb1.as_slice());
                 vnew.extend_from_slice(sb2.as_slice());
                 Ok(vnew)
@@ -3625,7 +3625,7 @@ impl VmCallerEnv for Host {
                 #[cfg(any(test, feature = "testutils"))]
                 Frame::TestContract(c) => &c.args,
             };
-            args.metered_clone(self)
+            args.metered_clone(self.as_budget())
         })?;
 
         Ok(self
@@ -3714,7 +3714,7 @@ impl VmCallerEnv for Host {
         let sc_address = self.visit_obj(muxed_address, |addr: &MuxedScAddress| match &addr.0 {
             ScAddress::MuxedAccount(muxed_account) => {
                 let address = ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(
-                    muxed_account.ed25519.metered_clone(self)?,
+                    muxed_account.ed25519.metered_clone(self.as_budget())?,
                 )));
                 Ok(address)
             }

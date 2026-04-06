@@ -43,7 +43,7 @@ impl Host {
 
     pub(crate) fn u256_from_account(&self, account_id: &AccountId) -> Result<Uint256, HostError> {
         let crate::xdr::PublicKey::PublicKeyTypeEd25519(ed25519) =
-            account_id.metered_clone(self)?.0;
+            account_id.metered_clone(self.as_budget())?.0;
         Ok(ed25519)
     }
 
@@ -140,7 +140,7 @@ impl Host {
                 key,
                 durability,
             }),
-            self,
+            self.as_budget(),
         )
     }
 
@@ -201,7 +201,7 @@ impl Host {
     pub(crate) fn vals_to_scval_vec(&self, vals: &[Val]) -> Result<VecM<ScVal>, HostError> {
         vals.iter()
             .map(|v| self.from_host_val(*v))
-            .metered_collect::<Result<Vec<ScVal>, HostError>>(self)??
+            .metered_collect::<Result<Vec<ScVal>, HostError>>(self.as_budget())??
             .try_into()
             .map_err(|_| {
                 err!(
@@ -217,7 +217,7 @@ impl Host {
         scvals
             .iter()
             .map(|scv| self.to_host_val(scv))
-            .metered_collect::<Result<Vec<Val>, HostError>>(self)?
+            .metered_collect::<Result<Vec<Val>, HostError>>(self.as_budget())?
     }
 
     pub(crate) fn bytesobj_from_internal_contract_id(
@@ -238,7 +238,7 @@ impl Host {
     }
 
     pub(crate) fn metered_slice_to_vec(&self, s: &[u8]) -> Result<Vec<u8>, HostError> {
-        Vec::<u8>::charge_bulk_init_cpy(s.len() as u64, self)?;
+        Vec::<u8>::charge_bulk_init_cpy(s.len() as u64, self.as_budget())?;
         Ok(s.to_vec())
     }
 
@@ -252,19 +252,19 @@ impl Host {
     }
 
     pub fn scaddress_from_address(&self, address: AddressObject) -> Result<ScAddress, HostError> {
-        self.visit_obj(address, |addr: &ScAddress| addr.metered_clone(self))
+        self.visit_obj(address, |addr: &ScAddress| addr.metered_clone(self.as_budget()))
     }
 
     pub(crate) fn scsymbol_from_symbol(&self, symbol: Symbol) -> Result<ScSymbol, HostError> {
         if let Ok(sobj) = SymbolObject::try_from(symbol) {
-            self.visit_obj(sobj, |sym: &ScSymbol| sym.metered_clone(self))
+            self.visit_obj(sobj, |sym: &ScSymbol| sym.metered_clone(self.as_budget()))
         } else {
             self.map_err(ScSymbol::try_from_val(self, &symbol))
         }
     }
 
     pub(crate) fn host_map_to_scmap(&self, map: &HostMap) -> Result<ScMap, HostError> {
-        let mut mv = Vec::<ScMapEntry>::with_metered_capacity(map.len(), self)?;
+        let mut mv = Vec::<ScMapEntry>::with_metered_capacity(map.len(), self.as_budget())?;
         for (k, v) in map.iter(self)? {
             let key = self.from_host_val(*k)?;
             let val = self.from_host_val(*v)?;
@@ -276,7 +276,7 @@ impl Host {
     // This function is almost identical to `host_map_to_scmap`, and should only
     // be used for creating the instance storage map.
     pub(crate) fn instance_storage_map_to_scmap(&self, map: &HostMap) -> Result<ScMap, HostError> {
-        let mut mv = Vec::<ScMapEntry>::with_metered_capacity(map.len(), self)?;
+        let mut mv = Vec::<ScMapEntry>::with_metered_capacity(map.len(), self.as_budget())?;
         for (k, v) in map.iter(self)? {
             // This is the only difference point compared to `host_map_to_scmap`:
             // we convert the key according to the storage key conversion rules
@@ -297,7 +297,7 @@ impl Host {
         S: MeteredScalar,
     {
         self.visit_obj(vp, |hv: &HostVec| {
-            let mut scalars: Vec<S> = Vec::with_metered_capacity(hv.len(), self)?;
+            let mut scalars: Vec<S> = Vec::with_metered_capacity(hv.len(), self.as_budget())?;
             for val in hv.iter() {
                 let u256_val = U256Val::try_from(*val).map_err(|_| {
                     self.err(
@@ -325,7 +325,7 @@ impl Host {
         let vals = scalars
             .into_iter()
             .map(|s| s.into_u256val(self))
-            .metered_collect::<Result<Vec<_>, HostError>>(self)??;
+            .metered_collect::<Result<Vec<_>, HostError>>(self.as_budget())??;
 
         let host_vec =
             HostVec::from_exact_iter(vals.into_iter().map(|v| v.to_val()), self.budget_ref())?;
@@ -343,7 +343,7 @@ impl Host {
     {
         self.visit_obj(vp, |hv: &HostVec| {
             let n_rows = hv.len();
-            let mut result = Vec::with_metered_capacity(n_rows, self)?;
+            let mut result = Vec::with_metered_capacity(n_rows, self.as_budget())?;
             for row_val in hv.iter() {
                 let row_obj = VecObject::try_from(*row_val).map_err(|_| {
                     self.err(
@@ -466,7 +466,7 @@ impl Host {
             self.visit_obj_untyped(objref, |ho| {
                 let val = match ho {
                     HostObject::Vec(vv) => {
-                        Vec::<ScVal>::charge_bulk_init_cpy(vv.len() as u64, self)?;
+                        Vec::<ScVal>::charge_bulk_init_cpy(vv.len() as u64, self.as_budget())?;
                         let sv = vv.iter().map(|e| self.from_host_val(*e)).collect::<Result<
                             Vec<ScVal>,
                             HostError,
@@ -476,31 +476,31 @@ impl Host {
                     }
                     HostObject::Map(mm) => ScVal::Map(Some(self.host_map_to_scmap(mm)?)),
                     HostObject::U64(u) => {
-                        charge_shallow_copy::<u64>(1, self)?;
+                        charge_shallow_copy::<u64>(1, self.as_budget())?;
                         ScVal::U64(*u)
                     }
                     HostObject::I64(i) => {
-                        charge_shallow_copy::<i64>(1, self)?;
+                        charge_shallow_copy::<i64>(1, self.as_budget())?;
                         ScVal::I64(*i)
                     }
-                    HostObject::TimePoint(tp) => ScVal::Timepoint(tp.metered_clone(self)?),
-                    HostObject::Duration(d) => ScVal::Duration(d.metered_clone(self)?),
+                    HostObject::TimePoint(tp) => ScVal::Timepoint(tp.metered_clone(self.as_budget())?),
+                    HostObject::Duration(d) => ScVal::Duration(d.metered_clone(self.as_budget())?),
                     HostObject::U128(u) => {
-                        charge_shallow_copy::<u128>(1, self)?;
+                        charge_shallow_copy::<u128>(1, self.as_budget())?;
                         ScVal::U128(UInt128Parts {
                             hi: int128_helpers::u128_hi(*u),
                             lo: int128_helpers::u128_lo(*u),
                         })
                     }
                     HostObject::I128(i) => {
-                        charge_shallow_copy::<i128>(1, self)?;
+                        charge_shallow_copy::<i128>(1, self.as_budget())?;
                         ScVal::I128(Int128Parts {
                             hi: int128_helpers::i128_hi(*i),
                             lo: int128_helpers::i128_lo(*i),
                         })
                     }
                     HostObject::U256(u) => {
-                        charge_shallow_copy::<u128>(2, self)?;
+                        charge_shallow_copy::<u128>(2, self.as_budget())?;
                         let (hi_hi, hi_lo, lo_hi, lo_lo) = u256_into_pieces(*u);
                         ScVal::U256(UInt256Parts {
                             hi_hi,
@@ -510,7 +510,7 @@ impl Host {
                         })
                     }
                     HostObject::I256(i) => {
-                        charge_shallow_copy::<i128>(2, self)?;
+                        charge_shallow_copy::<i128>(2, self.as_budget())?;
                         let (hi_hi, hi_lo, lo_hi, lo_lo) = i256_into_pieces(*i);
                         ScVal::I256(Int256Parts {
                             hi_hi,
@@ -519,10 +519,10 @@ impl Host {
                             lo_lo,
                         })
                     }
-                    HostObject::Bytes(b) => ScVal::Bytes(b.metered_clone(self)?),
-                    HostObject::String(s) => ScVal::String(s.metered_clone(self)?),
-                    HostObject::Symbol(s) => ScVal::Symbol(s.metered_clone(self)?),
-                    HostObject::Address(addr) => ScVal::Address(addr.metered_clone(self)?),
+                    HostObject::Bytes(b) => ScVal::Bytes(b.metered_clone(self.as_budget())?),
+                    HostObject::String(s) => ScVal::String(s.metered_clone(self.as_budget())?),
+                    HostObject::Symbol(s) => ScVal::Symbol(s.metered_clone(self.as_budget())?),
+                    HostObject::Address(addr) => ScVal::Address(addr.metered_clone(self.as_budget())?),
                     HostObject::MuxedAddress(addr) => {
                         if *self.try_borrow_storage_key_conversion_active()? {
                             return Err(self.err(
@@ -532,7 +532,7 @@ impl Host {
                                 &[objref.to_val()],
                             ));
                         }
-                        ScVal::Address(addr.0.metered_clone(self)?)
+                        ScVal::Address(addr.0.metered_clone(self.as_budget())?)
                     }
                 };
                 Ok(ScValObject::unchecked_from_val(val))
@@ -547,14 +547,14 @@ impl Host {
             // below. There is no otherwise ubiquitous metering for ScVal->Val conversion,
             // since most of them happen in the "common" crate with no access to the host.
             ScVal::Vec(Some(v)) => {
-                let mut vv = Vec::<Val>::with_metered_capacity(v.len(), self)?;
+                let mut vv = Vec::<Val>::with_metered_capacity(v.len(), self.as_budget())?;
                 for e in v.iter() {
                     vv.push(self.to_host_val(e)?)
                 }
                 Ok(self.add_host_object(HostVec::from_vec(vv)?)?.into())
             }
             ScVal::Map(Some(m)) => {
-                let mut mm = Vec::<(Val, Val)>::with_metered_capacity(m.len(), self)?;
+                let mut mm = Vec::<(Val, Val)>::with_metered_capacity(m.len(), self.as_budget())?;
                 for pair in m.iter() {
                     let k = self.to_host_val(&pair.key)?;
                     let v = self.to_host_val(&pair.val)?;
@@ -577,41 +577,41 @@ impl Host {
                 &[],
             )),
             ScVal::U64(u) => {
-                charge_shallow_copy::<u64>(1, self)?;
+                charge_shallow_copy::<u64>(1, self.as_budget())?;
                 Ok(self.add_host_object(*u)?.into())
             }
             ScVal::I64(i) => {
-                charge_shallow_copy::<i64>(1, self)?;
+                charge_shallow_copy::<i64>(1, self.as_budget())?;
                 Ok(self.add_host_object(*i)?.into())
             }
-            ScVal::Timepoint(t) => Ok(self.add_host_object(t.metered_clone(self)?)?.into()),
-            ScVal::Duration(d) => Ok(self.add_host_object(d.metered_clone(self)?)?.into()),
+            ScVal::Timepoint(t) => Ok(self.add_host_object(t.metered_clone(self.as_budget())?)?.into()),
+            ScVal::Duration(d) => Ok(self.add_host_object(d.metered_clone(self.as_budget())?)?.into()),
             ScVal::U128(u) => {
-                charge_shallow_copy::<u128>(1, self)?;
+                charge_shallow_copy::<u128>(1, self.as_budget())?;
                 Ok(self
                     .add_host_object(int128_helpers::u128_from_pieces(u.hi, u.lo))?
                     .into())
             }
             ScVal::I128(i) => {
-                charge_shallow_copy::<i128>(1, self)?;
+                charge_shallow_copy::<i128>(1, self.as_budget())?;
                 Ok(self
                     .add_host_object(int128_helpers::i128_from_pieces(i.hi, i.lo))?
                     .into())
             }
             ScVal::U256(u) => {
-                charge_shallow_copy::<u128>(2, self)?;
+                charge_shallow_copy::<u128>(2, self.as_budget())?;
                 Ok(self
                     .add_host_object(u256_from_pieces(u.hi_hi, u.hi_lo, u.lo_hi, u.lo_lo))?
                     .into())
             }
             ScVal::I256(i) => {
-                charge_shallow_copy::<i128>(2, self)?;
+                charge_shallow_copy::<i128>(2, self.as_budget())?;
                 Ok(self
                     .add_host_object(i256_from_pieces(i.hi_hi, i.hi_lo, i.lo_hi, i.lo_lo))?
                     .into())
             }
-            ScVal::Bytes(b) => Ok(self.add_host_object(b.metered_clone(self)?)?.into()),
-            ScVal::String(s) => Ok(self.add_host_object(s.metered_clone(self)?)?.into()),
+            ScVal::Bytes(b) => Ok(self.add_host_object(b.metered_clone(self.as_budget())?)?.into()),
+            ScVal::String(s) => Ok(self.add_host_object(s.metered_clone(self.as_budget())?)?.into()),
             // Similarly to `ScMap`, not every `SCSymbol` XDR is valid. Thus it has to be
             // created with the respective fallible conversion method.
             ScVal::Symbol(s) => Ok(self
@@ -624,10 +624,10 @@ impl Host {
             ScVal::Address(addr) => {
                 match addr {
                     ScAddress::Account(_) | ScAddress::Contract(_) => {
-                        Ok(self.add_host_object(addr.metered_clone(self)?)?.into())
+                        Ok(self.add_host_object(addr.metered_clone(self.as_budget())?)?.into())
                     }
                     ScAddress::MuxedAccount(_) => Ok(self
-                        .add_host_object(MuxedScAddress(addr.metered_clone(self)?))?
+                        .add_host_object(MuxedScAddress(addr.metered_clone(self.as_budget())?))?
                         .into()),
                     _ => Err(self.err(
                         ScErrorType::Object,
@@ -666,16 +666,16 @@ impl Host {
         // version/checksum) and another one for the base32 encoding of
         // the payload.
         const PAYLOAD_LEN: u64 = 32 + 3;
-        Vec::<u8>::charge_bulk_init_cpy(PAYLOAD_LEN + (PAYLOAD_LEN * 8).div_ceil(5), self)?;
+        Vec::<u8>::charge_bulk_init_cpy(PAYLOAD_LEN + (PAYLOAD_LEN * 8).div_ceil(5), self.as_budget())?;
         let strkey = match addr {
             ScAddress::Account(acc_id) => {
                 let AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(ed25519))) = acc_id;
                 stellar_strkey::Strkey::PublicKeyEd25519(stellar_strkey::ed25519::PublicKey(
-                    ed25519.metered_clone(self)?,
+                    ed25519.metered_clone(self.as_budget())?,
                 ))
             }
             ScAddress::Contract(ContractId(Hash(h))) => {
-                stellar_strkey::Strkey::Contract(stellar_strkey::Contract(h.metered_clone(self)?))
+                stellar_strkey::Strkey::Contract(stellar_strkey::Contract(h.metered_clone(self.as_budget())?))
             }
             _ => {
                 return Err(self.err(
@@ -698,14 +698,14 @@ impl Host {
         const MUXED_PAYLOAD_LEN: u64 = 32 + 8 + 3;
         Vec::<u8>::charge_bulk_init_cpy(
             MUXED_PAYLOAD_LEN + (MUXED_PAYLOAD_LEN * 8).div_ceil(5),
-            self,
+            self.as_budget(),
         )?;
         match &muxed_addr.0 {
             ScAddress::MuxedAccount(muxed_account) => {
                 let strkey = stellar_strkey::Strkey::MuxedAccountEd25519(
                     stellar_strkey::ed25519::MuxedAccount {
                         id: muxed_account.id,
-                        ed25519: muxed_account.ed25519.0.metered_clone(self)?,
+                        ed25519: muxed_account.ed25519.0.metered_clone(self.as_budget())?,
                     },
                 );
                 Ok(strkey.to_string())
@@ -780,11 +780,11 @@ impl Host {
             }
 
             // Charge for the key copy to string.
-            Vec::<u8>::charge_bulk_init_cpy(key_len, self)?;
+            Vec::<u8>::charge_bulk_init_cpy(key_len, self.as_budget())?;
             let key_str = String::from_utf8_lossy(key);
             // Approximate the decoding cost as two vector allocations for the
             // payload length (the strkey library does one extra copy).
-            Vec::<u8>::charge_bulk_init_cpy(payload_len * 2, self)?;
+            Vec::<u8>::charge_bulk_init_cpy(payload_len * 2, self.as_budget())?;
             let strkey = stellar_strkey::Strkey::from_string(&key_str).map_err(|_| {
                 self.err(
                     ScErrorType::Value,

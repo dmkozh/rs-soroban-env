@@ -1,4 +1,5 @@
 use crate::{
+    budget::AsBudget,
     crypto::metered_scalar::MeteredScalar,
     host::metered_clone::MeteredIterator,
     xdr::{ScErrorCode, ScErrorType},
@@ -13,7 +14,7 @@ pub(crate) fn sbox<S: MeteredScalar>(
     input
         .iter()
         .map(|el| sbox_p(host, el, degree))
-        .metered_collect(host)?
+        .metered_collect(host.as_budget())?
 }
 
 pub(crate) fn sbox_p<S: MeteredScalar>(
@@ -44,5 +45,5 @@ pub(crate) fn add_rc<S: MeteredScalar>(
         .iter()
         .zip(rc.iter())
         .map(|(a, b)| a.metered_add(b, host))
-        .metered_collect(host)?
+        .metered_collect(host.as_budget())?
 }

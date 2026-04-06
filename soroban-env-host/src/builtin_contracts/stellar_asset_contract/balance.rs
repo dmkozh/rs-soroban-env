@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
+    budget::AsBudget,
     builtin_contracts::{
         base_types::{Address, BytesN},
         contract_error::ContractError,
@@ -98,7 +99,7 @@ fn write_contract_balance(
 
 // Metering: covered by components.
 pub(crate) fn receive_balance(e: &Host, addr: Address, amount: i128) -> Result<(), HostError> {
-    if !is_authorized(e, addr.metered_clone(e)?)? {
+    if !is_authorized(e, addr.metered_clone(e.as_budget())?)? {
         return Err(e.error(
             ContractError::BalanceDeauthorizedError.into(),
             "balance is deauthorized",
@@ -118,7 +119,7 @@ pub(crate) fn receive_balance(e: &Host, addr: Address, amount: i128) -> Result<(
             Ok(transfer_classic_balance(e, acc_id, i64_amount, &addr)?)
         }
         ScAddress::Contract(id) => {
-            let key = DataKey::Balance(addr.metered_clone(e)?);
+            let key = DataKey::Balance(addr.metered_clone(e.as_budget())?);
             let mut balance = if let Some(raw_balance) =
                 e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
             {
@@ -172,7 +173,7 @@ pub(crate) fn spend_balance_no_authorization_check(
         ScAddress::Contract(id) => {
             // If a balance exists, calculate new amount and write the existing authorized state as is because
             // this can be used to clawback when deauthorized.
-            let key = DataKey::Balance(addr.metered_clone(e)?);
+            let key = DataKey::Balance(addr.metered_clone(e.as_budget())?);
             if let Some(raw_balance) =
                 e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
             {
@@ -218,7 +219,7 @@ pub(crate) fn spend_balance_no_authorization_check(
 
 // Metering: covered by components.
 pub(crate) fn spend_balance(e: &Host, addr: Address, amount: i128) -> Result<(), HostError> {
-    if !is_authorized(e, addr.metered_clone(e)?)? {
+    if !is_authorized(e, addr.metered_clone(e.as_budget())?)? {
         return Err(e.error(
             ContractError::BalanceDeauthorizedError.into(),
             "balance is deauthorized",
@@ -270,7 +271,7 @@ pub(crate) fn write_authorization(
     match addr.to_sc_address()? {
         ScAddress::Account(acc_id) => set_authorization(e, acc_id, authorize),
         ScAddress::Contract(id) => {
-            let key = DataKey::Balance(addr.metered_clone(e)?);
+            let key = DataKey::Balance(addr.metered_clone(e.as_budget())?);
             if let Some(raw_balance) =
                 e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
             {
@@ -327,12 +328,12 @@ pub(crate) fn check_clawbackable(e: &Host, addr: Address) -> Result<(), HostErro
                 &[],
             )),
             Asset::CreditAlphanum4(asset) => {
-                let issuer = asset.issuer.metered_clone(e)?;
+                let issuer = asset.issuer.metered_clone(e.as_budget())?;
                 let tlasset = TrustLineAsset::CreditAlphanum4(asset);
                 validate_trustline(tlasset, issuer, acc_id)
             }
             Asset::CreditAlphanum12(asset) => {
-                let issuer = asset.issuer.metered_clone(e)?;
+                let issuer = asset.issuer.metered_clone(e.as_budget())?;
                 let tlasset = TrustLineAsset::CreditAlphanum12(asset);
                 validate_trustline(tlasset, issuer, acc_id)
             }
@@ -391,12 +392,12 @@ pub(crate) fn transfer_classic_balance(
     match read_asset(e)? {
         Asset::Native => transfer_account_balance(e, to_key, amount, addr),
         Asset::CreditAlphanum4(asset) => {
-            let issuer = asset.issuer.metered_clone(e)?;
+            let issuer = asset.issuer.metered_clone(e.as_budget())?;
             let tlasset = TrustLineAsset::CreditAlphanum4(asset);
             transfer_trustline_balance_unless_issuer(tlasset, issuer, to_key)
         }
         Asset::CreditAlphanum12(asset) => {
-            let issuer = asset.issuer.metered_clone(e)?;
+            let issuer = asset.issuer.metered_clone(e.as_budget())?;
             let tlasset = TrustLineAsset::CreditAlphanum12(asset);
             transfer_trustline_balance_unless_issuer(tlasset, issuer, to_key)
         }
@@ -417,12 +418,12 @@ fn get_classic_balance(e: &Host, acct: AccountId, addr: &Address) -> Result<i64,
     match read_asset(e)? {
         Asset::Native => get_account_balance(e, acct, addr),
         Asset::CreditAlphanum4(asset) => {
-            let issuer = asset.issuer.metered_clone(e)?;
+            let issuer = asset.issuer.metered_clone(e.as_budget())?;
             let tlasset = TrustLineAsset::CreditAlphanum4(asset);
             get_trustline_balance_or_max_if_issuer(tlasset, issuer, acct)
         }
         Asset::CreditAlphanum12(asset) => {
-            let issuer = asset.issuer.metered_clone(e)?;
+            let issuer = asset.issuer.metered_clone(e.as_budget())?;
             let tlasset = TrustLineAsset::CreditAlphanum12(asset);
             get_trustline_balance_or_max_if_issuer(tlasset, issuer, acct)
         }
@@ -436,7 +437,7 @@ fn transfer_account_balance(
     amount: i64,
     addr: &Address,
 ) -> Result<(), HostError> {
-    let lk = host.to_account_key(account_id.metered_clone(host)?)?;
+    let lk = host.to_account_key(account_id.metered_clone(host.as_budget())?)?;
 
     host.with_mut_storage(|storage| {
         // Try to get the account entry - it may not exist for receives
@@ -446,7 +447,7 @@ fn transfer_account_balance(
             Some(le) => {
                 // Account exists - update the balance
                 let mut ae = match &le.data {
-                    LedgerEntryData::Account(ae) => Ok(ae.metered_clone(host)?),
+                    LedgerEntryData::Account(ae) => Ok(ae.metered_clone(host.as_budget())?),
                     _ => Err(host.err(
                         ScErrorType::Storage,
                         ScErrorCode::InternalError,
@@ -538,7 +539,7 @@ fn transfer_account_balance(
                         data: LedgerEntryData::Account(new_account),
                         ext: LedgerEntryExt::V0,
                     },
-                    host,
+                    host.as_budget(),
                 )?;
 
                 storage.put(&lk, &new_le, None, host, None)
@@ -592,7 +593,7 @@ fn transfer_trustline_balance(
         let mut le = read_trustline_entry(host, storage, &lk)?;
 
         let mut tl = match &le.data {
-            LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host)?),
+            LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host.as_budget())?),
             _ => Err(host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -722,7 +723,7 @@ fn get_trustline_balance(
         let le = read_trustline_entry(host, storage, &lk)?;
 
         let tl = match &le.data {
-            LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host)?),
+            LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host.as_budget())?),
             _ => Err(host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -795,12 +796,12 @@ fn is_account_authorized(e: &Host, account_id: AccountId) -> Result<bool, HostEr
     match read_asset(e)? {
         Asset::Native => Ok(true),
         Asset::CreditAlphanum4(asset) => {
-            let issuer = asset.issuer.metered_clone(e)?;
+            let issuer = asset.issuer.metered_clone(e.as_budget())?;
             let tlasset = TrustLineAsset::CreditAlphanum4(asset);
             is_trustline_authorized_or_issuer(tlasset, issuer, account_id)
         }
         Asset::CreditAlphanum12(asset) => {
-            let issuer = asset.issuer.metered_clone(e)?;
+            let issuer = asset.issuer.metered_clone(e.as_budget())?;
             let tlasset = TrustLineAsset::CreditAlphanum12(asset);
             is_trustline_authorized_or_issuer(tlasset, issuer, account_id)
         }
@@ -862,12 +863,12 @@ fn set_authorization(e: &Host, acct: AccountId, authorize: bool) -> Result<(), H
             &[],
         )),
         Asset::CreditAlphanum4(asset) => {
-            let issuer = asset.issuer.metered_clone(e)?;
+            let issuer = asset.issuer.metered_clone(e.as_budget())?;
             let tlasset = TrustLineAsset::CreditAlphanum4(asset);
             set_trustline_authorization_unless_issuer(tlasset, issuer, acct)
         }
         Asset::CreditAlphanum12(asset) => {
-            let issuer = asset.issuer.metered_clone(e)?;
+            let issuer = asset.issuer.metered_clone(e.as_budget())?;
             let tlasset = TrustLineAsset::CreditAlphanum12(asset);
             set_trustline_authorization_unless_issuer(tlasset, issuer, acct)
         }
@@ -886,7 +887,7 @@ fn set_trustline_authorization(
         let mut le = read_trustline_entry(host, storage, &lk)?;
 
         let mut tl = match &le.data {
-            LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host)?),
+            LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host.as_budget())?),
             _ => Err(host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -972,11 +973,11 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
             ))
         }
         Asset::CreditAlphanum4(asset4) => {
-            let issuer = asset4.issuer.metered_clone(e)?;
+            let issuer = asset4.issuer.metered_clone(e.as_budget())?;
             (TrustLineAsset::CreditAlphanum4(asset4), issuer)
         }
         Asset::CreditAlphanum12(asset12) => {
-            let issuer = asset12.issuer.metered_clone(e)?;
+            let issuer = asset12.issuer.metered_clone(e.as_budget())?;
             (TrustLineAsset::CreditAlphanum12(asset12), issuer)
         }
     };
@@ -990,7 +991,7 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
         ));
     }
 
-    let tl_key = e.to_trustline_key(account_id.metered_clone(e)?, asset.metered_clone(e)?)?;
+    let tl_key = e.to_trustline_key(account_id.metered_clone(e.as_budget())?, asset.metered_clone(e.as_budget())?)?;
 
     // Check if trustline already exists - if so, no-op
     let trustline_exists = e.with_mut_storage(|storage| storage.try_get(&tl_key, e, None))?;
@@ -1013,7 +1014,7 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
     if clawback_enabled {
         tl_flags |= TrustLineFlags::TrustlineClawbackEnabledFlag as u32;
     }
-    let acc_key = e.to_account_key(account_id.metered_clone(e)?)?;
+    let acc_key = e.to_account_key(account_id.metered_clone(e.as_budget())?)?;
     // Load the account to check sub-entry limit and reserve, then create trustline
     e.with_mut_storage(|storage| {
         let acc_entry = storage.try_get(&acc_key, e, None)?.ok_or_else(|| {
@@ -1025,7 +1026,7 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
         })?;
 
         let mut ae = match &acc_entry.data {
-            LedgerEntryData::Account(ae) => ae.metered_clone(e)?,
+            LedgerEntryData::Account(ae) => ae.metered_clone(e.as_budget())?,
             _ => {
                 return Err(e.err(
                     ScErrorType::Storage,
@@ -1072,7 +1073,7 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
                 data: LedgerEntryData::Trustline(trustline_entry),
                 ext: LedgerEntryExt::V0,
             },
-            e,
+            e.as_budget(),
         )?;
 
         // Increment account's num_sub_entries

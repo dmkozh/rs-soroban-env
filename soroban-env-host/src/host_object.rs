@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::{
-    budget::Budget,
+    budget::{AsBudget, Budget},
     host::{
         metered_clone::{self, MeteredClone},
         metered_map::MeteredOrdMap,
@@ -427,7 +427,7 @@ impl Host {
                 ))
             } else {
                 // Push a new entry into the relative-objects vector.
-                metered_clone::charge_heap_alloc::<Object>(1, self)?;
+                metered_clone::charge_heap_alloc::<Object>(1, self.as_budget())?;
                 let index = self.with_current_frame_relative_object_table(|table| {
                     let index = table.len();
                     table.push(obj);
@@ -452,7 +452,7 @@ impl Host {
         let handle = index_to_handle(self, index, false)?;
         // charge for the new host object, which is just the amortized cost of a
         // single `HostObject` allocation
-        metered_clone::charge_heap_alloc::<HostObject>(1, self)?;
+        metered_clone::charge_heap_alloc::<HostObject>(1, self.as_budget())?;
         self.try_borrow_objects_mut()?.push(HOT::inject(hot, self)?);
         Ok(HOT::new_from_handle(handle))
     }

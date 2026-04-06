@@ -1,5 +1,5 @@
 use crate::{
-    budget::AsBudget,
+    budget::{AsBudget, Budget},
     crypto::{
         metered_scalar::MeteredScalar,
         poseidon::{Poseidon, Poseidon2, Poseidon2Params, PoseidonParams},
@@ -267,7 +267,7 @@ impl Host {
         x: BytesObject,
     ) -> Result<Vec<u8>, HostError> {
         self.visit_obj(x, |bytes: &ScBytes| {
-            let hash = sha256_hash_from_bytes(bytes.as_slice(), self)?;
+            let hash = sha256_hash_from_bytes(bytes.as_slice(), self.as_budget())?;
             if hash.len() != 32 {
                 return Err(err!(
                     self,
@@ -409,10 +409,10 @@ impl Host {
 
 pub(crate) fn sha256_hash_from_bytes_raw(
     bytes: &[u8],
-    budget: impl AsBudget,
+    budget: &Budget,
 ) -> Result<[u8; 32], HostError> {
     let _span = tracy_span!("sha256");
-    budget.as_budget().charge(
+    budget.charge(
         ContractCostType::ComputeSha256Hash,
         Some(bytes.len() as u64),
     )?;
@@ -421,21 +421,19 @@ pub(crate) fn sha256_hash_from_bytes_raw(
 
 pub(crate) fn sha256_hash_from_bytes(
     bytes: &[u8],
-    budget: impl AsBudget,
+    budget: &Budget,
 ) -> Result<Vec<u8>, HostError> {
-    Vec::<u8>::charge_bulk_init_cpy(32, budget.clone())?;
+    Vec::<u8>::charge_bulk_init_cpy(32, budget)?;
     sha256_hash_from_bytes_raw(bytes, budget).map(|x| x.to_vec())
 }
 
 pub(crate) fn chacha20_fill_bytes(
     rng: &mut ChaCha20Rng,
     dest: &mut [u8],
-    budget: impl AsBudget,
+    budget: &Budget,
 ) -> Result<(), HostError> {
     let _span = tracy_span!("chacha20");
-    budget
-        .as_budget()
-        .charge(ContractCostType::ChaCha20DrawBytes, Some(dest.len() as u64))?;
+    budget.charge(ContractCostType::ChaCha20DrawBytes, Some(dest.len() as u64))?;
     rng.fill_bytes(dest);
     Ok(())
 }
@@ -455,7 +453,7 @@ pub(crate) fn chacha20_fill_bytes(
 
 pub(crate) fn unbias_prng_seed(
     seed: &[u8; SEED_BYTES as usize],
-    budget: impl AsBudget,
+    budget: &Budget,
 ) -> Result<[u8; SEED_BYTES as usize], HostError> {
     let _span = tracy_span!("unbias_prng_seed");
 
@@ -475,9 +473,7 @@ pub(crate) fn unbias_prng_seed(
 
     // Running HMAC will run SHA256 2 times on 64 bytes each time (32-byte salt
     // concatenated with 32-byte input).
-    budget
-        .as_budget()
-        .bulk_charge(ContractCostType::ComputeSha256Hash, 2, Some(64))?;
+    budget.bulk_charge(ContractCostType::ComputeSha256Hash, 2, Some(64))?;
 
     let mut hmac = Hmac::<Sha256>::new_from_slice(&SALT)
         .map_err(|_| Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InternalError))?;
