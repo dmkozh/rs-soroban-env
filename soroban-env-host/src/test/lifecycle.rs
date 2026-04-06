@@ -1123,7 +1123,7 @@ mod cap_54_55_56 {
         let args = host.vec_new()?;
         let _ = host.call(contract, test_symbol, args)?;
 
-        let budget = host.budget_cloned();
+        let budget = host.budget_ref();
 
         // Double check we're not charging the new cost types
         for ct in NEW_COST_TYPES {
@@ -1170,7 +1170,7 @@ mod cap_54_55_56 {
         let args = host.vec_new()?;
         let _ = host.call(contract, test_symbol, args)?;
 
-        let budget = host.budget_cloned();
+        let budget = host.budget_ref();
 
         // Check that we're not charging the old cost types
         assert_eq!(budget.get_tracker(VmInstantiation)?.cpu, 0);
@@ -1231,8 +1231,8 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
+        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
-            let budget = host.budget_cloned();
             storage.footprint.0 = storage
                 .footprint
                 .0
@@ -1280,8 +1280,8 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
+        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
-            let budget = host.budget_cloned();
             storage.map = storage.map.insert(wasm_key, None, &budget)?;
             Ok(())
         })?;
@@ -1326,8 +1326,8 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
+        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
-            let budget = host.budget_cloned();
             storage.footprint.0 = storage
                 .footprint
                 .0
@@ -1410,7 +1410,7 @@ mod cap_54_55_56 {
         )?;
 
         // Check that we have charged nonzero new-style wasm parsing costs.
-        let budget = host.budget_cloned();
+        let budget = host.budget_ref();
         let pre_parse_cost = budget.get_tracker(ParseWasmInstructions)?.cpu;
         assert_ne!(pre_parse_cost, 0);
 

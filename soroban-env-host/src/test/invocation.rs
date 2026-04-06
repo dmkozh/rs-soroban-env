@@ -56,7 +56,7 @@ fn invoke_alloc() -> Result<(), HostError> {
         host.test_vec_obj::<u32>(&[128])?,
     )?;
     assert!(res.shallow_eq(&8128_u32.into()));
-    let used_bytes = host.budget_cloned().get_mem_bytes_consumed()?;
+    let used_bytes = host.budget_ref().get_mem_bytes_consumed()?;
     // The general pattern of memory growth in this contract will be a sequence
     // of vector-doublings, but these are masked by the fact that we only see
     // the calls that cause the backing vector of wasm linear memory to grow,

@@ -3,10 +3,8 @@ use crate::xdr::{ContractCostParams, ContractCostType, ScErrorCode, ScErrorType}
 use crate::{Error, HostError};
 use core::fmt::Debug;
 
-/// Helper types to annotate boolean function arguments
-#[allow(dead_code)]
-pub(crate) struct IsCpu(pub(crate) bool);
-#[allow(dead_code)]
+/// Helper type to annotate boolean function argument for shadow mode checks.
+#[cfg(any(test, feature = "recording_mode", feature = "testutils"))]
 pub(crate) struct IsShadowMode(pub(crate) bool);
 
 #[derive(Clone)]
@@ -129,7 +127,7 @@ impl BudgetDimension {
         self.shadow_total_count = 0;
     }
 
-    #[allow(dead_code)]
+    #[cfg(any(test, feature = "recording_mode", feature = "testutils"))]
     pub(crate) fn check_budget_limit(&self, is_shadow: IsShadowMode) -> Result<(), HostError> {
         let over_limit = if is_shadow.0 {
             self.shadow_total_count > self.shadow_limit
@@ -142,49 +140,6 @@ impl BudgetDimension {
         } else {
             Ok(())
         }
-    }
-
-    /// Performs a bulk charge to the budget under the specified `CostType`.
-    /// If the input is `Some`, then the total input charged is iterations *
-    /// input, assuming all batched units have the same input size. If input
-    /// is `None`, the input is ignored and the model is treated as a constant
-    /// model, and amount charged is iterations * const_term.
-    /// Returns the amount charged.
-    /// Normal-mode charge: evaluates cost model and accumulates to total_count.
-    #[allow(dead_code)]
-    pub(crate) fn charge(
-        &mut self,
-        ty: ContractCostType,
-        iterations: u64,
-        input: Option<u64>,
-        _is_cpu: IsCpu,
-    ) -> Result<u64, HostError> {
-        let cm = self.get_cost_model(ty);
-        let amount = cm.evaluate(iterations, input);
-
-        #[cfg(all(not(target_family = "wasm"), feature = "tracy"))]
-        if _is_cpu.0 {
-            let _span = tracy_span!("charge");
-            _span.emit_text(ty.name());
-            _span.emit_value(amount);
-        }
-
-        self.total_count = self.total_count.saturating_add(amount);
-        Ok(amount)
-    }
-
-    /// Shadow-mode charge: evaluates cost model and accumulates to shadow_total_count.
-    #[allow(dead_code)]
-    pub(crate) fn charge_shadow(
-        &mut self,
-        ty: ContractCostType,
-        iterations: u64,
-        input: Option<u64>,
-    ) -> Result<u64, HostError> {
-        let cm = self.get_cost_model(ty);
-        let amount = cm.evaluate(iterations, input);
-        self.shadow_total_count = self.shadow_total_count.saturating_add(amount);
-        Ok(amount)
     }
 
     pub(crate) fn get_cost(

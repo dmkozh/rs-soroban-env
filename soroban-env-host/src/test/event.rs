@@ -216,7 +216,7 @@ fn test_diagnostic_events_do_not_affect_metering_with_debug_off() -> Result<(), 
 
     // NB: We don't observe here since the test is sensitive to shadow budget.
     let host = Host::test_host_with_prng();
-    let budget = host.as_budget().clone();
+    let budget = host.budget_ref().clone();
     budget.reset_default()?;
     let evts = log_some_diagnostics(host)?;
     assert_eq!(budget.get_cpu_insns_consumed()?, 0);
@@ -235,7 +235,7 @@ fn test_diagnostic_events_do_not_affect_metering_with_debug_on_and_sufficient_bu
     // NB: We don't observe here since the test is sensitive to shadow budget.
     let host = Host::test_host_with_prng();
     host.enable_debug()?;
-    let budget = host.as_budget().clone();
+    let budget = host.budget_ref().clone();
     budget.reset_default()?;
     let evts = log_some_diagnostics(host)?;
     assert_eq!(budget.get_cpu_insns_consumed()?, 0);
@@ -254,7 +254,7 @@ fn test_diagnostic_events_do_not_affect_metering_with_debug_on_and_insufficient_
     // NB: We don't observe here since the test is sensitive to shadow budget.
     let host = Host::test_host_with_prng();
     host.enable_debug()?;
-    let budget = host.as_budget().clone();
+    let budget = host.budget_ref().clone();
     budget.reset_default()?;
     host.set_shadow_budget_limits(100000, 100000)?;
     let evts = log_some_diagnostics(host)?;
@@ -305,7 +305,7 @@ fn too_many_event_topics() -> Result<(), HostError> {
     let topics: Vec<_> = (0..0x00FFFFFF).map(|u| Val::from_u32(u).to_val()).collect();
     // We don't observe this test: it makes way too big a trace.
     let host = Host::test_host_with_prng();
-    let budget = host.as_budget().clone();
+    let budget = host.as_budget();
     budget.reset_unlimited()?;
     let topics = host.vec_new_from_slice(topics.as_slice())?;
     // if the topics manages to pass through the host-val machineary and VecObject is
@@ -329,7 +329,7 @@ fn too_many_event_topics() -> Result<(), HostError> {
 #[test]
 fn too_big_event_topic() -> Result<(), HostError> {
     let host = observe_host!(Host::test_host_with_prng());
-    let budget = host.as_budget().clone();
+    let budget = host.as_budget();
     budget.reset_unlimited()?;
     let bytes = host.bytes_new_from_slice(&[0; 0x0FFFFFFF])?;
     let topics = host.vec_new_from_slice(&[bytes.to_val()])?;
@@ -349,7 +349,7 @@ fn too_big_event_topic() -> Result<(), HostError> {
 #[test]
 fn too_big_event_data() -> Result<(), HostError> {
     let host = observe_host!(Host::test_host_with_prng());
-    let budget = host.as_budget().clone();
+    let budget = host.as_budget();
     budget.reset_unlimited()?;
     let bytes = host.bytes_new_from_slice(&[0; 0x0FFFFFFF])?;
     let topics = host.vec_new_from_slice(&[Val::from_u32(0).to_val()])?;
@@ -371,7 +371,7 @@ fn too_big_event_data() -> Result<(), HostError> {
 fn too_many_events_in_loop() -> Result<(), HostError> {
     // We don't observe this test: it makes way too big a trace.
     let host = Host::test_host_with_prng();
-    let budget = host.as_budget().clone();
+    let budget = host.as_budget();
     budget.reset_unlimited()?;
     let topics = host.vec_new_from_slice(&[Val::from_u32(0).to_val()])?;
     budget.reset_default()?;

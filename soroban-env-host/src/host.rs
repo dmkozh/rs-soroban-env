@@ -627,7 +627,10 @@ impl Host {
         &self.0.budget
     }
 
-    pub fn budget_cloned(&self) -> Budget {
+    /// Returns a clone of the Budget Rc handle. Only use this when the budget
+    /// must outlive the host (e.g. returned from try_finish).
+    #[cfg(test)]
+    pub(crate) fn budget_cloned(&self) -> Budget {
         self.0.budget.clone()
     }
 
@@ -3884,12 +3887,11 @@ impl Host {
     /// Helper for mutating the [`Budget`] held in this [`Host`], either to
     /// allocate it on contract creation or to deplete it on callbacks from
     /// the VM or host functions.
-    #[allow(dead_code)]
     pub fn with_budget<T, F>(&self, f: F) -> Result<T, HostError>
     where
-        F: FnOnce(Budget) -> Result<T, HostError>,
+        F: FnOnce(&Budget) -> Result<T, HostError>,
     {
-        f(self.0.budget.clone())
+        f(&self.0.budget)
     }
 
     /// Returns the ledger number until a contract with given address lives
