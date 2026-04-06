@@ -228,7 +228,7 @@ impl BudgetImpl {
         ty: ContractCostType,
         iterations: u64,
         input: Option<u64>,
-    ) -> Result<u64, HostError> {
+    ) -> u64 {
         self.mem_bytes.get_cost(ty, iterations, input)
     }
 
@@ -238,56 +238,59 @@ impl BudgetImpl {
         iterations: u64,
         input: Option<u64>,
     ) -> Result<(), HostError> {
-        let tracker = self
-            .tracker
-            .cost_trackers
-            .get_mut(ty as usize)
-            .ok_or_else(|| HostError::from((ScErrorType::Budget, ScErrorCode::InternalError)))?;
-
-        if !self.is_in_shadow_mode {
-            // update tracker for reporting
-            self.tracker.meter_count = self.tracker.meter_count.saturating_add(1);
-            tracker.iterations = tracker.iterations.saturating_add(iterations);
-            match (&mut tracker.inputs, input) {
-                (None, None) => (),
-                (Some(t), Some(i)) => *t = t.saturating_add(i.saturating_mul(iterations)),
-                // internal logic error, a wrong cost type has been passed in
-                _ => return Err((ScErrorType::Budget, ScErrorCode::InternalError).into()),
-            };
+        if self.is_in_shadow_mode {
+            self.charge_shadow(ty, iterations, input)
+        } else {
+            self.charge_normal(ty, iterations, input)
         }
+    }
 
-        let cpu_charged = self.cpu_insns.charge(
-            ty,
-            iterations,
-            input,
-            IsCpu(true),
-            IsShadowMode(self.is_in_shadow_mode),
-        )?;
-        if !self.is_in_shadow_mode {
-            tracker.cpu = tracker.cpu.saturating_add(cpu_charged);
-        }
-        self.cpu_insns
-            .check_budget_limit(IsShadowMode(self.is_in_shadow_mode))?;
+    /// The normal (non-shadow) charge fast path. No shadow-mode checks.
+    fn charge_normal(
+        &mut self,
+        ty: ContractCostType,
+        iterations: u64,
+        input: Option<u64>,
+    ) -> Result<(), HostError> {
+        let tracker = &mut self.tracker.cost_trackers[ty as usize];
 
-        let mem_charged = self.mem_bytes.charge(
-            ty,
-            iterations,
-            input,
-            IsCpu(false),
-            IsShadowMode(self.is_in_shadow_mode),
-        )?;
-        if !self.is_in_shadow_mode {
-            tracker.mem = tracker.mem.saturating_add(mem_charged);
-        }
-        self.mem_bytes
-            .check_budget_limit(IsShadowMode(self.is_in_shadow_mode))
+        // update tracker for reporting
+        self.tracker.meter_count = self.tracker.meter_count.saturating_add(1);
+        tracker.iterations = tracker.iterations.saturating_add(iterations);
+        match (&mut tracker.inputs, input) {
+            (None, None) => (),
+            (Some(t), Some(i)) => *t = t.saturating_add(i.saturating_mul(iterations)),
+            // internal logic error, a wrong cost type has been passed in
+            _ => return Err((ScErrorType::Budget, ScErrorCode::InternalError).into()),
+        };
+
+        let cpu_charged = self.cpu_insns.charge(ty, iterations, input, IsCpu(true))?;
+        tracker.cpu = tracker.cpu.saturating_add(cpu_charged);
+        self.cpu_insns.check_budget_limit(IsShadowMode(false))?;
+
+        let mem_charged = self.mem_bytes.charge(ty, iterations, input, IsCpu(false))?;
+        tracker.mem = tracker.mem.saturating_add(mem_charged);
+        self.mem_bytes.check_budget_limit(IsShadowMode(false))
+    }
+
+    /// Shadow-mode charge path. Skips tracker updates, uses shadow counters/limits.
+    fn charge_shadow(
+        &mut self,
+        ty: ContractCostType,
+        iterations: u64,
+        input: Option<u64>,
+    ) -> Result<(), HostError> {
+        self.cpu_insns.charge_shadow(ty, iterations, input)?;
+        self.cpu_insns.check_budget_limit(IsShadowMode(true))?;
+        self.mem_bytes.charge_shadow(ty, iterations, input)?;
+        self.mem_bytes.check_budget_limit(IsShadowMode(true))
     }
 
     fn get_wasmi_fuel_remaining(&self) -> Result<u64, HostError> {
         let cpu_remaining = self.cpu_insns.get_remaining();
         let cost_model = self
             .cpu_insns
-            .get_cost_model(ContractCostType::WasmInsnExec)?;
+            .get_cost_model(ContractCostType::WasmInsnExec);
         let cpu_per_fuel = cost_model.const_term.max(1);
         // Due to rounding, the amount of cpu converted to fuel will be slightly
         // less than the total cpu available. This is okay because 1. that rounded-off
@@ -318,9 +321,7 @@ impl Default for BudgetImpl {
 
         for ct in ContractCostType::variants() {
             // define the cpu cost model parameters
-            let Ok(cpu) = b.cpu_insns.get_cost_model_mut(ct) else {
-                continue;
-            };
+            let cpu = b.cpu_insns.get_cost_model_mut(ct);
             match ct {
                 // This is the host cpu insn cost per wasm "fuel". Every "base" wasm
                 // instruction costs 1 fuel (by default), and some particular types of
@@ -690,9 +691,7 @@ impl Default for BudgetImpl {
             }
 
             // define the memory cost model parameters
-            let Ok(mem) = b.mem_bytes.get_cost_model_mut(ct) else {
-                continue;
-            };
+            let mem = b.mem_bytes.get_cost_model_mut(ct);
             match ct {
                 // This type is designated to the cpu cost. By definition, the memory cost
                 // of a (cpu) fuel is zero.
@@ -1175,9 +1174,7 @@ impl BudgetImpl {
         println!();
         println!();
         for ct in ContractCostType::variants() {
-            let Ok(cpu) = self.cpu_insns.get_cost_model(ct) else {
-                continue;
-            };
+            let cpu = self.cpu_insns.get_cost_model(ct);
             println!("case {}:", ct.name());
             println!(
                 "params[val] = ContractCostParamEntry{{ExtensionPoint{{0}}, {}, {}}};",
@@ -1190,9 +1187,7 @@ impl BudgetImpl {
         println!();
         println!();
         for ct in ContractCostType::variants() {
-            let Ok(mem) = self.mem_bytes.get_cost_model(ct) else {
-                continue;
-            };
+            let mem = self.mem_bytes.get_cost_model(ct);
             println!("case {}:", ct.name());
             println!(
                 "params[val] = ContractCostParamEntry{{ExtensionPoint{{0}}, {}, {}}};",
@@ -1329,9 +1324,10 @@ impl Budget {
         ty: ContractCostType,
         input: Option<u64>,
     ) -> Result<u64, HostError> {
-        self.0
+        Ok(self
+            .0
             .try_borrow_mut_or_err()?
-            .get_memory_cost(ty, 1, input)
+            .get_memory_cost(ty, 1, input))
     }
 
     /// Runs a user provided closure in shadow mode -- all metering is done

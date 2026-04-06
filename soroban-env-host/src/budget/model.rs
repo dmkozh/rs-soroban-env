@@ -28,7 +28,7 @@ use core::fmt::{Debug, Display};
 /// The parameters for a `CostModel` are calibrated empirically. See this
 /// crate's benchmarks for more details.
 pub trait HostCostModel {
-    fn evaluate(&self, iterations: u64, input: Option<u64>) -> Result<u64, HostError>;
+    fn evaluate(&self, iterations: u64, input: Option<u64>) -> u64;
 
     #[cfg(any(test, feature = "testutils", feature = "bench"))]
     fn reset(&mut self);
@@ -114,21 +114,18 @@ impl TryFrom<ContractCostParamEntry> for MeteredCostComponent {
 }
 
 impl HostCostModel for MeteredCostComponent {
-    fn evaluate(&self, iterations: u64, input: Option<u64>) -> Result<u64, HostError> {
+    #[inline(always)]
+    fn evaluate(&self, iterations: u64, input: Option<u64>) -> u64 {
         let const_term = self.const_term.saturating_mul(iterations);
         match input {
             Some(input) => {
-                let mut res = const_term;
-                if !self.lin_term.is_zero() {
-                    let lin_cost = self
-                        .lin_term
-                        .saturating_mul(input)
-                        .saturating_mul(iterations);
-                    res = res.saturating_add(lin_cost.unscale())
-                }
-                Ok(res)
+                let lin_cost = self
+                    .lin_term
+                    .saturating_mul(input)
+                    .saturating_mul(iterations);
+                const_term.saturating_add(lin_cost.unscale())
             }
-            None => Ok(const_term),
+            None => const_term,
         }
     }
 
@@ -151,12 +148,12 @@ mod test {
         };
         // low iteration + low input
         // the constant part is 3, the linear part is 5 >> 7 == 0, total is 3
-        assert_eq!(3, test_model.evaluate(1, Some(1)).unwrap());
+        assert_eq!(3, test_model.evaluate(1, Some(1)));
         // low iteration + high input
         // the contant part is 3, the linear part is (26 * 5) >> 7 == 1, total is 4
-        assert_eq!(4, test_model.evaluate(1, Some(26)).unwrap());
+        assert_eq!(4, test_model.evaluate(1, Some(26)));
         // high iteration + low input
         // the constant part is 26 * 3 == 78, the linear part is (26 * 5) >> 7 == 1, total is 79
-        assert_eq!(79, test_model.evaluate(26, Some(1)).unwrap());
+        assert_eq!(79, test_model.evaluate(26, Some(1)));
     }
 }

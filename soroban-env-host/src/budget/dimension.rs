@@ -93,32 +93,20 @@ impl BudgetDimension {
         Ok(bd)
     }
 
+    // The cost_models array is statically sized to ContractCostType::variants().len(),
+    // so indexing by `ty as usize` is always in bounds.
     pub(crate) fn get_cost_model(
         &self,
         ty: ContractCostType,
-    ) -> Result<&MeteredCostComponent, HostError> {
-        self.cost_models.get(ty as usize).ok_or_else(|| {
-            // cost models are initialized with the static size of the
-            // ContractCostType, so this call should always succeed
-            HostError::from(Error::from_type_and_code(
-                ScErrorType::Budget,
-                ScErrorCode::InternalError,
-            ))
-        })
+    ) -> &MeteredCostComponent {
+        &self.cost_models[ty as usize]
     }
 
     pub(crate) fn get_cost_model_mut(
         &mut self,
         ty: ContractCostType,
-    ) -> Result<&mut MeteredCostComponent, HostError> {
-        self.cost_models.get_mut(ty as usize).ok_or_else(|| {
-            // cost models are initialized with the static size of the
-            // ContractCostType, so this call should always succeed
-            HostError::from(Error::from_type_and_code(
-                ScErrorType::Budget,
-                ScErrorCode::InternalError,
-            ))
-        })
+    ) -> &mut MeteredCostComponent {
+        &mut self.cost_models[ty as usize]
     }
 
     pub(crate) fn get_total_count(&self) -> u64 {
@@ -160,16 +148,16 @@ impl BudgetDimension {
     /// is `None`, the input is ignored and the model is treated as a constant
     /// model, and amount charged is iterations * const_term.
     /// Returns the amount charged.
+    /// Normal-mode charge: evaluates cost model and accumulates to total_count.
     pub(crate) fn charge(
         &mut self,
         ty: ContractCostType,
         iterations: u64,
         input: Option<u64>,
         _is_cpu: IsCpu,
-        is_shadow: IsShadowMode,
     ) -> Result<u64, HostError> {
-        let cm = self.get_cost_model(ty)?;
-        let amount = cm.evaluate(iterations, input)?;
+        let cm = self.get_cost_model(ty);
+        let amount = cm.evaluate(iterations, input);
 
         #[cfg(all(not(target_family = "wasm"), feature = "tracy"))]
         if _is_cpu.0 {
@@ -178,12 +166,20 @@ impl BudgetDimension {
             _span.emit_value(amount);
         }
 
-        if is_shadow.0 {
-            self.shadow_total_count = self.shadow_total_count.saturating_add(amount);
-        } else {
-            self.total_count = self.total_count.saturating_add(amount);
-        }
+        self.total_count = self.total_count.saturating_add(amount);
+        Ok(amount)
+    }
 
+    /// Shadow-mode charge: evaluates cost model and accumulates to shadow_total_count.
+    pub(crate) fn charge_shadow(
+        &mut self,
+        ty: ContractCostType,
+        iterations: u64,
+        input: Option<u64>,
+    ) -> Result<u64, HostError> {
+        let cm = self.get_cost_model(ty);
+        let amount = cm.evaluate(iterations, input);
+        self.shadow_total_count = self.shadow_total_count.saturating_add(amount);
         Ok(amount)
     }
 
@@ -192,8 +188,8 @@ impl BudgetDimension {
         ty: ContractCostType,
         iterations: u64,
         input: Option<u64>,
-    ) -> Result<u64, HostError> {
-        self.get_cost_model(ty)?.evaluate(iterations, input)
+    ) -> u64 {
+        self.get_cost_model(ty).evaluate(iterations, input)
     }
 
     // Resets all model parameters to zero (so that we can override and test individual ones later).
