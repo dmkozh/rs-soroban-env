@@ -12,7 +12,7 @@ use crate::{
         ScErrorType, ScMap, ScMapEntry, ScNonceKey, ScVal, ScVec, TimePoint, TrustLineAsset,
         UInt128Parts, UInt256Parts, Uint256,
     },
-    Compare, Host, HostError, SymbolStr, I256, U256,
+    Compare, Host, HostError, Object, SymbolStr, Val, I256, U256,
 };
 
 use super::declared_size::DeclaredSizeForMetering;
@@ -430,6 +430,209 @@ impl Compare<LedgerKey> for Budget {
             (Account(_), _) | (Trustline(_), _) | (ContractData(_), _) | (ContractCode(_), _) => {
                 Ok(a.discriminant().cmp(&b.discriminant()))
             }
+        }
+    }
+}
+
+// Unmetered comparison functions.
+//
+// These perform the same logical comparison as the metered `Compare` trait
+// impls above, but skip all budget charges. They are intended to be called
+// after a single up-front MemCmp charge covering the entire object tree
+// (based on ObjectMeta.xdr_byte_size), so per-element charges are redundant.
+
+use crate::host_object::handle_to_index;
+
+impl Host {
+    /// Compare two HostObjects without any budget charges.
+    /// Caller must have already charged MemCmp for the comparison.
+    pub(crate) fn compare_host_objects_unmetered(
+        &self,
+        a: &HostObject,
+        b: &HostObject,
+    ) -> Result<Ordering, HostError> {
+        use HostObject::*;
+        match (a, b) {
+            (U64(a), U64(b)) => Ok(a.cmp(b)),
+            (I64(a), I64(b)) => Ok(a.cmp(b)),
+            (TimePoint(a), TimePoint(b)) => Ok(a.cmp(b)),
+            (Duration(a), Duration(b)) => Ok(a.cmp(b)),
+            (U128(a), U128(b)) => Ok(a.cmp(b)),
+            (I128(a), I128(b)) => Ok(a.cmp(b)),
+            (U256(a), U256(b)) => Ok(a.cmp(b)),
+            (I256(a), I256(b)) => Ok(a.cmp(b)),
+            (Bytes(a), Bytes(b)) => Ok(a.as_slice().cmp(b.as_slice())),
+            (String(a), String(b)) => Ok(a.as_slice().cmp(b.as_slice())),
+            (Symbol(a), Symbol(b)) => Ok(a.as_slice().cmp(b.as_slice())),
+            (Address(a), Address(b)) => Ok(a.cmp(b)),
+            (MuxedAddress(a), MuxedAddress(b)) => Ok(a.cmp(b)),
+            // Vec and Map can recurse — apply depth limit as a stack
+            // overflow safety net. (Should eventually move to object creation.)
+            (Vec(a), Vec(b)) => {
+                return self.budget_ref().with_limited_depth(|| {
+                    let a_vals = a.as_slice();
+                    let b_vals = b.as_slice();
+                    let mut i = 0;
+                    loop {
+                        match (a_vals.get(i), b_vals.get(i)) {
+                            (None, None) => return Ok(Ordering::Equal),
+                            (None, Some(_)) => return Ok(Ordering::Less),
+                            (Some(_), None) => return Ok(Ordering::Greater),
+                            (Some(av), Some(bv)) => {
+                                match self.compare_val_unmetered(*av, *bv)? {
+                                    Ordering::Equal => i += 1,
+                                    unequal => return Ok(unequal),
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            (Map(a), Map(b)) => {
+                return self.budget_ref().with_limited_depth(|| {
+                    let a_entries = a.map.as_slice();
+                    let b_entries = b.map.as_slice();
+                    let mut i = 0;
+                    loop {
+                        match (a_entries.get(i), b_entries.get(i)) {
+                            (None, None) => return Ok(Ordering::Equal),
+                            (None, Some(_)) => return Ok(Ordering::Less),
+                            (Some(_), None) => return Ok(Ordering::Greater),
+                            (Some((ak, av)), Some((bk, bv))) => {
+                                match self.compare_val_unmetered(*ak, *bk)? {
+                                    Ordering::Equal => {
+                                        match self.compare_val_unmetered(*av, *bv)? {
+                                            Ordering::Equal => i += 1,
+                                            unequal => return Ok(unequal),
+                                        }
+                                    }
+                                    unequal => return Ok(unequal),
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            // Different discriminants
+            (U64(_), _)
+            | (I64(_), _)
+            | (TimePoint(_), _)
+            | (Duration(_), _)
+            | (U128(_), _)
+            | (I128(_), _)
+            | (U256(_), _)
+            | (I256(_), _)
+            | (Vec(_), _)
+            | (Map(_), _)
+            | (Bytes(_), _)
+            | (String(_), _)
+            | (Symbol(_), _)
+            | (Address(_), _)
+            | (MuxedAddress(_), _) => {
+                let a = host_obj_discriminant(a);
+                let b = host_obj_discriminant(b);
+                Ok(a.cmp(&b))
+            }
+        }
+    }
+
+    /// Compare two Vals without any budget charges.
+    /// For inline Vals, uses proper typed comparison via wrapper Ord impls.
+    /// For object Vals, looks up HostObjects and recurses.
+    pub(crate) fn compare_val_unmetered(
+        &self,
+        a: Val,
+        b: Val,
+    ) -> Result<Ordering, HostError> {
+        if a.get_payload() == b.get_payload() {
+            return Ok(Ordering::Equal);
+        }
+        if a.is_object() || b.is_object() {
+            // At least one is an object. If tags differ, compare tags
+            // (which correspond to ScVal discriminant order).
+            let a_tag = a.get_tag();
+            let b_tag = b.get_tag();
+            if a_tag != b_tag {
+                return Ok(a_tag.cmp(&b_tag));
+            }
+            // Same object tag: look up both objects and compare.
+            let a_obj = Object::try_from(a).map_err(|_| {
+                self.err(
+                    ScErrorType::Value,
+                    ScErrorCode::InternalError,
+                    "expected object val in unmetered compare",
+                    &[],
+                )
+            })?;
+            let b_obj = Object::try_from(b).map_err(|_| {
+                self.err(
+                    ScErrorType::Value,
+                    ScErrorCode::InternalError,
+                    "expected object val in unmetered compare",
+                    &[],
+                )
+            })?;
+            let r = self.try_borrow_objects()?;
+            let a_ho = r
+                .get(handle_to_index(a_obj.get_handle()))
+                .map(|(ho, _)| ho)
+                .ok_or_else(|| {
+                    self.err(
+                        ScErrorType::Value,
+                        ScErrorCode::InternalError,
+                        "unknown object in unmetered compare",
+                        &[],
+                    )
+                })?;
+            let b_ho = r
+                .get(handle_to_index(b_obj.get_handle()))
+                .map(|(ho, _)| ho)
+                .ok_or_else(|| {
+                    self.err(
+                        ScErrorType::Value,
+                        ScErrorCode::InternalError,
+                        "unknown object in unmetered compare",
+                        &[],
+                    )
+                })?;
+            return self.compare_host_objects_unmetered(a_ho, b_ho);
+        }
+        // Non-object Vals: use the same typed comparison as the metered
+        // path, just without budget charges. This is important because
+        // signed types (I32Val, I64Small, I128Small, I256Small) need
+        // sign-aware comparison, not raw payload comparison.
+        compare_small_vals_unmetered(a, b)
+    }
+}
+
+/// Compare two non-object Vals without budget charges.
+/// For same-tag Vals, uses sign-aware body comparison for signed types,
+/// and unsigned body comparison for everything else.
+fn compare_small_vals_unmetered(a: Val, b: Val) -> Result<Ordering, HostError> {
+    use soroban_env_common::Tag;
+    let a_tag = a.get_tag();
+    let b_tag = b.get_tag();
+    if a_tag < b_tag {
+        return Ok(Ordering::Less);
+    } else if a_tag > b_tag {
+        return Ok(Ordering::Greater);
+    }
+    // Same tag: compare bodies (payload >> 8). Signed types need
+    // sign-aware comparison via arithmetic right shift.
+    const TAG_BITS: u32 = 8;
+    match a_tag {
+        Tag::False | Tag::True | Tag::Void => Ok(Ordering::Equal),
+        // Signed types: arithmetic right-shift preserves sign.
+        Tag::I32Val | Tag::I64Small | Tag::I128Small | Tag::I256Small => {
+            let a_body = (a.get_payload() as i64) >> TAG_BITS;
+            let b_body = (b.get_payload() as i64) >> TAG_BITS;
+            Ok(a_body.cmp(&b_body))
+        }
+        // All other inline types: unsigned body comparison is correct.
+        _ => {
+            let a_body = a.get_payload() >> TAG_BITS;
+            let b_body = b.get_payload() >> TAG_BITS;
+            Ok(a_body.cmp(&b_body))
         }
     }
 }

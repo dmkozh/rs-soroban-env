@@ -157,6 +157,88 @@ impl HostObject {
         };
         Ok(res)
     }
+
+    /// Like `try_compare_to_small` but without budget charges.
+    /// These are all trivial scalar comparisons that don't need metering.
+    pub(crate) fn try_compare_to_small_unmetered(
+        &self,
+        rv: Val,
+    ) -> Result<Option<core::cmp::Ordering>, HostError> {
+        let res = match self {
+            HostObject::U64(u) => {
+                let Ok(small) = U64Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: u64 = small.into();
+                Some(u.cmp(&small))
+            }
+            HostObject::I64(i) => {
+                let Ok(small) = I64Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: i64 = small.into();
+                Some(i.cmp(&small))
+            }
+            HostObject::TimePoint(tp) => {
+                let Ok(small) = TimepointSmall::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: u64 = small.into();
+                Some(tp.0.cmp(&small))
+            }
+            HostObject::Duration(d) => {
+                let Ok(small) = DurationSmall::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: u64 = small.into();
+                Some(d.0.cmp(&small))
+            }
+            HostObject::U128(u) => {
+                let Ok(small) = U128Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: u128 = small.into();
+                Some(u.cmp(&small))
+            }
+            HostObject::I128(i) => {
+                let Ok(small) = I128Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: i128 = small.into();
+                Some(i.cmp(&small))
+            }
+            HostObject::U256(u) => {
+                let Ok(small) = U256Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: U256 = small.into();
+                Some(u.cmp(&small))
+            }
+            HostObject::I256(i) => {
+                let Ok(small) = I256Small::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: I256 = small.into();
+                Some(i.cmp(&small))
+            }
+            HostObject::Symbol(s) => {
+                let Ok(small) = SymbolSmall::try_from(rv) else {
+                    return Ok(None);
+                };
+                let small: SymbolStr = small.into();
+                let rhs: &[u8] = small.as_ref();
+                Some(s.as_vec().as_slice().cmp(rhs))
+            }
+
+            HostObject::Vec(_)
+            | HostObject::Map(_)
+            | HostObject::Bytes(_)
+            | HostObject::String(_)
+            | HostObject::Address(_)
+            | HostObject::MuxedAddress(_) => None,
+        };
+        Ok(res)
+    }
 }
 
 pub(crate) trait HostObjectType: MeteredClone {

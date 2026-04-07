@@ -1226,22 +1226,45 @@ impl VmCallerEnv for Host {
         Ok(Val::VOID)
     }
 
-    // Metered: covered by `visit`.
+    // Metered: single MemCmp charge based on ObjectMeta.xdr_byte_size,
+    // then unmetered comparison. VisitObject charged per object access.
     fn obj_cmp(&self, _vmcaller: &mut VmCaller<Host>, a: Val, b: Val) -> Result<i64, HostError> {
+        use crate::host_object::handle_to_index;
         let res = match {
             match (Object::try_from(a), Object::try_from(b)) {
-                // We were given two objects: compare them.
-                (Ok(a), Ok(b)) => self.visit_obj_untyped(a, |ao| {
-                    // They might each be None but that's ok, None compares less than Some.
-                    self.visit_obj_untyped(b, |bo| Ok(Some(self.compare(&ao, &bo)?)))
-                })?,
+                // Two objects: charge once for the whole comparison, then
+                // compare without per-element metering.
+                (Ok(a_obj), Ok(b_obj)) => {
+                    // Charge VisitObject for both accesses.
+                    self.charge_budget(ContractCostType::VisitObject, None)?;
+                    self.charge_budget(ContractCostType::VisitObject, None)?;
+                    let r = self.try_borrow_objects()?;
+                    let a_idx = handle_to_index(a_obj.get_handle());
+                    let b_idx = handle_to_index(b_obj.get_handle());
+                    match (r.get(a_idx), r.get(b_idx)) {
+                        (Some((a_ho, a_meta)), Some((b_ho, b_meta))) => {
+                            // Charge a single MemCmp for the larger object's XDR size.
+                            let charge_size =
+                                a_meta.xdr_byte_size.max(b_meta.xdr_byte_size) as u64;
+                            self.charge_budget(ContractCostType::MemCmp, Some(charge_size))?;
+                            Some(self.compare_host_objects_unmetered(a_ho, b_ho)?)
+                        }
+                        _ => {
+                            return Err(self.err(
+                                ScErrorType::Value,
+                                ScErrorCode::InvalidInput,
+                                "unknown object reference in obj_cmp",
+                                &[a, b],
+                            ));
+                        }
+                    }
+                }
 
-                // We were given an object and a non-object: try a small-value comparison.
+                // Object and non-object: trivial scalar comparison, no metering needed.
                 (Ok(a), Err(_)) => self
-                    .visit_obj_untyped(a, |aobj| aobj.try_compare_to_small(self.as_budget(), b))?,
-                // Same as previous case, but reversing the resulting order.
+                    .visit_obj_untyped(a, |aobj| aobj.try_compare_to_small_unmetered(b))?,
                 (Err(_), Ok(b)) => self.visit_obj_untyped(b, |bobj| {
-                    let ord = bobj.try_compare_to_small(self.as_budget(), a)?;
+                    let ord = bobj.try_compare_to_small_unmetered(a)?;
                     Ok(match ord {
                         Some(Ordering::Less) => Some(Ordering::Greater),
                         Some(Ordering::Greater) => Some(Ordering::Less),

@@ -81,6 +81,9 @@ fn deep_host_obj_cmp() -> Result<(), HostError> {
         hv2 = host.vec_push_back(vv, hv2.to_val())?;
     }
 
+    // TODO: This should fail during vec construction (depth enforcement
+    // at object creation time), not during comparison. For now it still
+    // fails during comparison via with_limited_depth as a safety net.
     let res = host.obj_cmp(hv.to_val(), hv2.to_val());
     let code = (ScErrorType::Context, ScErrorCode::ExceededLimit);
     assert!(HostError::result_matches_err(res, code));
