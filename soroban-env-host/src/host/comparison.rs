@@ -434,6 +434,107 @@ impl Compare<LedgerKey> for Budget {
     }
 }
 
+use crate::storage::StorageKey;
+
+fn storage_key_discriminant(sk: &StorageKey) -> u32 {
+    match sk {
+        StorageKey::ContractData { .. } => 0,
+        StorageKey::ContractInstance { .. } => 1,
+        StorageKey::Other(_) => 2,
+    }
+}
+
+impl Compare<StorageKey> for Budget {
+    type Error = HostError;
+
+    fn compare(&self, a: &StorageKey, b: &StorageKey) -> Result<Ordering, Self::Error> {
+        match (a, b) {
+            // ContractData comparison: used only in FootprintMap (Budget context).
+            // The Val key comparison here uses compare_small_vals_unmetered which
+            // handles inline Vals correctly. Object Vals in storage keys should
+            // not appear in footprint maps directly (footprint shares Rc pointers
+            // with storage map).
+            (
+                StorageKey::ContractData {
+                    contract_id: a_id,
+                    key: a_key,
+                    durability: a_dur,
+                },
+                StorageKey::ContractData {
+                    contract_id: b_id,
+                    key: b_key,
+                    durability: b_dur,
+                },
+            ) => {
+                match self.compare(a_id, b_id)? {
+                    Ordering::Equal => {}
+                    cmp => return Ok(cmp),
+                }
+                match self.compare(a_dur, b_dur)? {
+                    Ordering::Equal => {}
+                    cmp => return Ok(cmp),
+                }
+                self.charge(ContractCostType::MemCmp, Some(8))?;
+                compare_small_vals_unmetered(*a_key, *b_key)
+            }
+            (
+                StorageKey::ContractInstance { contract_id: a_id },
+                StorageKey::ContractInstance { contract_id: b_id },
+            ) => self.compare(a_id, b_id),
+            (StorageKey::Other(a_lk), StorageKey::Other(b_lk)) => self.compare(a_lk, b_lk),
+            _ => {
+                // Cross-variant: compare by discriminant order.
+                Ok(storage_key_discriminant(a).cmp(&storage_key_discriminant(b)))
+            }
+        }
+    }
+}
+
+impl Compare<StorageKey> for Host {
+    type Error = HostError;
+
+    fn compare(&self, a: &StorageKey, b: &StorageKey) -> Result<Ordering, Self::Error> {
+        match (a, b) {
+            // ContractData comparison: uses optimized Val comparison via Host.
+            // This handles both inline Vals and object Vals correctly.
+            (
+                StorageKey::ContractData {
+                    contract_id: a_id,
+                    key: a_key,
+                    durability: a_dur,
+                },
+                StorageKey::ContractData {
+                    contract_id: b_id,
+                    key: b_key,
+                    durability: b_dur,
+                },
+            ) => {
+                match self.as_budget().compare(a_id, b_id)? {
+                    Ordering::Equal => {}
+                    cmp => return Ok(cmp),
+                }
+                match self.as_budget().compare(a_dur, b_dur)? {
+                    Ordering::Equal => {}
+                    cmp => return Ok(cmp),
+                }
+                // Use the Host's Val comparison which handles object Vals
+                // via the optimized single-charge obj_cmp path.
+                <Self as Compare<Val>>::compare(self, a_key, b_key)
+            }
+            (
+                StorageKey::ContractInstance { contract_id: a_id },
+                StorageKey::ContractInstance { contract_id: b_id },
+            ) => self.as_budget().compare(a_id, b_id),
+            (StorageKey::Other(a_lk), StorageKey::Other(b_lk)) => {
+                self.as_budget().compare(a_lk, b_lk)
+            }
+            _ => {
+                Ok(storage_key_discriminant(a).cmp(&storage_key_discriminant(b)))
+            }
+        }
+    }
+}
+
 // Unmetered comparison functions.
 //
 // These perform the same logical comparison as the metered `Compare` trait

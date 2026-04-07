@@ -4,8 +4,7 @@ use crate::{
     builtin_contracts::account_contract::ACCOUNT_CONTRACT_CHECK_AUTH_FN_NAME,
     e2e_invoke::{encode_contract_events, entry_size_for_rent},
     fees::{FeeConfiguration, DATA_SIZE_1KB_INCREMENT, INSTRUCTIONS_INCREMENT, TTL_ENTRY_SIZE},
-    ledger_info::get_key_durability,
-    storage::{is_persistent_key, AccessType, Storage},
+    storage::{AccessType, Storage},
     xdr::{
         ContractDataDurability, ContractId, HostFunction, LedgerEntryData, LedgerKey, ScAddress,
         ScErrorCode, ScErrorType, ScSymbol,
@@ -443,20 +442,30 @@ impl InvocationResources {
         if let Ok(storage) = host.try_borrow_storage() {
             if let Ok(footprint_iter) = storage.footprint.0.iter(host.budget_ref()) {
                 for (key, _access_type) in footprint_iter {
-                    // Serialize the key to get its size
+                    // Serialize the key to get its size - need LedgerKey for XDR
                     let mut key_buf = Vec::<u8>::new();
-                    if metered_write_xdr(host.budget_ref(), key.as_ref(), &mut key_buf).is_ok() {
-                        let key_size = key_buf.len() as u32;
+                    let is_contract_data = matches!(
+                        key.as_ref(),
+                        crate::storage::StorageKey::ContractData { .. }
+                            | crate::storage::StorageKey::ContractInstance { .. }
+                    ) || matches!(
+                        key.as_ref(),
+                        crate::storage::StorageKey::Other(LedgerKey::ContractData(_))
+                    );
+                    if let Some(lk) = key.as_ledger_key() {
+                        if metered_write_xdr(host.budget_ref(), lk, &mut key_buf).is_ok() {
+                            let key_size = key_buf.len() as u32;
 
-                        // Check contract data key size limit
-                        if matches!(key.as_ref(), LedgerKey::ContractData(_)) {
-                            if key_size > limits.max_contract_data_key_size_bytes {
-                                exceeded.push(format!(
-                                    "contract data key '{:?}' size: {} > {}",
-                                    key.as_ref(),
-                                    key_size,
-                                    limits.max_contract_data_key_size_bytes
-                                ));
+                            // Check contract data key size limit
+                            if is_contract_data {
+                                if key_size > limits.max_contract_data_key_size_bytes {
+                                    exceeded.push(format!(
+                                        "contract data key '{:?}' size: {} > {}",
+                                        key.as_ref(),
+                                        key_size,
+                                        limits.max_contract_data_key_size_bytes
+                                    ));
+                                }
                             }
                         }
                     }
@@ -961,10 +970,8 @@ impl Host {
             let maybe_init_entry = init_storage_snapshot.get_from_map(key, self)?;
             let mut init_entry_size_for_rent = 0;
             let mut init_live_until_ledger = curr_ledger_seq;
-            let mut is_disk_read = match key.as_ref() {
-                LedgerKey::ContractData(_) | LedgerKey::ContractCode(_) => false,
-                _ => true,
-            };
+            let has_durability = key.get_durability().is_some();
+            let mut is_disk_read = !has_durability;
             if let Some((init_entry, init_entry_live_until)) = maybe_init_entry {
                 if let Some(live_until) = init_entry_live_until {
                     if live_until >= curr_ledger_seq {
@@ -975,7 +982,8 @@ impl Host {
                         // If the entry is persistent and it has expired, then
                         // we deal with the autorestore and thus need to mark
                         // the entry as disk read.
-                        is_disk_read = is_persistent_key(key.as_ref());
+                        is_disk_read =
+                            crate::storage::is_persistent_storage_key(key.as_ref());
                     }
                 }
 
@@ -1020,7 +1028,7 @@ impl Host {
                 let rent_ledger_bytes = existing_ledgers * rent_size_delta
                     + extension_ledgers * (new_entry_size_for_rent as i64);
                 if rent_ledger_bytes > 0 {
-                    match get_key_durability(key.as_ref()) {
+                    match key.get_durability() {
                         Some(ContractDataDurability::Temporary) => {
                             invocation_resources.temporary_rent_ledger_bytes += rent_ledger_bytes;
                             invocation_resources.temporary_entry_rent_bumps += 1;
@@ -1091,8 +1099,8 @@ mod test {
         // contract), so 2 writes/bumps are expected.
         expect![[r#"
             InvocationResources {
-                instructions: 4199686,
-                mem_bytes: 2863204,
+                instructions: 4200697,
+                mem_bytes: 2863476,
                 disk_read_entries: 0,
                 memory_read_entries: 2,
                 write_entries: 2,
@@ -1109,8 +1117,8 @@ mod test {
             DetailedInvocationResources {
                 invocation: CreateContractEntryPoint,
                 resources: SubInvocationResources {
-                    instructions: 4199686,
-                    mem_bytes: 2863204,
+                    instructions: 4200697,
+                    mem_bytes: 2863476,
                     disk_read_entries: 0,
                     memory_read_entries: 2,
                     write_entries: 2,
@@ -1145,8 +1153,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316637,
-                mem_bytes: 1134859,
+                instructions: 317619,
+                mem_bytes: 1135016,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1172,8 +1180,8 @@ mod test {
                     ),
                 ),
                 resources: SubInvocationResources {
-                    instructions: 316637,
-                    mem_bytes: 1134859,
+                    instructions: 317619,
+                    mem_bytes: 1135016,
                     disk_read_entries: 0,
                     memory_read_entries: 3,
                     write_entries: 0,
@@ -1258,8 +1266,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 322157,
-                mem_bytes: 1135678,
+                instructions: 323139,
+                mem_bytes: 1135835,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 1,
@@ -1362,8 +1370,8 @@ mod test {
         assert!(res.is_err());
         expect![[r#"
             InvocationResources {
-                instructions: 317540,
-                mem_bytes: 1135195,
+                instructions: 318524,
+                mem_bytes: 1135356,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 0,
@@ -1874,7 +1882,7 @@ mod test {
                             ),
                             data: String(
                                 ScString(
-                                    StringM(invocation resource limits are exceeded: instructions: 1861725 > 10, memory bytes: 1163433 > 20, contract events size bytes: 800 > 50, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(1a2ee5a89dd2162a20e716b3e2de70a2d662480a9565350378661871bcf8e398) })' size: 1840 > 45),
+                                    StringM(invocation resource limits are exceeded: instructions: 1861725 > 10, memory bytes: 1163433 > 20, contract events size bytes: 800 > 50, contract data key 'Other(ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent }))' size: 48 > 25, contract data entry with key 'Other(ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(2e0ff7a55065f3a896723a964c3d9862a4722bfc77229fe4875f390ef2a0027e))), key: LedgerKeyContractInstance, durability: Persistent }))' size: 104 > 35, contract code entry with key 'Other(ContractCode(LedgerKeyContractCode { hash: Hash(1a2ee5a89dd2162a20e716b3e2de70a2d662480a9565350378661871bcf8e398) }))' size: 1840 > 45),
                                 ),
                             ),
                         },
@@ -1927,7 +1935,7 @@ mod test {
                             ),
                             data: String(
                                 ScString(
-                                    StringM(invocation resource limits are exceeded: instructions: 320964 > 10, memory bytes: 1135814 > 20, total footprint ledger entries: 5 > 4, disk read ledger entries: 2 > 1, disk read bytes: 3132 > 30, write ledger entries: 2 > 0, write bytes: 3132 > 40, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: Symbol(ScSymbol(StringM(key_1))), durability: Persistent })' size: 60 > 25, contract data key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 48 > 25, contract data entry with key 'ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent })' size: 104 > 35, contract code entry with key 'ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) })' size: 3028 > 45),
+                                    StringM(invocation resource limits are exceeded: instructions: 321946 > 10, memory bytes: 1135971 > 20, total footprint ledger entries: 5 > 4, disk read ledger entries: 2 > 1, disk read bytes: 3132 > 30, write ledger entries: 2 > 0, write bytes: 3132 > 40, contract data key 'Other(ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: Symbol(ScSymbol(StringM(key_1))), durability: Persistent }))' size: 60 > 25, contract data key 'Other(ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent }))' size: 48 > 25, contract data entry with key 'Other(ContractData(LedgerKeyContractData { contract: Contract(ContractId(Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441))), key: LedgerKeyContractInstance, durability: Persistent }))' size: 104 > 35, contract code entry with key 'Other(ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) }))' size: 3028 > 45),
                                 ),
                             ),
                         },

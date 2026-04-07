@@ -133,13 +133,17 @@ impl Host {
         contract: ScAddress,
         key: ScVal,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<Rc<crate::storage::StorageKey>, HostError> {
+        // Use StorageKey::from_ledger_key which normalizes ContractInstance
+        // keys to the ContractInstance variant. All other keys remain as
+        // Other(LedgerKey) to ensure they match keys created from XDR.
+        let lk = LedgerKey::ContractData(LedgerKeyContractData {
+            contract,
+            key,
+            durability,
+        });
         Rc::metered_new(
-            LedgerKey::ContractData(LedgerKeyContractData {
-                contract,
-                key,
-                durability,
-            }),
+            crate::storage::StorageKey::from_ledger_key(lk, self.as_budget())?,
             self.as_budget(),
         )
     }
@@ -148,19 +152,22 @@ impl Host {
         &self,
         key: ScVal,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<Rc<crate::storage::StorageKey>, HostError> {
         let contract_id = self.get_current_contract_id_internal()?;
         self.storage_key_for_address(ScAddress::Contract(contract_id), key, durability)
     }
 
     /// Converts a [`Val`] to an [`ScVal`] and combines it with the currently-executing
-    /// [`ContractID`] to produce a [`Key`], that can be used to access ledger [`Storage`].
+    /// [`ContractID`] to produce a [`StorageKey`], that can be used to access ledger [`Storage`].
     // Notes on metering: covered by components.
     pub(crate) fn storage_key_from_val(
         &self,
         k: Val,
         durability: ContractDataDurability,
-    ) -> Result<Rc<LedgerKey>, HostError> {
+    ) -> Result<Rc<crate::storage::StorageKey>, HostError> {
+        // TODO: Once storage init is restructured to build StorageKey::ContractData
+        // variants from external LedgerKeys (requires Host for ScVal→Val),
+        // this can skip the Val→ScVal conversion for inline Vals.
         let key_scval = self.from_host_val_for_storage(k)?;
         self.storage_key_from_scval(key_scval, durability)
     }

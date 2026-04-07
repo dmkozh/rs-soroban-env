@@ -1,14 +1,39 @@
 #![allow(dead_code)]
 use crate::{
-    budget::AsBudget,
+    budget::{AsBudget, Budget},
     events::InternalEvent,
     host::{
         metered_hash::{CountingHasher, MeteredHash, MeteredHashXdr},
         Context, Frame,
     },
+    storage::StorageKey,
     Host, HostError, Val,
 };
 use std::{fmt::Debug, hash::Hasher, rc::Rc};
+
+fn metered_hash_storage_key(
+    sk: &StorageKey,
+    hasher: &mut CountingHasher,
+    budget: &Budget,
+) -> Result<(), HostError> {
+    match sk {
+        StorageKey::Other(lk) => lk.metered_hash_xdr(hasher, budget),
+        StorageKey::ContractData {
+            contract_id,
+            key,
+            durability,
+        } => {
+            0u8.metered_hash(hasher, budget)?;
+            contract_id.0.metered_hash(hasher, budget)?;
+            key.get_payload().metered_hash(hasher, budget)?;
+            (*durability as u32).metered_hash(hasher, budget)
+        }
+        StorageKey::ContractInstance { contract_id } => {
+            1u8.metered_hash(hasher, budget)?;
+            contract_id.0.metered_hash(hasher, budget)
+        }
+    }
+}
 
 // Formatting TraceEvents and TraceStates is done in a submodule.
 mod fmt;
@@ -294,7 +319,7 @@ impl Host {
             budget.with_shadow_mode(|| {
                 store.map.len().metered_hash(&mut state, budget)?;
                 for (k, v) in store.map.iter(budget)? {
-                    k.metered_hash_xdr(&mut state, budget)?;
+                    metered_hash_storage_key(&k, &mut state, budget)?;
                     match v {
                         Some((entry, ttl)) => {
                             0.metered_hash(&mut state, budget)?;
@@ -366,7 +391,7 @@ impl Host {
             budget.with_shadow_mode(|| {
                 storage.footprint.0.len().metered_hash(&mut state, budget)?;
                 for (k, v) in storage.footprint.0.iter(budget)? {
-                    k.metered_hash_xdr(&mut state, budget)?;
+                    metered_hash_storage_key(&k, &mut state, budget)?;
                     v.metered_hash(&mut state, budget)?;
                 }
                 Ok(())

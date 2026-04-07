@@ -20,7 +20,7 @@ use crate::{
     xdr::{
         self, AccountFlags, AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4,
         ContractEventType, ContractExecutable, ContractId, Hash, InvokeContractArgs,
-        LedgerEntryData, LedgerKey, Liabilities, PublicKey, ScAddress, ScContractInstance,
+        LedgerEntryData, Liabilities, PublicKey, ScAddress, ScContractInstance,
         ScErrorCode, ScErrorType, ScSymbol, ScVal, SorobanAuthorizedFunction,
         SorobanAuthorizedInvocation, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
         TrustLineEntryV1, TrustLineEntryV1Ext, TrustLineFlags,
@@ -127,7 +127,7 @@ impl StellarAssetContractTest {
         );
     }
 
-    fn create_default_trustline(&self, user: &TestSigner) -> Rc<LedgerKey> {
+    fn create_default_trustline(&self, user: &TestSigner) -> Rc<crate::storage::StorageKey> {
         self.create_trustline(
             &user.account_id(),
             &signing_key_to_account_id(&self.issuer_key),
@@ -145,7 +145,7 @@ impl StellarAssetContractTest {
         account.balance
     }
 
-    fn get_trustline_balance(&self, key: &Rc<LedgerKey>) -> i64 {
+    fn get_trustline_balance(&self, key: &Rc<crate::storage::StorageKey>) -> i64 {
         self.host
             .with_mut_storage(|s| match &s.get(key, &self.host, None).unwrap().data {
                 LedgerEntryData::Trustline(trustline) => Ok(trustline.balance),
@@ -180,7 +180,7 @@ impl StellarAssetContractTest {
         );
     }
 
-    fn update_account_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
+    fn update_account_flags(&self, key: &Rc<crate::storage::StorageKey>, new_flags: u32) {
         self.host
             .with_mut_storage(|s| {
                 let entry = s.get(key, &self.host, None).unwrap();
@@ -210,7 +210,7 @@ impl StellarAssetContractTest {
         flags: u32,
         // (buying, selling) liabilities
         liabilities: Option<(i64, i64)>,
-    ) -> Rc<LedgerKey> {
+    ) -> Rc<crate::storage::StorageKey> {
         let asset = match asset_code.len() {
             4 => {
                 let mut code = [0_u8; 4];
@@ -258,7 +258,7 @@ impl StellarAssetContractTest {
         key
     }
 
-    fn update_trustline_flags(&self, key: &Rc<LedgerKey>, new_flags: u32) {
+    fn update_trustline_flags(&self, key: &Rc<crate::storage::StorageKey>, new_flags: u32) {
         self.host
             .with_mut_storage(|s| {
                 let entry = s.get(key, &self.host, None).unwrap();
@@ -3628,8 +3628,8 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 829684,
-                mem_bytes: 1216830,
+                instructions: 829805,
+                mem_bytes: 1216966,
                 disk_read_entries: 1,
                 memory_read_entries: 5,
                 write_entries: 2,

@@ -10,21 +10,175 @@
 use std::rc::Rc;
 
 use crate::budget::AsBudget;
-use crate::host::metered_clone::{MeteredClone, MeteredIterator};
+use crate::host::metered_clone::{MeteredAlloc, MeteredClone, MeteredIterator};
 use crate::{
     budget::Budget,
     host::metered_map::MeteredOrdMap,
-    ledger_info::get_key_durability,
     xdr::{
-        ContractDataDurability, LedgerEntry, LedgerKey, ScContractInstance, ScErrorCode,
-        ScErrorType, ScVal,
+        ContractDataDurability, Hash, LedgerEntry, LedgerKey, LedgerKeyContractData, ScAddress,
+        ScContractInstance, ScErrorCode, ScErrorType, ScVal,
     },
     Env, Error, Host, HostError, Val,
 };
 
-pub type FootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
+/// A storage key that optimizes comparison for contract data keys.
+///
+/// During contract execution, contract data keys are represented using
+/// `Hash + Val + durability` which compares much faster than
+/// `ScAddress + ScVal + durability` in the XDR `LedgerKey::ContractData`.
+///
+/// Keys originating from external sources (e.g. e2e_invoke) are stored
+/// as `Other(LedgerKey)` and compared using the standard LedgerKey comparison.
+// Implement PartialEq/Eq/PartialOrd/Ord for use in BTreeMap (test code) and
+// other non-metered contexts. These use the same ordering as Compare<StorageKey>
+// for Budget but without metering.
+impl PartialEq for StorageKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for StorageKey {}
+
+impl PartialOrd for StorageKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for StorageKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        fn discriminant(sk: &StorageKey) -> u32 {
+            match sk {
+                StorageKey::ContractData { .. } => 0,
+                StorageKey::ContractInstance { .. } => 1,
+                StorageKey::Other(_) => 2,
+            }
+        }
+        match (self, other) {
+            (
+                StorageKey::ContractData {
+                    contract_id: a_id,
+                    key: a_key,
+                    durability: a_dur,
+                },
+                StorageKey::ContractData {
+                    contract_id: b_id,
+                    key: b_key,
+                    durability: b_dur,
+                },
+            ) => a_id
+                .cmp(b_id)
+                .then_with(|| a_dur.cmp(b_dur))
+                .then_with(|| {
+                    // Use proper sign-aware body comparison for inline Vals.
+                    // This matches compare_small_vals_unmetered logic.
+                    const TAG_BITS: u32 = 8;
+                    let a_tag = a_key.get_tag();
+                    let b_tag = b_key.get_tag();
+                    if a_tag != b_tag {
+                        return a_tag.cmp(&b_tag);
+                    }
+                    use soroban_env_common::Tag;
+                    match a_tag {
+                        Tag::I32Val | Tag::I64Small | Tag::I128Small | Tag::I256Small => {
+                            let a_body = (a_key.get_payload() as i64) >> TAG_BITS;
+                            let b_body = (b_key.get_payload() as i64) >> TAG_BITS;
+                            a_body.cmp(&b_body)
+                        }
+                        _ => {
+                            let a_body = a_key.get_payload() >> TAG_BITS;
+                            let b_body = b_key.get_payload() >> TAG_BITS;
+                            a_body.cmp(&b_body)
+                        }
+                    }
+                }),
+            (
+                StorageKey::ContractInstance { contract_id: a },
+                StorageKey::ContractInstance { contract_id: b },
+            ) => a.cmp(b),
+            (StorageKey::Other(a), StorageKey::Other(b)) => a.cmp(b),
+            _ => discriminant(self).cmp(&discriminant(other)),
+        }
+    }
+}
+
+#[derive(Clone, Hash, Debug)]
+pub enum StorageKey {
+    /// Contract data: hot path, uses Val for fast comparison.
+    ContractData {
+        contract_id: Hash,
+        key: Val,
+        durability: ContractDataDurability,
+    },
+    /// Contract instance: just needs contract_id.
+    ContractInstance { contract_id: Hash },
+    /// Everything else (Account, Trustline, ContractCode, or external ContractData).
+    Other(LedgerKey),
+}
+
+impl StorageKey {
+    /// Convert this `StorageKey` back to a `LedgerKey`.
+    ///
+    /// For `ContractData`, this requires the host to convert `Val` -> `ScVal`.
+    /// For `ContractInstance` and `Other`, no host conversion is needed.
+    pub fn to_ledger_key(&self, host: &Host) -> Result<Rc<LedgerKey>, HostError> {
+        match self {
+            StorageKey::ContractData {
+                contract_id,
+                key,
+                durability,
+            } => {
+                let sc_val = host.from_host_val(*key)?;
+                Rc::metered_new(
+                    LedgerKey::ContractData(LedgerKeyContractData {
+                        contract: ScAddress::Contract(contract_id.metered_clone(host.as_budget())?.into()),
+                        key: sc_val,
+                        durability: *durability,
+                    }),
+                    host.as_budget(),
+                )
+            }
+            StorageKey::ContractInstance { contract_id } => Rc::metered_new(
+                LedgerKey::ContractData(LedgerKeyContractData {
+                    contract: ScAddress::Contract(contract_id.metered_clone(host.as_budget())?.into()),
+                    key: ScVal::LedgerKeyContractInstance,
+                    durability: ContractDataDurability::Persistent,
+                }),
+                host.as_budget(),
+            ),
+            StorageKey::Other(lk) => Rc::metered_new(lk.metered_clone(host.as_budget())?, host.as_budget()),
+        }
+    }
+
+    /// Returns a reference to the inner `LedgerKey` if this is a `StorageKey::Other`.
+    /// Returns `None` for `ContractData` and `ContractInstance` variants.
+    pub fn as_ledger_key(&self) -> Option<&LedgerKey> {
+        match self {
+            StorageKey::Other(lk) => Some(lk),
+            _ => None,
+        }
+    }
+
+    /// Creates a `StorageKey` from a `LedgerKey` without a Host.
+    /// All key types are stored as `Other(LedgerKey)`.
+    pub fn from_ledger_key(lk: LedgerKey, _budget: &crate::budget::Budget) -> Result<Self, HostError> {
+        Ok(StorageKey::Other(lk))
+    }
+
+    /// Get the durability of the key, if applicable.
+    pub fn get_durability(&self) -> Option<ContractDataDurability> {
+        match self {
+            StorageKey::ContractData { durability, .. } => Some(*durability),
+            StorageKey::ContractInstance { .. } => Some(ContractDataDurability::Persistent),
+            StorageKey::Other(lk) => crate::ledger_info::get_key_durability(lk),
+        }
+    }
+}
+
+pub type FootprintMap = MeteredOrdMap<Rc<StorageKey>, AccessType, Budget>;
 pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
-pub type StorageMap = MeteredOrdMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>, Budget>;
+pub type StorageMap = MeteredOrdMap<Rc<StorageKey>, Option<EntryWithLiveUntil>, Budget>;
 
 /// The in-memory instance storage of the current running contract. Initially
 /// contains entries from the `ScMap` of the corresponding `ScContractInstance`
@@ -105,11 +259,11 @@ impl Footprint {
     #[cfg(any(test, feature = "recording_mode"))]
     pub(crate) fn record_access(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         ty: AccessType,
         budget: &Budget,
     ) -> Result<(), HostError> {
-        if let Some(existing) = self.0.get::<Rc<LedgerKey>>(key, budget)? {
+        if let Some(existing) = self.0.get::<Rc<StorageKey>>(key, budget)? {
             match (existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
@@ -129,7 +283,7 @@ impl Footprint {
 
     pub(crate) fn enforce_access(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         ty: AccessType,
         budget: &Budget,
     ) -> Result<(), HostError> {
@@ -139,7 +293,7 @@ impl Footprint {
         // entries to access), so it might be considered 'exceeded'.
         // This also helps distinguish access errors from the values simply
         // being  missing from storage (but with a valid footprint).
-        if let Some(existing) = self.0.get::<Rc<LedgerKey>>(key, budget)? {
+        if let Some(existing) = self.0.get::<Rc<StorageKey>>(key, budget)? {
             match (existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
@@ -227,6 +381,15 @@ impl Storage {
         }
     }
 
+    /// Check that a [StorageKey] is a supported type. For `Other` variant,
+    /// delegates to [check_supported_ledger_key_type].
+    pub fn check_supported_storage_key_type(sk: &StorageKey) -> Result<(), HostError> {
+        match sk {
+            StorageKey::ContractData { .. } | StorageKey::ContractInstance { .. } => Ok(()),
+            StorageKey::Other(lk) => Self::check_supported_ledger_key_type(lk),
+        }
+    }
+
     /// Constructs a new [Storage] in [FootprintMode::Enforcing] using a
     /// given [Footprint] and a storage map populated with all the keys
     /// listed in the [Footprint].
@@ -252,13 +415,13 @@ impl Storage {
     // Helper function the next 3 `get`-variants funnel into.
     fn try_get_full_helper(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
         let _span = tracy_span!("storage get");
-        Self::check_supported_ledger_key_type(key)?;
+        Self::check_supported_storage_key_type(key)?;
         self.prepare_read_only_access(key, host)?;
-        match self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())? {
+        match self.map.get::<Rc<StorageKey>>(key, host.budget_ref())? {
             // Key has to be in the storage map at this point due to
             // `prepare_read_only_access`.
             None => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
@@ -268,7 +431,7 @@ impl Storage {
 
     pub(crate) fn try_get_full(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
@@ -280,7 +443,7 @@ impl Storage {
 
     pub(crate) fn get(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<Rc<LedgerEntry>, HostError> {
@@ -294,7 +457,7 @@ impl Storage {
     // and out-of-footprint values or errors (`Err(...)`).
     pub(crate) fn try_get(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<Option<Rc<LedgerEntry>>, HostError> {
@@ -303,22 +466,22 @@ impl Storage {
     }
 
     /// Attempts to retrieve the [LedgerEntry] associated with a given
-    /// [LedgerKey] and its live until ledger (if applicable) in the [Storage],
+    /// [StorageKey] and its live until ledger (if applicable) in the [Storage],
     /// returning an error if the key is not found.
     ///
     /// Live until ledgers only exist for `ContractData` and `ContractCode`
     /// ledger entries and are `None` for all the other entry kinds.
     ///
-    /// In [FootprintMode::Recording] mode, records the read [LedgerKey] in the
+    /// In [FootprintMode::Recording] mode, records the read key in the
     /// [Footprint] as [AccessType::ReadOnly] (unless already recorded as
     /// [AccessType::ReadWrite]) and reads through to the underlying
-    /// [SnapshotSource], if the [LedgerKey] has not yet been loaded.
+    /// [SnapshotSource], if the key has not yet been loaded.
     ///
     /// In [FootprintMode::Enforcing] mode, succeeds only if the read
-    /// [LedgerKey] has been declared in the [Footprint].
+    /// key has been declared in the [Footprint].
     pub(crate) fn get_with_live_until_ledger(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<EntryWithLiveUntil, HostError> {
@@ -332,11 +495,11 @@ impl Storage {
     // Helper function `put` and `del` funnel into.
     fn put_opt_helper(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         val: Option<EntryWithLiveUntil>,
         host: &Host,
     ) -> Result<(), HostError> {
-        Self::check_supported_ledger_key_type(key)?;
+        Self::check_supported_storage_key_type(key)?;
         if let Some(le) = &val {
             Self::check_supported_ledger_entry_type(&le.0)?;
         }
@@ -359,7 +522,7 @@ impl Storage {
 
     fn put_opt(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         val: Option<EntryWithLiveUntil>,
         host: &Host,
         key_val: Option<Val>,
@@ -369,17 +532,17 @@ impl Storage {
     }
 
     /// Attempts to write to the [LedgerEntry] associated with a given
-    /// [LedgerKey] in the [Storage].
+    /// [StorageKey] in the [Storage].
     ///
-    /// In [FootprintMode::Recording] mode, records the written [LedgerKey] in
+    /// In [FootprintMode::Recording] mode, records the written key in
     /// the [Footprint] as [AccessType::ReadWrite].
     ///
     /// In [FootprintMode::Enforcing] mode, succeeds only if the written
-    /// [LedgerKey] has been declared in the [Footprint] as
+    /// key has been declared in the [Footprint] as
     /// [AccessType::ReadWrite].
     pub(crate) fn put(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         val: &Rc<LedgerEntry>,
         live_until_ledger: Option<u32>,
         host: &Host,
@@ -389,18 +552,18 @@ impl Storage {
         self.put_opt(key, Some((val.clone(), live_until_ledger)), host, key_val)
     }
 
-    /// Attempts to delete the [LedgerEntry] associated with a given [LedgerKey]
+    /// Attempts to delete the [LedgerEntry] associated with a given [StorageKey]
     /// in the [Storage].
     ///
-    /// In [FootprintMode::Recording] mode, records the deleted [LedgerKey] in
+    /// In [FootprintMode::Recording] mode, records the deleted key in
     /// the [Footprint] as [AccessType::ReadWrite].
     ///
     /// In [FootprintMode::Enforcing] mode, succeeds only if the deleted
-    /// [LedgerKey] has been declared in the [Footprint] as
+    /// key has been declared in the [Footprint] as
     /// [AccessType::ReadWrite].
     pub(crate) fn del(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<(), HostError> {
@@ -410,7 +573,7 @@ impl Storage {
     }
 
     /// Attempts to determine the presence of a [LedgerEntry] associated with a
-    /// given [LedgerKey] in the [Storage], returning `Ok(true)` if an entry
+    /// given [StorageKey] in the [Storage], returning `Ok(true)` if an entry
     /// with the key exists and `Ok(false)` if it does not.
     ///
     /// In [FootprintMode::Recording] mode, records the access and reads-through
@@ -420,7 +583,7 @@ impl Storage {
     /// declared in the [Footprint].
     pub(crate) fn has(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
         key_val: Option<Val>,
     ) -> Result<bool, HostError> {
@@ -433,11 +596,11 @@ impl Storage {
     fn prepare_extend_ttl(
         &mut self,
         host: &Host,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         extend_to: u32,
         key_val: Option<Val>,
     ) -> Result<TtlExtensionInfo, HostError> {
-        Self::check_supported_ledger_key_type(key)?;
+        Self::check_supported_storage_key_type(key)?;
 
         #[cfg(any(test, feature = "recording_mode"))]
         self.handle_maybe_expired_entry(key, host)?;
@@ -466,7 +629,7 @@ impl Storage {
 
         let max_live_until = host.max_live_until_ledger()?;
 
-        let durability = get_key_durability(key).ok_or_else(|| {
+        let durability = key.get_durability().ok_or_else(|| {
             host.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
@@ -501,7 +664,7 @@ impl Storage {
     fn apply_ttl_extension(
         &mut self,
         host: &Host,
-        key: Rc<LedgerKey>,
+        key: Rc<StorageKey>,
         ttl_ext_info: TtlExtensionInfo,
         new_live_until: u32,
     ) -> Result<(), HostError> {
@@ -532,7 +695,7 @@ impl Storage {
     pub(crate) fn extend_ttl(
         &mut self,
         host: &Host,
-        key: Rc<LedgerKey>,
+        key: Rc<StorageKey>,
         threshold: u32,
         extend_to: u32,
         key_val: Option<Val>,
@@ -594,7 +757,7 @@ impl Storage {
     pub(crate) fn extend_ttl_v2(
         &mut self,
         host: &Host,
-        key: Rc<LedgerKey>,
+        key: Rc<StorageKey>,
         extend_to: u32,
         min_extension: u32,
         max_extension: u32,
@@ -648,11 +811,13 @@ impl Storage {
     pub(crate) fn is_key_live_in_snapshot(
         &self,
         host: &Host,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
     ) -> Result<bool, HostError> {
         match &self.mode {
             FootprintMode::Recording(snapshot) => {
-                let snapshot_value = snapshot.get(key)?;
+                // Convert StorageKey to LedgerKey to query the SnapshotSource.
+                let lk = key.to_ledger_key(host)?;
+                let snapshot_value = snapshot.get(&lk)?;
                 if let Some((_, live_until_ledger)) = snapshot_value {
                     if let Some(live_until_ledger) = live_until_ledger {
                         let current_ledger_sequence =
@@ -681,10 +846,10 @@ impl Storage {
     #[cfg(any(test, feature = "testutils"))]
     pub(crate) fn get_from_map(
         &self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        match self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())? {
+        match self.map.get::<Rc<StorageKey>>(key, host.budget_ref())? {
             Some(pair_option) => Ok(pair_option.clone()),
             None => Ok(None),
         }
@@ -692,7 +857,7 @@ impl Storage {
 
     fn prepare_read_only_access(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
     ) -> Result<(), HostError> {
         let ty = AccessType::ReadOnly;
@@ -704,9 +869,11 @@ impl Storage {
                 // that misses read-through to the underlying src.
                 if !self
                     .map
-                    .contains_key::<Rc<LedgerKey>>(key, host.budget_ref())?
+                    .contains_key::<Rc<StorageKey>>(key, host.budget_ref())?
                 {
-                    let value = src.get(&key)?;
+                    // Convert StorageKey to LedgerKey to query the SnapshotSource.
+                    let lk = key.to_ledger_key(host)?;
+                    let value = src.get(&lk)?;
                     self.map = self.map.insert(key.clone(), value, host.budget_ref())?;
                 }
                 self.footprint.record_access(key, ty, host.budget_ref())?;
@@ -722,15 +889,15 @@ impl Storage {
     #[cfg(any(test, feature = "recording_mode"))]
     fn handle_maybe_expired_entry(
         &mut self,
-        key: &Rc<LedgerKey>,
+        key: &Rc<StorageKey>,
         host: &Host,
     ) -> Result<(), HostError> {
         host.with_ledger_info(|li| {
             let budget = host.budget_ref();
             if let Some(Some((entry, live_until))) =
-                self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())?
+                self.map.get::<Rc<StorageKey>>(key, host.budget_ref())?
             {
-                if let Some(durability) = get_key_durability(key.as_ref()) {
+                if let Some(durability) = key.get_durability() {
                     let live_until = live_until.ok_or_else(|| {
                         host.err(
                             ScErrorType::Storage,
@@ -742,7 +909,7 @@ impl Storage {
                     if live_until < li.sequence_number {
                         match durability {
                             ContractDataDurability::Temporary => {
-                                self.map = self.map.insert(key.clone(), None, budget)?;
+                                self.map = self.map.insert(key.clone(), None, host.budget_ref())?;
                             }
                             ContractDataDurability::Persistent => {
                                 self.footprint
@@ -760,7 +927,7 @@ impl Storage {
                                 self.map = self.map.insert(
                                     key.clone(),
                                     Some((entry.clone(), Some(new_live_until))),
-                                    budget,
+                                    host.budget_ref(),
                                 )?;
                             }
                         };
@@ -777,28 +944,29 @@ impl Storage {
     }
 }
 
-fn get_key_type_string_for_error(lk: &LedgerKey) -> &str {
-    match lk {
-        LedgerKey::ContractData(cd) => match cd.key {
-            ScVal::LedgerKeyContractInstance => "contract instance",
-            ScVal::LedgerKeyNonce(_) => "nonce",
-            _ => "contract data key",
+fn get_storage_key_type_string_for_error(sk: &StorageKey) -> &str {
+    match sk {
+        StorageKey::ContractData { .. } => "contract data key",
+        StorageKey::ContractInstance { .. } => "contract instance",
+        StorageKey::Other(lk) => match lk {
+            LedgerKey::ContractData(cd) => match cd.key {
+                ScVal::LedgerKeyContractInstance => "contract instance",
+                ScVal::LedgerKeyNonce(_) => "nonce",
+                _ => "contract data key",
+            },
+            LedgerKey::ContractCode(_) => "contract code",
+            LedgerKey::Account(_) => "account",
+            LedgerKey::Trustline(_) => "account trustline",
+            _ => "ledger key",
         },
-        LedgerKey::ContractCode(_) => "contract code",
-        LedgerKey::Account(_) => "account",
-        LedgerKey::Trustline(_) => "account trustline",
-        // This shouldn't normally trigger, but it's safer to just return
-        // a safe default instead of an error in case if new key types are
-        // accessed.
-        _ => "ledger key",
     }
 }
 
 impl Host {
-    fn decorate_storage_error(
+    pub(crate) fn decorate_storage_error(
         &self,
         err: HostError,
-        lk: &LedgerKey,
+        sk: &StorageKey,
         key_val: Option<Val>,
     ) -> HostError {
         let mut err = err;
@@ -813,16 +981,10 @@ impl Host {
                     return Ok(());
                 }
 
-                let key_type_str = get_key_type_string_for_error(lk);
-                // Accessing an entry outside of the footprint is a non-recoverable error, thus
-                // there is no way to observe the object pool being changed (host will continue
-                // propagating an error until there are no frames left and control is never
-                // returned to guest). This allows us to build a nicer error message.
-                // For the missing values we unfortunately can only safely use the existing `Val`s
-                // to enhance errors.
+                let key_type_str = get_storage_key_type_string_for_error(sk);
                 let can_create_new_objects = err.error.is_code(ScErrorCode::ExceededLimit);
                 let args = self
-                    .get_args_for_error(lk, key_val, can_create_new_objects)
+                    .get_args_for_storage_key_error(sk, key_val, can_create_new_objects)
                     .unwrap_or_else(|_| vec![]);
                 if err.error.is_code(ScErrorCode::ExceededLimit) {
                     err = self.err(
@@ -846,6 +1008,44 @@ impl Host {
             true,
         );
         err
+    }
+
+    fn get_args_for_storage_key_error(
+        &self,
+        sk: &StorageKey,
+        key_val: Option<Val>,
+        can_create_new_objects: bool,
+    ) -> Result<Vec<Val>, HostError> {
+        let mut res = vec![];
+        match sk {
+            StorageKey::ContractData {
+                contract_id, key, ..
+            } => {
+                if can_create_new_objects {
+                    let address_val = self
+                        .add_host_object(ScAddress::Contract(contract_id.clone().into()))?
+                        .into();
+                    res.push(address_val);
+                }
+                if let Some(key) = key_val {
+                    res.push(key);
+                } else {
+                    res.push(*key);
+                }
+            }
+            StorageKey::ContractInstance { contract_id } => {
+                if can_create_new_objects {
+                    let address_val = self
+                        .add_host_object(ScAddress::Contract(contract_id.clone().into()))?
+                        .into();
+                    res.push(address_val);
+                }
+            }
+            StorageKey::Other(lk) => {
+                return self.get_args_for_error(lk, key_val, can_create_new_objects);
+            }
+        }
+        Ok(res)
     }
 
     fn get_args_for_error(
@@ -890,15 +1090,30 @@ impl Host {
                     res.push(self.account_address_from_key(lk)?)
                 }
             }
-            // This shouldn't normally trigger, but it's safer to just return
-            // a safe default instead of an error in case if new key types are
-            // accessed.
             _ => (),
         };
         Ok(res)
     }
 }
 
+#[cfg(any(test, feature = "recording_mode"))]
+pub(crate) fn is_persistent_storage_key(key: &StorageKey) -> bool {
+    match key {
+        StorageKey::ContractData { durability, .. } => {
+            matches!(durability, ContractDataDurability::Persistent)
+        }
+        StorageKey::ContractInstance { .. } => true,
+        StorageKey::Other(lk) => match lk {
+            LedgerKey::ContractData(k) => {
+                matches!(k.durability, ContractDataDurability::Persistent)
+            }
+            LedgerKey::ContractCode(_) => true,
+            _ => false,
+        },
+    }
+}
+
+// Keep the old function as well for use in e2e_invoke.
 #[cfg(any(test, feature = "recording_mode"))]
 pub(crate) fn is_persistent_key(key: &LedgerKey) -> bool {
     match key {

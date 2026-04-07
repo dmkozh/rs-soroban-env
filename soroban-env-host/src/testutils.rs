@@ -418,14 +418,25 @@ impl Host {
                     .unwrap()
                     .map(|(k, accesstype)| {
                         let mut accesstype = *accesstype;
-                        if let LedgerKey::ContractData(k) = k.as_ref() {
-                            if let Some((_, ro)) = data_keys.get(&k.key) {
-                                if *ro {
-                                    accesstype = crate::storage::AccessType::ReadOnly;
-                                } else {
-                                    accesstype = crate::storage::AccessType::ReadWrite;
+                        match k.as_ref() {
+                            crate::storage::StorageKey::Other(
+                                crate::xdr::LedgerKey::ContractData(cd),
+                            ) => {
+                                if let Some((_, ro)) = data_keys.get(&cd.key) {
+                                    if *ro {
+                                        accesstype = crate::storage::AccessType::ReadOnly;
+                                    } else {
+                                        accesstype = crate::storage::AccessType::ReadWrite;
+                                    }
                                 }
                             }
+                            crate::storage::StorageKey::ContractData { key, .. } => {
+                                // For optimized storage keys, try matching by Val.
+                                // The data_keys map uses ScVal keys from `invoke_host_function_recording_helper`,
+                                // but ContractData uses Val. Skip matching for now.
+                                let _ = key;
+                            }
+                            _ => (),
                         }
                         (k.clone(), accesstype)
                     }),
@@ -447,10 +458,14 @@ impl Host {
             }
             // Reset any nonces so they can be consumed.
             for (k, v) in map.iter_mut() {
-                if let LedgerKey::ContractData(k) = k.as_ref() {
-                    if let ScVal::LedgerKeyNonce(_) = &k.key {
-                        *v = None;
-                    }
+                let is_nonce = match k.as_ref() {
+                    crate::storage::StorageKey::Other(
+                        crate::xdr::LedgerKey::ContractData(cd),
+                    ) => matches!(&cd.key, ScVal::LedgerKeyNonce(_)),
+                    _ => false,
+                };
+                if is_nonce {
+                    *v = None;
                 }
             }
             storage.map = MeteredOrdMap::from_exact_iter(

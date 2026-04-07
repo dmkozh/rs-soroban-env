@@ -16,11 +16,11 @@ use crate::{
     storage::Storage,
     xdr::{
         AccountEntry, AccountEntryExt, AccountEntryExtensionV1Ext, AccountFlags, AccountId, Asset,
-        LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, ScAddress, ScErrorCode,
+        LedgerEntry, LedgerEntryData, LedgerEntryExt, ScAddress, ScErrorCode,
         ScErrorType, SequenceNumber, Thresholds, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
         TrustLineFlags,
     },
-    Env, ErrorHandler, Host, HostError, StorageType, TryIntoVal,
+    Env, ErrorHandler, Host, HostError, StorageType, TryIntoVal, Val,
 };
 
 use super::storage_types::{BalanceValue, BALANCE_EXTEND_AMOUNT, BALANCE_TTL_THRESHOLD};
@@ -551,7 +551,7 @@ fn transfer_account_balance(
 fn read_account_entry(
     host: &Host,
     storage: &mut Storage,
-    lk: &Rc<LedgerKey>,
+    lk: &Rc<crate::storage::StorageKey>,
     addr: &Address,
 ) -> Result<Rc<LedgerEntry>, HostError> {
     storage.try_get(&lk, &host, None)?.ok_or_else(|| {
@@ -566,10 +566,16 @@ fn read_account_entry(
 fn read_trustline_entry(
     host: &Host,
     storage: &mut Storage,
-    lk: &Rc<LedgerKey>,
+    lk: &Rc<crate::storage::StorageKey>,
 ) -> Result<Rc<LedgerEntry>, HostError> {
     storage.try_get(&lk, &host, None)?.ok_or_else(|| {
-        let account_address = host.account_address_from_key(lk);
+        // Extract the LedgerKey for error reporting if possible.
+        let account_address = match lk.as_ref() {
+            crate::storage::StorageKey::Other(ledger_key) => {
+                host.account_address_from_key(ledger_key)
+            }
+            _ => Ok(Val::VOID.into()),
+        };
         match account_address {
             Ok(account_address) => host.error(
                 ContractError::TrustlineMissingError.into(),

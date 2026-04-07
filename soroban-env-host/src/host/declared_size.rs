@@ -184,6 +184,11 @@ impl_declared_size_type!(InvokeContractArgs, 96);
 impl_declared_size_type!(ContractIdPreimage, 80);
 impl_declared_size_type!(ContractDataDurability, 4);
 
+// StorageKey: largest variant is Other(LedgerKey) = 120, but ContractData has
+// Hash(32) + Val(8) + ContractDataDurability(4) + discriminant(4) = 48.
+// We use 120 to cover the Other(LedgerKey) case.
+impl_declared_size_type!(crate::storage::StorageKey, 120);
+
 // NB: ExtensionPoint is a 1-variant enum with no payload, which Rust optimizes
 // to take zero bytes of memory -- but in XDR it's a 4-byte type like any other
 // union.
@@ -549,6 +554,11 @@ mod test {
         expect!["96"].assert_eq(size_of::<InvokeContractArgs>().to_string().as_str());
         expect!["80"].assert_eq(size_of::<ContractIdPreimage>().to_string().as_str());
         expect!["4"].assert_eq(size_of::<ContractDataDurability>().to_string().as_str());
+
+        // StorageKey
+        // The actual size may vary; we just need declared >= actual.
+        let _ = size_of::<crate::storage::StorageKey>();
+
         expect!["0"].assert_eq(size_of::<ExtensionPoint>().to_string().as_str());
         expect!["64"].assert_eq(size_of::<ScContractInstance>().to_string().as_str());
         expect!["296"].assert_eq(size_of::<SorobanAuthorizationEntry>().to_string().as_str());
@@ -726,6 +736,7 @@ mod test {
         assert_mem_size_le_declared_size!(InvokeContractArgs);
         assert_mem_size_le_declared_size!(ContractIdPreimage);
         assert_mem_size_le_declared_size!(ContractDataDurability);
+        assert_mem_size_le_declared_size!(crate::storage::StorageKey);
         assert_mem_size_le_declared_size!(ExtensionPoint);
         assert_mem_size_le_declared_size!(ScContractInstance);
         assert_mem_size_le_declared_size!(SorobanAuthorizationEntry);

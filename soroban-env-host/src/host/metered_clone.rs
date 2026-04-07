@@ -562,6 +562,21 @@ impl MeteredClone for LedgerKey {
     }
 }
 
+impl MeteredClone for crate::storage::StorageKey {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_substructure(&self, budget: &Budget) -> Result<(), HostError> {
+        use crate::storage::StorageKey;
+        match self {
+            // ContractData and ContractInstance are shallow:
+            // Hash + Val + enum discriminant are all inline.
+            StorageKey::ContractData { .. } | StorageKey::ContractInstance { .. } => Ok(()),
+            // Other(LedgerKey) delegates to LedgerKey's charge_for_substructure.
+            StorageKey::Other(lk) => lk.charge_for_substructure(budget),
+        }
+    }
+}
+
 impl MeteredClone for ContractCodeEntry {
     const IS_SHALLOW: bool = false;
 

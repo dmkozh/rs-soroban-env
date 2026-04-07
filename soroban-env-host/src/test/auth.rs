@@ -985,8 +985,8 @@ fn test_two_authorized_trees() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 3534571,
-                mem_bytes: 8481766,
+                instructions: 3535550,
+                mem_bytes: 8482038,
                 disk_read_entries: 1,
                 memory_read_entries: 8,
                 write_entries: 2,
@@ -1011,8 +1011,8 @@ fn test_two_authorized_trees() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1573332,
-                        mem_bytes: 3636258,
+                        instructions: 1573824,
+                        mem_bytes: 3636394,
                         disk_read_entries: 1,
                         memory_read_entries: 4,
                         write_entries: 1,
@@ -1037,7 +1037,7 @@ fn test_two_authorized_trees() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 362050,
+                                instructions: 362045,
                                 mem_bytes: 1208266,
                                 disk_read_entries: 0,
                                 memory_read_entries: 1,
@@ -1064,7 +1064,7 @@ fn test_two_authorized_trees() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 361465,
+                                instructions: 361461,
                                 mem_bytes: 1208291,
                                 disk_read_entries: 0,
                                 memory_read_entries: 1,
@@ -1093,8 +1093,8 @@ fn test_two_authorized_trees() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1574852,
-                        mem_bytes: 3636425,
+                        instructions: 1575339,
+                        mem_bytes: 3636561,
                         disk_read_entries: 0,
                         memory_read_entries: 2,
                         write_entries: 1,
@@ -1119,7 +1119,7 @@ fn test_two_authorized_trees() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 363603,
+                                instructions: 363596,
                                 mem_bytes: 1208409,
                                 disk_read_entries: 0,
                                 memory_read_entries: 1,
@@ -1146,7 +1146,7 @@ fn test_two_authorized_trees() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 361801,
+                                instructions: 361795,
                                 mem_bytes: 1208168,
                                 disk_read_entries: 0,
                                 memory_read_entries: 0,
@@ -2479,8 +2479,8 @@ fn test_require_auth_within_check_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 1434230,
-                mem_bytes: 3621356,
+                instructions: 1435735,
+                mem_bytes: 3621764,
                 disk_read_entries: 1,
                 memory_read_entries: 10,
                 write_entries: 3,
@@ -2505,8 +2505,8 @@ fn test_require_auth_within_check_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1050174,
-                        mem_bytes: 2405501,
+                        instructions: 1051179,
+                        mem_bytes: 2405773,
                         disk_read_entries: 1,
                         memory_read_entries: 7,
                         write_entries: 2,
@@ -2531,8 +2531,8 @@ fn test_require_auth_within_check_auth() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 733434,
-                                mem_bytes: 1202532,
+                                instructions: 733937,
+                                mem_bytes: 1202668,
                                 disk_read_entries: 1,
                                 memory_read_entries: 3,
                                 write_entries: 1,

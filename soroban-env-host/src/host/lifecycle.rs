@@ -289,9 +289,9 @@ impl Host {
 
         let hash_obj = self.add_host_object(self.scbytes_from_slice(hash_bytes.as_slice())?)?;
         let code_key = Rc::metered_new(
-            LedgerKey::ContractCode(LedgerKeyContractCode {
+            crate::storage::StorageKey::Other(LedgerKey::ContractCode(LedgerKeyContractCode {
                 hash: Hash(hash_bytes.metered_clone(self.as_budget())?),
-            }),
+            })),
             self.as_budget(),
         )?;
 

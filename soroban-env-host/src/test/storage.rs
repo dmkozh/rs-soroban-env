@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::budget::{AsBudget, Budget};
 use crate::host_object::MuxedScAddress;
-use crate::storage::{AccessType, Footprint, Storage};
+use crate::storage::{AccessType, Footprint, Storage, StorageKey};
 use crate::xdr::{
     ContractDataDurability, ContractId, LedgerKey, LedgerKeyContractData, MuxedEd25519Account,
     ScAddress, ScErrorCode, ScErrorType, ScVal, Uint256,
@@ -17,26 +17,28 @@ fn footprint_record_access() -> Result<(), HostError> {
     budget.reset_unlimited()?;
     let mut fp = Footprint::default();
     // record when key not exist
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
+    let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+        LedgerKeyContractData {
+            contract: ScAddress::Contract(ContractId([0; 32].into())),
+            key: ScVal::I32(0),
+            durability: ContractDataDurability::Persistent,
+        },
+    )));
     fp.record_access(&key, AccessType::ReadOnly, &budget)?;
-    assert_eq!(fp.0.contains_key::<LedgerKey>(&key, &budget)?, true);
+    assert_eq!(fp.0.contains_key::<StorageKey>(&key, &budget)?, true);
     assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
+        fp.0.get::<StorageKey>(&key, &budget)?,
         Some(&AccessType::ReadOnly)
     );
     // record and change access
     fp.record_access(&key, AccessType::ReadWrite, &budget)?;
     assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
+        fp.0.get::<StorageKey>(&key, &budget)?,
         Some(&AccessType::ReadWrite)
     );
     fp.record_access(&key, AccessType::ReadOnly, &budget)?;
     assert_eq!(
-        fp.0.get::<LedgerKey>(&key, &budget)?,
+        fp.0.get::<StorageKey>(&key, &budget)?,
         Some(&AccessType::ReadWrite)
     );
     Ok(())
@@ -45,18 +47,22 @@ fn footprint_record_access() -> Result<(), HostError> {
 #[test]
 fn footprint_enforce_access() -> Result<(), HostError> {
     let budget = Budget::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
+    let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+        LedgerKeyContractData {
+            contract: ScAddress::Contract(ContractId([0; 32].into())),
+            key: ScVal::I32(0),
+            durability: ContractDataDurability::Persistent,
+        },
+    )));
 
     // Key not in footprint. Only difference is type_
-    let key2 = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Temporary,
-    }));
+    let key2 = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+        LedgerKeyContractData {
+            contract: ScAddress::Contract(ContractId([0; 32].into())),
+            key: ScVal::I32(0),
+            durability: ContractDataDurability::Temporary,
+        },
+    )));
 
     let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
     let mom = MeteredOrdMap::from_map(om, &budget)?;
@@ -76,11 +82,13 @@ fn footprint_enforce_access() -> Result<(), HostError> {
 fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
     let budget = Budget::default();
     let mut fp = Footprint::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
+    let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+        LedgerKeyContractData {
+            contract: ScAddress::Contract(ContractId([0; 32].into())),
+            key: ScVal::I32(0),
+            durability: ContractDataDurability::Persistent,
+        },
+    )));
     let res = fp.enforce_access(&key, AccessType::ReadOnly, &budget);
     assert!(HostError::result_matches_err(
         res,
@@ -92,11 +100,13 @@ fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
 #[test]
 fn footprint_attempt_to_write_readonly_entry() -> Result<(), HostError> {
     let budget = Budget::default();
-    let key = Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-        contract: ScAddress::Contract(ContractId([0; 32].into())),
-        key: ScVal::I32(0),
-        durability: ContractDataDurability::Persistent,
-    }));
+    let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+        LedgerKeyContractData {
+            contract: ScAddress::Contract(ContractId([0; 32].into())),
+            key: ScVal::I32(0),
+            durability: ContractDataDurability::Persistent,
+        },
+    )));
     let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
     let mom = MeteredOrdMap::from_map(om, &budget)?;
     let mut fp = Footprint(mom);
@@ -349,13 +359,13 @@ fn test_nested_bump() {
     let storage_contract_id = host.register_test_contract_wasm(CONTRACT_STORAGE);
 
     let contract_id_hash = host.contract_id_from_address(storage_contract_id).unwrap();
-    let storage_key: std::rc::Rc<LedgerKey> = host
+    let storage_key = host
         .contract_instance_ledger_key(&contract_id_hash)
         .unwrap();
     host.with_mut_storage(|s: &mut Storage| {
         let v = s
             .map
-            .get::<Rc<LedgerKey>>(&storage_key, host.as_budget())
+            .get::<Rc<StorageKey>>(&storage_key, host.as_budget())
             .unwrap()
             .unwrap()
             .clone()
@@ -384,7 +394,7 @@ fn test_nested_bump() {
     host.with_mut_storage(|s: &mut Storage| {
         let v = s
             .map
-            .get::<Rc<LedgerKey>>(&storage_key, host.as_budget())
+            .get::<Rc<StorageKey>>(&storage_key, host.as_budget())
             .unwrap()
             .unwrap()
             .clone()
@@ -588,23 +598,25 @@ mod ttl_extension_v2_tests {
         host
     }
 
-    fn get_live_until(host: &Host, key: &Rc<LedgerKey>) -> u32 {
+    fn get_live_until(host: &Host, key: &Rc<StorageKey>) -> u32 {
         host.with_mut_storage(|s| Ok(s.get_with_live_until_ledger(key, host, None)?.1.unwrap()))
             .unwrap()
     }
 
-    fn make_data_key(host: &Host, contract_id: AddressObject, storage: &str) -> Rc<LedgerKey> {
+    fn make_data_key(host: &Host, contract_id: AddressObject, storage: &str) -> Rc<StorageKey> {
         let contract_id_hash = host.contract_id_from_address(contract_id).unwrap();
         let durability = match storage {
             "persistent" => ContractDataDurability::Persistent,
             "temporary" => ContractDataDurability::Temporary,
             _ => panic!("unexpected storage type"),
         };
-        Rc::new(LedgerKey::ContractData(LedgerKeyContractData {
-            contract: ScAddress::Contract(contract_id_hash),
-            key: ScVal::Symbol(ScSymbol("key_1".try_into().unwrap())),
-            durability,
-        }))
+        Rc::new(StorageKey::Other(LedgerKey::ContractData(
+            LedgerKeyContractData {
+                contract: ScAddress::Contract(contract_id_hash),
+                key: ScVal::Symbol(ScSymbol("key_1".try_into().unwrap())),
+                durability,
+            },
+        )))
     }
 
     fn extend_v2_fn_name(host: &Host, storage: &str) -> Symbol {
