@@ -731,7 +731,7 @@ fn bench_metered_clone_scval_map() {
         std::hint::black_box(val.metered_clone(&budget).unwrap());
     }
 
-    let iterations = 200_000u64;
+    let iterations = 5_000_000u64;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
         std::hint::black_box(val.metered_clone(&budget).unwrap());
@@ -752,7 +752,7 @@ fn bench_metered_compare_scval_map() {
         std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
     }
 
-    let iterations = 500_000u64;
+    let iterations = 5_000_000u64;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
         std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
@@ -772,7 +772,7 @@ fn bench_metered_clone_scval_vec_u64() {
         std::hint::black_box(val.metered_clone(&budget).unwrap());
     }
 
-    let iterations = 500_000u64;
+    let iterations = 5_000_000u64;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
         std::hint::black_box(val.metered_clone(&budget).unwrap());
@@ -793,7 +793,7 @@ fn bench_metered_compare_scval_vec_u64() {
         std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
     }
 
-    let iterations = 500_000u64;
+    let iterations = 5_000_000u64;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
         std::hint::black_box(budget.compare(&val_a, &val_b).unwrap());
