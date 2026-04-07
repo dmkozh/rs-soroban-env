@@ -6,7 +6,7 @@ use crate::{
     budget::{AsBudget, Budget},
     builtin_contracts::common_types::AddressExecutable,
     events::{diagnostic::DiagnosticLevel, Events, InternalEventsBuffer},
-    host_object::{HostMap, HostObject, HostVec, MuxedScAddress},
+    host_object::{HostMap, HostObject, HostVec, MuxedScAddress, ObjectMeta},
     impl_bignum_host_fns, impl_bls12_381_fr_arith_host_fns, impl_bn254_fr_arith_host_fns,
     impl_wrapping_obj_from_num, impl_wrapping_obj_to_num,
     num::*,
@@ -93,7 +93,7 @@ struct HostImpl {
     module_cache: RefCell<Option<ModuleCache>>,
     source_account: RefCell<Option<AccountId>>,
     ledger: RefCell<Option<LedgerInfo>>,
-    objects: RefCell<Vec<HostObject>>,
+    objects: RefCell<Vec<(HostObject, ObjectMeta)>>,
     storage: RefCell<Storage>,
     context_stack: RefCell<Vec<Context>>,
     // Note: budget is refcounted and is _not_ deep-cloned when you call HostImpl::deep_clone,
@@ -227,7 +227,7 @@ impl_checked_borrow_helpers!(
 );
 impl_checked_borrow_helpers!(
     objects,
-    Vec<HostObject>,
+    Vec<(HostObject, ObjectMeta)>,
     try_borrow_objects,
     try_borrow_objects_mut
 );
