@@ -748,36 +748,33 @@ impl Host {
     ///
     /// Use [`Host::can_finish`] to determine before calling the function if it
     /// will succeed.
-    /// Finishes execution and returns the final storage as LedgerKey-based maps
-    /// plus events, suitable for the external interface.
-    ///
-    /// Converts internal StorageKey→LedgerKey while the Host is still alive
-    /// (needed for ContractData Val→ScVal conversion).
-    pub fn try_finish(
-        self,
-    ) -> Result<(crate::storage::LedgerKeyEntryMap, crate::storage::LedgerKeyFootprintMap, Events), HostError> {
-        let events = self.try_borrow_events()?.externalize(&self)?;
-        let budget = self.budget_ref().clone();
-
-        // Convert StorageMap and FootprintMap to LedgerKey-based maps while Host is alive.
+    /// Returns the storage map and footprint as LedgerKey-based maps.
+    /// Must be called before `try_finish` while the Host is still alive
+    /// (needed for ContractData Val→ScVal conversion in StorageKey→LedgerKey).
+    pub fn get_ledger_key_storage(
+        &self,
+    ) -> Result<(crate::storage::LedgerKeyEntryMap, crate::storage::LedgerKeyFootprintMap), HostError> {
+        let budget = self.budget_ref();
         let mut lk_map = crate::storage::LedgerKeyEntryMap::new();
         let mut lk_fp = crate::storage::LedgerKeyFootprintMap::new();
-        {
-            let storage = self.try_borrow_storage()?;
-            for (sk, val) in storage.map.iter(&self)? {
-                let lk = sk.to_ledger_key(&self)?;
-                lk_map = lk_map.insert(lk, val.clone(), &budget)?;
-            }
-            for (sk, access) in storage.footprint.0.iter(&budget)? {
-                let lk = sk.to_ledger_key(&self)?;
-                lk_fp = lk_fp.insert(lk, *access, &budget)?;
-            }
+        let storage = self.try_borrow_storage()?;
+        for (sk, val) in storage.map.iter(self)? {
+            let lk = sk.to_ledger_key(self)?;
+            lk_map = lk_map.insert(lk, val.clone(), budget)?;
         }
+        for (sk, access) in storage.footprint.0.iter(self)? {
+            let lk = sk.to_ledger_key(self)?;
+            lk_fp = lk_fp.insert(lk, *access, budget)?;
+        }
+        Ok((lk_map, lk_fp))
+    }
 
+    /// Finishes execution and returns events. Consumes the Host.
+    /// Call `get_ledger_key_storage` before this if you need the storage.
+    pub fn try_finish(self) -> Result<Events, HostError> {
+        let events = self.try_borrow_events()?.externalize(&self)?;
         Rc::try_unwrap(self.0)
-            .map(|_host_impl| {
-                (lk_map, lk_fp, events)
-            })
+            .map(|_host_impl| events)
             .map_err(|_| {
                 Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InternalError).into()
             })

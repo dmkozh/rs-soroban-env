@@ -158,20 +158,54 @@ impl Host {
     /// Converts a [`Val`] to an [`ScVal`] and combines it with the currently-executing
     /// [`ContractID`] to produce a [`StorageKey`], that can be used to access ledger [`Storage`].
     // Notes on metering: covered by components.
+    /// Recursively check that a Val used as a storage key does not contain
+    /// any types that can't be represented in XDR (e.g. MuxedAddress).
+    /// Only used in test/testutils contexts; production enforcement happens
+    /// at the footprint/e2e boundary via from_ledger_key.
+    #[cfg(any(test, feature = "testutils"))]
+    pub(crate) fn check_val_allowed_as_storage_key(&self, val: Val) -> Result<(), HostError> {
+        use crate::host_object::HostObject;
+        if val.get_tag() == crate::Tag::MuxedAddressObject {
+            return Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InvalidInput,
+                "muxed addresses are not allowed as storage keys",
+                &[val],
+            ));
+        }
+        if val.get_tag().is_object() {
+            let obj = Object::try_from(val).map_err(|_| {
+                self.err(ScErrorType::Value, ScErrorCode::InternalError, "expected object", &[])
+            })?;
+            self.visit_obj_untyped(obj, |ho| {
+                match ho {
+                    HostObject::Vec(v) => {
+                        for elem in v.as_slice() {
+                            self.check_val_allowed_as_storage_key(*elem)?;
+                        }
+                    }
+                    HostObject::Map(m) => {
+                        for (k, v) in m.map.as_slice() {
+                            self.check_val_allowed_as_storage_key(*k)?;
+                            self.check_val_allowed_as_storage_key(*v)?;
+                        }
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    // Notes on metering: covered by components.
     pub(crate) fn storage_key_from_val(
         &self,
         k: Val,
         durability: ContractDataDurability,
     ) -> Result<Rc<crate::storage::StorageKey>, HostError> {
-        // Reject muxed addresses as storage keys (they can't be represented in XDR).
-        if k.get_tag() == crate::Tag::MuxedAddressObject {
-            return Err(self.err(
-                ScErrorType::Storage,
-                ScErrorCode::InvalidInput,
-                "muxed addresses are not allowed as storage keys",
-                &[k],
-            ));
-        }
+        #[cfg(any(test, feature = "testutils"))]
+        self.check_val_allowed_as_storage_key(k)?;
         // Create ContractData variant directly — no Val→ScVal conversion needed.
         let contract_id = self.get_current_contract_id_internal()?.0;
         Rc::metered_new(

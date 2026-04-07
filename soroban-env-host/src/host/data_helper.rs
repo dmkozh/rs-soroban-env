@@ -616,7 +616,7 @@ impl Host {
         self.with_mut_storage(|storage| {
             storage
                 .footprint
-                .record_access(&key, access_type, self.as_budget())?;
+                .record_access(&key, access_type, self)?;
             storage.map = storage.map.insert(key, val, self)?;
             Ok(())
         })

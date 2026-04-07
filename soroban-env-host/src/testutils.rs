@@ -414,7 +414,7 @@ impl Host {
                 storage
                     .footprint
                     .0
-                    .iter(self.budget_ref())
+                    .iter(self)
                     .unwrap()
                     .map(|(k, accesstype)| {
                         let mut accesstype = *accesstype;
@@ -440,25 +440,26 @@ impl Host {
                         }
                         (k.clone(), accesstype)
                     }),
-                self.budget_ref(),
+                self,
             )
             .unwrap();
 
             // Synthesize empty entries for anything the contract made up (these
             // will be in the footprint but not yet in the map, which is an
             // invariant violation we need to repair here).
-            let mut map = BTreeMap::new();
+            let mut entries: Vec<(Rc<crate::storage::StorageKey>, Option<crate::storage::EntryWithLiveUntil>)> = Vec::new();
             for (k, v) in storage.map.iter(self).unwrap() {
-                map.insert(k.clone(), v.clone());
+                entries.push((k.clone(), v.clone()));
             }
-            for (k, _) in storage.footprint.0.iter(self.budget_ref()).unwrap() {
-                if !map.contains_key(k) {
-                    map.insert(k.clone(), None);
+            // Synthesize empty entries for footprint keys not yet in the map.
+            for (k, _) in storage.footprint.0.iter(self).unwrap() {
+                if !entries.iter().any(|(mk, _)| Rc::ptr_eq(mk, k)) {
+                    entries.push((k.clone(), None));
                 }
             }
             // Reset any nonces so they can be consumed.
-            for (k, v) in map.iter_mut() {
-                let is_nonce = match k.as_ref() {
+            for (_k, v) in entries.iter_mut() {
+                let is_nonce = match _k.as_ref() {
                     crate::storage::StorageKey::Other(
                         crate::xdr::LedgerKey::ContractData(cd),
                     ) => matches!(&cd.key, ScVal::LedgerKeyNonce(_)),
@@ -468,8 +469,18 @@ impl Host {
                     *v = None;
                 }
             }
+            // Sort by the Compare<StorageKey> for Host ordering so
+            // from_exact_iter can verify sorted order.
+            entries.sort_by(|a, b| {
+                <Host as crate::Compare<crate::storage::StorageKey>>::compare(
+                    self,
+                    a.0.as_ref(),
+                    b.0.as_ref(),
+                )
+                .unwrap()
+            });
             storage.map = MeteredOrdMap::from_exact_iter(
-                map.iter().map(|(k, v)| (k.clone(), v.clone())),
+                entries.into_iter(),
                 self,
             )
             .unwrap();

@@ -440,7 +440,7 @@ impl InvocationResources {
 
         // Check individual entry sizes in storage
         if let Ok(storage) = host.try_borrow_storage() {
-            if let Ok(footprint_iter) = storage.footprint.0.iter(host.budget_ref()) {
+            if let Ok(footprint_iter) = storage.footprint.0.iter(host) {
                 for (key, _access_type) in footprint_iter {
                     // Serialize the key to get its size - need LedgerKey for XDR
                     let mut key_buf = Vec::<u8>::new();
@@ -966,7 +966,7 @@ impl Host {
         let curr_footprint = curr_storage.footprint.clone();
 
         let curr_ledger_seq: u32 = self.get_ledger_sequence()?.into();
-        for (key, curr_access_type) in curr_footprint.0.iter(self.budget_ref())? {
+        for (key, curr_access_type) in curr_footprint.0.iter(self)? {
             let maybe_init_entry = init_storage_snapshot.get_from_map(key, self)?;
             let mut init_entry_size_for_rent = 0;
             let mut init_live_until_ledger = curr_ledger_seq;
@@ -1153,7 +1153,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316175,
+                instructions: 316130,
                 mem_bytes: 1134995,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1180,7 +1180,7 @@ mod test {
                     ),
                 ),
                 resources: SubInvocationResources {
-                    instructions: 316175,
+                    instructions: 316130,
                     mem_bytes: 1134995,
                     disk_read_entries: 0,
                     memory_read_entries: 3,
@@ -1214,7 +1214,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 318949,
+                instructions: 318814,
                 mem_bytes: 1135322,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1240,7 +1240,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 315033,
+                instructions: 314988,
                 mem_bytes: 1134707,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1266,7 +1266,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 320933,
+                instructions: 320798,
                 mem_bytes: 1135814,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1292,7 +1292,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 315435,
+                instructions: 315390,
                 mem_bytes: 1134775,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1318,7 +1318,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316510,
+                instructions: 316465,
                 mem_bytes: 1135127,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1344,7 +1344,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 316682,
+                instructions: 316637,
                 mem_bytes: 1135127,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1370,7 +1370,7 @@ mod test {
         assert!(res.is_err());
         expect![[r#"
             InvocationResources {
-                instructions: 317071,
+                instructions: 317026,
                 mem_bytes: 1135331,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
@@ -1403,7 +1403,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 319268,
+                instructions: 319223,
                 mem_bytes: 1135662,
                 disk_read_entries: 2,
                 memory_read_entries: 1,
@@ -1435,7 +1435,7 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 321507,
+                instructions: 321372,
                 mem_bytes: 1136109,
                 disk_read_entries: 3,
                 memory_read_entries: 0,
@@ -1935,7 +1935,7 @@ mod test {
                             ),
                             data: String(
                                 ScString(
-                                    StringM(invocation resource limits are exceeded: instructions: 320258 > 10, memory bytes: 1135950 > 20, total footprint ledger entries: 5 > 4, disk read ledger entries: 2 > 1, disk read bytes: 3132 > 30, write ledger entries: 2 > 0, write bytes: 3132 > 40, contract data entry with key 'ContractInstance { contract_id: Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441) }' size: 104 > 35, contract code entry with key 'Other(ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) }))' size: 3028 > 45),
+                                    StringM(invocation resource limits are exceeded: instructions: 320213 > 10, memory bytes: 1135950 > 20, total footprint ledger entries: 5 > 4, disk read ledger entries: 2 > 1, disk read bytes: 3132 > 30, write ledger entries: 2 > 0, write bytes: 3132 > 40, contract data entry with key 'ContractInstance { contract_id: Hash(ba863dea340f907c97f640ecbe669125e9f8f3b63ed1f4ed0f30073b869e5441) }' size: 104 > 35, contract code entry with key 'Other(ContractCode(LedgerKeyContractCode { hash: Hash(fc644715caaead746e6145f4331ff75c427c965c20d2995a9942b01247515962) }))' size: 3028 > 45),
                                 ),
                             ),
                         },

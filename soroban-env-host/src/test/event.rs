@@ -216,7 +216,7 @@ fn log_some_diagnostics(
     let mem = budget.get_mem_bytes_consumed()?;
     let shadow_cpu = budget.get_shadow_cpu_insns_consumed()?;
     let shadow_mem = budget.get_shadow_mem_bytes_consumed()?;
-    let (_, _, evts) = host.try_finish()?;
+    let evts = host.try_finish()?;
     Ok((cpu, mem, shadow_cpu, shadow_mem, evts))
 }
 
@@ -291,7 +291,7 @@ fn test_observation_does_not_emit_diagnostic_events_from_failed_borrows() -> Res
     host.obj_from_i64(1)?;
     drop(storage);
     drop(obs_host);
-    let (_, _, evts) = host.try_finish()?;
+    let evts = host.try_finish()?;
     dbg!(&evts);
     assert_eq!(evts.0.len(), 0);
     Ok(())

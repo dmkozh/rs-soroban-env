@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::budget::Budget;
+use crate::budget::AsBudget;
 use crate::host_object::MuxedScAddress;
 use crate::storage::{AccessType, Footprint, Storage, StorageKey};
 use crate::xdr::{
@@ -13,8 +13,8 @@ use soroban_test_wasms::{CONTRACT_STORAGE, CONTRACT_STORAGE_WITH_VALS, INVOKE_CO
 
 #[test]
 fn footprint_record_access() -> Result<(), HostError> {
-    let budget = Budget::default();
-    budget.reset_unlimited()?;
+    let host = Host::test_host_with_recording_footprint();
+    host.as_budget().reset_unlimited()?;
     let mut fp = Footprint::default();
     // record when key not exist
     let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
@@ -24,21 +24,21 @@ fn footprint_record_access() -> Result<(), HostError> {
             durability: ContractDataDurability::Persistent,
         },
     )));
-    fp.record_access(&key, AccessType::ReadOnly, &budget)?;
-    assert_eq!(fp.0.contains_key::<StorageKey>(&key, &budget)?, true);
+    fp.record_access(&key, AccessType::ReadOnly, &host)?;
+    assert_eq!(fp.0.contains_key::<StorageKey>(&key, &host)?, true);
     assert_eq!(
-        fp.0.get::<StorageKey>(&key, &budget)?,
+        fp.0.get::<StorageKey>(&key, &host)?,
         Some(&AccessType::ReadOnly)
     );
     // record and change access
-    fp.record_access(&key, AccessType::ReadWrite, &budget)?;
+    fp.record_access(&key, AccessType::ReadWrite, &host)?;
     assert_eq!(
-        fp.0.get::<StorageKey>(&key, &budget)?,
+        fp.0.get::<StorageKey>(&key, &host)?,
         Some(&AccessType::ReadWrite)
     );
-    fp.record_access(&key, AccessType::ReadOnly, &budget)?;
+    fp.record_access(&key, AccessType::ReadOnly, &host)?;
     assert_eq!(
-        fp.0.get::<StorageKey>(&key, &budget)?,
+        fp.0.get::<StorageKey>(&key, &host)?,
         Some(&AccessType::ReadWrite)
     );
     Ok(())
@@ -46,7 +46,7 @@ fn footprint_record_access() -> Result<(), HostError> {
 
 #[test]
 fn footprint_enforce_access() -> Result<(), HostError> {
-    let budget = Budget::default();
+    let host = Host::test_host_with_recording_footprint();
     let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
         LedgerKeyContractData {
             contract: ScAddress::Contract(ContractId([0; 32].into())),
@@ -65,22 +65,22 @@ fn footprint_enforce_access() -> Result<(), HostError> {
     )));
 
     let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
-    let mom = MeteredOrdMap::from_map(om, &budget)?;
+    let mom = MeteredOrdMap::from_map(om, &host)?;
     let mut fp = Footprint(mom);
     assert!(fp
-        .enforce_access(&key2, AccessType::ReadOnly, &budget)
+        .enforce_access(&key2, AccessType::ReadOnly, &host)
         .is_err());
-    fp.enforce_access(&key, AccessType::ReadOnly, &budget)?;
+    fp.enforce_access(&key, AccessType::ReadOnly, &host)?;
     fp.0 =
-        fp.0.insert(Rc::clone(&key), AccessType::ReadWrite, &budget)?;
-    fp.enforce_access(&key, AccessType::ReadOnly, &budget)?;
-    fp.enforce_access(&key, AccessType::ReadWrite, &budget)?;
+        fp.0.insert(Rc::clone(&key), AccessType::ReadWrite, &host)?;
+    fp.enforce_access(&key, AccessType::ReadOnly, &host)?;
+    fp.enforce_access(&key, AccessType::ReadWrite, &host)?;
     Ok(())
 }
 
 #[test]
 fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
-    let budget = Budget::default();
+    let host = Host::test_host_with_recording_footprint();
     let mut fp = Footprint::default();
     let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
         LedgerKeyContractData {
@@ -89,7 +89,7 @@ fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
             durability: ContractDataDurability::Persistent,
         },
     )));
-    let res = fp.enforce_access(&key, AccessType::ReadOnly, &budget);
+    let res = fp.enforce_access(&key, AccessType::ReadOnly, &host);
     assert!(HostError::result_matches_err(
         res,
         (ScErrorType::Storage, ScErrorCode::ExceededLimit)
@@ -99,7 +99,7 @@ fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
 
 #[test]
 fn footprint_attempt_to_write_readonly_entry() -> Result<(), HostError> {
-    let budget = Budget::default();
+    let host = Host::test_host_with_recording_footprint();
     let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
         LedgerKeyContractData {
             contract: ScAddress::Contract(ContractId([0; 32].into())),
@@ -108,9 +108,9 @@ fn footprint_attempt_to_write_readonly_entry() -> Result<(), HostError> {
         },
     )));
     let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
-    let mom = MeteredOrdMap::from_map(om, &budget)?;
+    let mom = MeteredOrdMap::from_map(om, &host)?;
     let mut fp = Footprint(mom);
-    let res = fp.enforce_access(&key, AccessType::ReadWrite, &budget);
+    let res = fp.enforce_access(&key, AccessType::ReadWrite, &host);
     assert!(HostError::result_matches_err(
         res,
         (ScErrorType::Storage, ScErrorCode::ExceededLimit)

@@ -798,21 +798,21 @@ mod cap_54_55_56 {
                 })
             })
         }
-        fn read_only_footprint(&self, budget: &Budget) -> Footprint {
+        fn read_only_footprint(&self, host: &Host) -> Footprint {
             Footprint(
                 FootprintMap::new()
-                    .insert(self.contract_key.clone(), AccessType::ReadOnly, budget)
+                    .insert(self.contract_key.clone(), AccessType::ReadOnly, host)
                     .unwrap()
-                    .insert(self.wasm_key.clone(), AccessType::ReadOnly, budget)
+                    .insert(self.wasm_key.clone(), AccessType::ReadOnly, host)
                     .unwrap(),
             )
         }
-        fn wasm_writing_footprint(&self, budget: &Budget) -> Footprint {
+        fn wasm_writing_footprint(&self, host: &Host) -> Footprint {
             Footprint(
                 FootprintMap::new()
-                    .insert(self.contract_key.clone(), AccessType::ReadOnly, budget)
+                    .insert(self.contract_key.clone(), AccessType::ReadOnly, host)
                     .unwrap()
-                    .insert(self.wasm_key.clone(), AccessType::ReadWrite, budget)
+                    .insert(self.wasm_key.clone(), AccessType::ReadWrite, host)
                     .unwrap(),
             )
         }
@@ -833,13 +833,13 @@ mod cap_54_55_56 {
         }
         fn read_only_storage(&self, host: &Host) -> Storage {
             Storage::with_enforcing_footprint_and_map(
-                self.read_only_footprint(host.budget_ref()),
+                self.read_only_footprint(&host),
                 self.storage_map(host),
             )
         }
         fn wasm_writing_storage(&self, host: &Host) -> Storage {
             Storage::with_enforcing_footprint_and_map(
-                self.wasm_writing_footprint(host.budget_ref()),
+                self.wasm_writing_footprint(&host),
                 self.storage_map(host),
             )
         }
@@ -887,7 +887,7 @@ mod cap_54_55_56 {
             let s = realhost.try_borrow_storage()?;
             Storage::with_enforcing_footprint_and_map(s.footprint.clone(), s.map.clone())
         };
-        let (_, _, _events) = realhost.try_finish()?;
+        let _events = realhost.try_finish()?;
 
         // Phase 2: build new host with previous ledger output as storage. Possibly on new protocol.
         let host = observed_test_host_with_storage_and_budget(
@@ -946,7 +946,7 @@ mod cap_54_55_56 {
         let realhost = host.clone();
         drop(host);
         let budget = realhost.budget_cloned();
-        let (_, _, _events) = realhost.try_finish()?;
+        let _events = realhost.try_finish()?;
         Ok(budget)
     }
 
@@ -1252,7 +1252,7 @@ mod cap_54_55_56 {
             storage.footprint.0 = storage
                 .footprint
                 .0
-                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, host.budget_ref())?
+                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, &host)?
                 .unwrap()
                 .0;
             storage.map = storage
@@ -1345,7 +1345,7 @@ mod cap_54_55_56 {
             storage.footprint.0 = storage
                 .footprint
                 .0
-                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, host.budget_ref())?
+                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, &host)?
                 .unwrap()
                 .0;
             storage.map = storage
@@ -1392,7 +1392,7 @@ mod cap_54_55_56 {
             storage.footprint.record_access(
                 &wasm_code_key,
                 AccessType::ReadWrite,
-                host.as_budget(),
+                &host,
             )?;
             storage.map = storage.map.insert(wasm_code_key, None, &host)?;
             Ok(())
@@ -1843,7 +1843,7 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 894141,
+                            instructions: 893871,
                             mem_bytes: 3470585,
                             disk_read_entries: 0,
                             memory_read_entries: 6,
@@ -1869,7 +1869,7 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 624801,
+                                    instructions: 624531,
                                     mem_bytes: 2339161,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
@@ -2001,7 +2001,7 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2398868,
+                            instructions: 2398238,
                             mem_bytes: 5948656,
                             disk_read_entries: 0,
                             memory_read_entries: 8,
@@ -2027,7 +2027,7 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 910725,
+                                    instructions: 910455,
                                     mem_bytes: 2387327,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
@@ -2082,7 +2082,7 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 543872,
+                                    instructions: 543512,
                                     mem_bytes: 1175064,
                                     disk_read_entries: 0,
                                     memory_read_entries: 0,

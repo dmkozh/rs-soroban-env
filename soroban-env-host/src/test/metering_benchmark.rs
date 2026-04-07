@@ -59,7 +59,8 @@ fn run_add_i32() -> Result<(), HostError> {
             Symbol::try_from_small_str("add")?,
             host.test_vec_obj(&[a, b])?,
         )?;
-        let (_, footprint_map, _) = host.try_finish().unwrap();
+        let (_, footprint_map) = host.get_ledger_key_storage().unwrap();
+        let _ = host.try_finish().unwrap();
         Footprint(footprint_map)
     };
     // Run 2: enforce preflight footprint
@@ -111,7 +112,8 @@ fn run_complex() -> Result<(), HostError> {
             Symbol::try_from_small_str("go")?,
             host.add_host_object(HostVec::new())?,
         )?;
-        let (_, footprint_map, _) = host.try_finish().unwrap();
+        let (_, footprint_map) = host.get_ledger_key_storage().unwrap();
+        let _ = host.try_finish().unwrap();
         Footprint(footprint_map)
     };
 

@@ -27,81 +27,13 @@ use crate::{
 /// `Hash + Val + durability` which compares much faster than
 /// `ScAddress + ScVal + durability` in the XDR `LedgerKey::ContractData`.
 ///
-/// Keys originating from external sources (e.g. e2e_invoke) are stored
-/// as `Other(LedgerKey)` and compared using the standard LedgerKey comparison.
-// Implement PartialEq/Eq/PartialOrd/Ord for use in BTreeMap (test code) and
-// other non-metered contexts. These use the same ordering as Compare<StorageKey>
-// for Budget but without metering.
-impl PartialEq for StorageKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
-    }
-}
-
-impl Eq for StorageKey {}
-
-impl PartialOrd for StorageKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for StorageKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        fn discriminant(sk: &StorageKey) -> u32 {
-            match sk {
-                StorageKey::ContractData { .. } => 0,
-                StorageKey::ContractInstance { .. } => 1,
-                StorageKey::Other(_) => 2,
-            }
-        }
-        match (self, other) {
-            (
-                StorageKey::ContractData {
-                    contract_id: a_id,
-                    key: a_key,
-                    durability: a_dur,
-                },
-                StorageKey::ContractData {
-                    contract_id: b_id,
-                    key: b_key,
-                    durability: b_dur,
-                },
-            ) => a_id
-                .cmp(b_id)
-                .then_with(|| a_dur.cmp(b_dur))
-                .then_with(|| {
-                    // Use proper sign-aware body comparison for inline Vals.
-                    // This matches compare_small_vals_unmetered logic.
-                    const TAG_BITS: u32 = 8;
-                    let a_tag = a_key.get_tag();
-                    let b_tag = b_key.get_tag();
-                    if a_tag != b_tag {
-                        return a_tag.cmp(&b_tag);
-                    }
-                    use soroban_env_common::Tag;
-                    match a_tag {
-                        Tag::I32Val | Tag::I64Small | Tag::I128Small | Tag::I256Small => {
-                            let a_body = (a_key.get_payload() as i64) >> TAG_BITS;
-                            let b_body = (b_key.get_payload() as i64) >> TAG_BITS;
-                            a_body.cmp(&b_body)
-                        }
-                        _ => {
-                            let a_body = a_key.get_payload() >> TAG_BITS;
-                            let b_body = b_key.get_payload() >> TAG_BITS;
-                            a_body.cmp(&b_body)
-                        }
-                    }
-                }),
-            (
-                StorageKey::ContractInstance { contract_id: a },
-                StorageKey::ContractInstance { contract_id: b },
-            ) => a.cmp(b),
-            (StorageKey::Other(a), StorageKey::Other(b)) => a.cmp(b),
-            _ => discriminant(self).cmp(&discriminant(other)),
-        }
-    }
-}
+/// Keys originating from external sources (e.g. e2e_invoke) are converted
+/// to the appropriate variant via `from_ledger_key` so comparison is consistent.
+///
+/// Note: StorageKey intentionally does not implement Ord/PartialOrd because
+/// Val comparison for ContractData keys requires Host context (for object Vals).
+/// All comparison goes through `Compare<StorageKey> for Host` or
+/// `Compare<StorageKey> for Budget`.
 
 #[derive(Clone, Hash, Debug)]
 pub enum StorageKey {
@@ -207,7 +139,7 @@ impl StorageKey {
     }
 }
 
-pub type FootprintMap = MeteredOrdMap<Rc<StorageKey>, AccessType, Budget>;
+pub type FootprintMap = MeteredOrdMap<Rc<StorageKey>, AccessType, Host>;
 pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
 pub type StorageMap = MeteredOrdMap<Rc<StorageKey>, Option<EntryWithLiveUntil>, Host>;
 /// LedgerKey-based maps returned by try_finish for external consumers.
@@ -295,22 +227,20 @@ impl Footprint {
         &mut self,
         key: &Rc<StorageKey>,
         ty: AccessType,
-        budget: &Budget,
+        host: &Host,
     ) -> Result<(), HostError> {
-        if let Some(existing) = self.0.get::<Rc<StorageKey>>(key, budget)? {
+        if let Some(existing) = self.0.get::<Rc<StorageKey>>(key, host)? {
             match (existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
-                    // The only interesting case is an upgrade
-                    // from previously-read-only to read-write.
-                    self.0 = self.0.insert(Rc::clone(key), ty, budget)?;
+                    self.0 = self.0.insert(Rc::clone(key), ty, host)?;
                     Ok(())
                 }
                 (AccessType::ReadWrite, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadWrite, AccessType::ReadWrite) => Ok(()),
             }
         } else {
-            self.0 = self.0.insert(Rc::clone(key), ty, budget)?;
+            self.0 = self.0.insert(Rc::clone(key), ty, host)?;
             Ok(())
         }
     }
@@ -319,15 +249,9 @@ impl Footprint {
         &mut self,
         key: &Rc<StorageKey>,
         ty: AccessType,
-        budget: &Budget,
+        host: &Host,
     ) -> Result<(), HostError> {
-        // `ExceededLimit` is not the most precise term here, but footprint has
-        // to be externally supplied in a similar fashion to budget and it's
-        // also representing an execution resource limit (number of ledger
-        // entries to access), so it might be considered 'exceeded'.
-        // This also helps distinguish access errors from the values simply
-        // being  missing from storage (but with a valid footprint).
-        if let Some(existing) = self.0.get::<Rc<StorageKey>>(key, budget)? {
+        if let Some(existing) = self.0.get::<Rc<StorageKey>>(key, host)? {
             match (existing, ty) {
                 (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
                 (AccessType::ReadOnly, AccessType::ReadWrite) => {
@@ -544,10 +468,10 @@ impl Storage {
         match &self.mode {
             #[cfg(any(test, feature = "recording_mode"))]
             FootprintMode::Recording(_) => {
-                self.footprint.record_access(key, ty, host.budget_ref())?;
+                self.footprint.record_access(key, ty, host)?;
             }
             FootprintMode::Enforcing => {
-                self.footprint.enforce_access(key, ty, host.budget_ref())?;
+                self.footprint.enforce_access(key, ty, host)?;
             }
         };
         self.map = self.map.insert(Rc::clone(key), val, host)?;
@@ -898,7 +822,7 @@ impl Storage {
         match self.mode {
             #[cfg(any(test, feature = "recording_mode"))]
             FootprintMode::Recording(ref src) => {
-                self.footprint.record_access(key, ty, host.budget_ref())?;
+                self.footprint.record_access(key, ty, host)?;
                 // In recording mode we treat the map as a cache
                 // that misses read-through to the underlying src.
                 if !self
@@ -910,11 +834,11 @@ impl Storage {
                     let value = src.get(&lk)?;
                     self.map = self.map.insert(key.clone(), value, host)?;
                 }
-                self.footprint.record_access(key, ty, host.budget_ref())?;
+                self.footprint.record_access(key, ty, host)?;
                 self.handle_maybe_expired_entry(key, host)?;
             }
             FootprintMode::Enforcing => {
-                self.footprint.enforce_access(key, ty, host.budget_ref())?;
+                self.footprint.enforce_access(key, ty, host)?;
             }
         };
         Ok(())
@@ -927,7 +851,6 @@ impl Storage {
         host: &Host,
     ) -> Result<(), HostError> {
         host.with_ledger_info(|li| {
-            let budget = host.budget_ref();
             if let Some(Some((entry, live_until))) =
                 self.map.get::<Rc<StorageKey>>(key, host)?
             {
@@ -947,7 +870,7 @@ impl Storage {
                             }
                             ContractDataDurability::Persistent => {
                                 self.footprint
-                                    .record_access(key, AccessType::ReadWrite, budget)?;
+                                    .record_access(key, AccessType::ReadWrite, host)?;
                                 let new_live_until = li
                                     .min_live_until_ledger_checked(
                                         ContractDataDurability::Persistent,

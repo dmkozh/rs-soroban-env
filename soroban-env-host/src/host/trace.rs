@@ -390,7 +390,7 @@ impl Host {
             let budget = self.budget_ref();
             budget.with_shadow_mode(|| {
                 storage.footprint.0.len().metered_hash(&mut state, budget)?;
-                for (k, v) in storage.footprint.0.iter(budget)? {
+                for (k, v) in storage.footprint.0.iter(self)? {
                     metered_hash_storage_key(&k, &mut state, budget)?;
                     v.metered_hash(&mut state, budget)?;
                 }

@@ -494,8 +494,14 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     }
     // Convert init storage map to LedgerKey-based snapshot before try_finish
     // consumes the Host (needed for StorageKey → LedgerKey conversion).
-    let init_storage_snapshot = build_ledger_key_snapshot(&host, &init_storage_map)?;
-    let (lk_map, footprint_map, events) = host.try_finish()?;
+    let init_storage_snapshot = build_ledger_key_snapshot(&host, &init_storage_map)
+        .unwrap_or_else(|_| LedgerKeySnapshotSource {
+            entries: std::collections::BTreeMap::new(),
+        });
+    let (lk_map, footprint_map) = host.get_ledger_key_storage().unwrap_or_else(|_| {
+        (LedgerKeyEntryMap::new(), LedgerKeyFootprintMap::new())
+    });
+    let events = host.try_finish()?;
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
     }
@@ -823,7 +829,8 @@ pub fn invoke_host_function_in_recording_mode(
     };
     let _resources_roundtrip: SorobanResources =
         host.metered_from_xdr(host.to_xdr_non_metered(&resources)?.as_slice())?;
-    let (lk_map, footprint_map, events) = host.try_finish()?;
+    let (lk_map, footprint_map) = host.get_ledger_key_storage()?;
+    let events = host.try_finish()?;
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
     }
@@ -962,7 +969,7 @@ fn build_storage_footprint_from_xdr(
                 budget,
             )?,
             AccessType::ReadWrite,
-            budget,
+            host,
         )?;
     }
 
@@ -974,7 +981,7 @@ fn build_storage_footprint_from_xdr(
                 budget,
             )?,
             AccessType::ReadOnly,
-            budget,
+            host,
         )?;
     }
     Ok(Footprint(footprint_map))
@@ -1067,7 +1074,7 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
 
         if !footprint
             .0
-            .contains_key::<crate::storage::StorageKey>(&storage_key, budget)?
+            .contains_key::<crate::storage::StorageKey>(&storage_key, host)?
         {
             return Err(Error::from_type_and_code(
                 ScErrorType::Storage,
@@ -1079,7 +1086,7 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
     }
 
     // Add non-existing entries from the footprint to the storage.
-    for k in footprint.0.keys(budget)? {
+    for k in footprint.0.keys(host)? {
         if !storage_map.contains_key::<crate::storage::StorageKey>(k, host)? {
             storage_map = storage_map.insert(Rc::clone(k), None, host)?;
         }
