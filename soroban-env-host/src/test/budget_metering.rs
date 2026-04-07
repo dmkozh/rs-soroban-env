@@ -4,6 +4,7 @@ use crate::{
         metered_clone::{MeteredClone, MeteredIterator},
         metered_xdr::metered_write_xdr,
     },
+    host_object::{HostMap, HostVec},
     xdr::{ContractCostType, ScMap, ScMapEntry, ScVal},
     Env, ErrorHandler, Host, HostError, Symbol, Val,
 };
@@ -801,6 +802,74 @@ fn bench_metered_compare_scval_vec_u64() {
     let elapsed = start.elapsed();
     eprintln!(
         "ScVal::Vec(10 x U64)::compare: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_from_host_val_map() {
+    let host = Host::test_host();
+    host.as_budget().reset_unlimited().unwrap();
+
+    // Create a map with 10 Symbol->U64 entries as a HostObject
+    let mut pairs = Vec::new();
+    for i in 0..10u32 {
+        let key = host
+            .to_host_val(&ScVal::Symbol(ScSymbol(
+                format!("key_{i:03}").try_into().unwrap(),
+            )))
+            .unwrap();
+        let val = host
+            .to_host_val(&ScVal::U64(i as u64))
+            .unwrap();
+        pairs.push((key, val));
+    }
+    let map = HostMap::from_map(pairs, &host).unwrap();
+    let map_obj = host.add_host_object(map).unwrap();
+
+    // Warm up
+    for _ in 0..1_000 {
+        std::hint::black_box(host.from_host_obj(map_obj).unwrap());
+    }
+
+    let iterations = 200_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(host.from_host_obj(map_obj).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "from_host_obj(Map(10)): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_from_host_val_vec_u64() {
+    let host = Host::test_host();
+    host.as_budget().reset_unlimited().unwrap();
+
+    // Create a vec with 10 U64 entries as a HostObject
+    let mut vals = Vec::new();
+    for i in 0..10u32 {
+        vals.push(Val::from_u32(i).into());
+    }
+    let vec = HostVec::from_vec(vals).unwrap();
+    let vec_obj = host.add_host_object(vec).unwrap();
+
+    // Warm up
+    for _ in 0..1_000 {
+        std::hint::black_box(host.from_host_obj(vec_obj).unwrap());
+    }
+
+    let iterations = 500_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(host.from_host_obj(vec_obj).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "from_host_obj(Vec(10 x U64)): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
         elapsed.as_nanos() as f64 / iterations as f64
     );
 }

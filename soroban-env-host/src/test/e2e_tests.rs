@@ -829,7 +829,7 @@ fn test_wasm_upload_success_in_recording_mode() {
         }]
     );
     assert!(res.auth.is_empty());
-    expect!["1767593"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1767548"].assert_eq(&res.resources.instructions.to_string());
     expect!["684"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -1385,7 +1385,7 @@ fn test_create_contract_success_in_recording_mode() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["663629"].assert_eq(&res.resources.instructions.to_string());
+    expect!["664067"].assert_eq(&res.resources.instructions.to_string());
     expect!["104"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -1523,7 +1523,7 @@ fn test_create_contract_success_in_recording_mode_with_custom_account() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["1070787"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1071225"].assert_eq(&res.resources.instructions.to_string());
     expect!["176"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -1594,7 +1594,7 @@ fn test_create_contract_success_in_recording_mode_with_enforced_auth() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["665116"].assert_eq(&res.resources.instructions.to_string());
+    expect!["665554"].assert_eq(&res.resources.instructions.to_string());
     expect!["104"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -2033,7 +2033,7 @@ fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
         ]
     );
     assert!(res.restored_rw_entry_ids.is_empty());
-    expect!["898006"].assert_eq(&res.resources.instructions.to_string());
+    expect!["898441"].assert_eq(&res.resources.instructions.to_string());
     expect!["80"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -2543,7 +2543,7 @@ fn test_auto_restore_with_overwrite_in_recording_mode() {
         ]
     );
 
-    expect!["1028344"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1028779"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -2683,7 +2683,7 @@ fn test_auto_restore_with_new_entry_in_recording_mode() {
         ]
     );
     let wasm_entry_size = cd.wasm_entry.to_xdr(Limits::none()).unwrap().len() as u32;
-    expect!["1444181"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1444616"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {

@@ -1829,8 +1829,8 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 899408,
-                            mem_bytes: 3470257,
+                            instructions: 899846,
+                            mem_bytes: 3470313,
                             disk_read_entries: 0,
                             memory_read_entries: 6,
                             write_entries: 3,
@@ -1987,8 +1987,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2404796,
-                            mem_bytes: 5948080,
+                            instructions: 2406110,
+                            mem_bytes: 5948248,
                             disk_read_entries: 0,
                             memory_read_entries: 8,
                             write_entries: 3,
