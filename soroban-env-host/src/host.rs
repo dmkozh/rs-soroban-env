@@ -755,17 +755,25 @@ impl Host {
         &self,
     ) -> Result<(crate::storage::LedgerKeyEntryMap, crate::storage::LedgerKeyFootprintMap), HostError> {
         let budget = self.budget_ref();
-        let mut lk_map = crate::storage::LedgerKeyEntryMap::new();
-        let mut lk_fp = crate::storage::LedgerKeyFootprintMap::new();
         let storage = self.try_borrow_storage()?;
-        for (sk, val) in storage.map.iter(self)? {
-            let lk = sk.to_ledger_key(self)?;
-            lk_map = lk_map.insert(lk, val.clone(), budget)?;
-        }
-        for (sk, access) in storage.footprint.0.iter(self)? {
-            let lk = sk.to_ledger_key(self)?;
-            lk_fp = lk_fp.insert(lk, *access, budget)?;
-        }
+        // Collect entries, converting StorageKey→LedgerKey.
+        let mut map_entries: Vec<_> = storage
+            .map
+            .iter(self)?
+            .map(|(sk, val)| Ok((sk.to_ledger_key(self)?, val.clone())))
+            .collect::<Result<Vec<_>, HostError>>()?;
+        let mut fp_entries: Vec<_> = storage
+            .footprint
+            .0
+            .iter(self)?
+            .map(|(sk, access)| Ok((sk.to_ledger_key(self)?, *access)))
+            .collect::<Result<Vec<_>, HostError>>()?;
+        // Sort by LedgerKey ordering (may differ from StorageKey ordering
+        // due to different comparison logic for mixed key variants).
+        map_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        fp_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let lk_map = crate::storage::LedgerKeyEntryMap::from_map(map_entries, budget)?;
+        let lk_fp = crate::storage::LedgerKeyFootprintMap::from_map(fp_entries, budget)?;
         Ok((lk_map, lk_fp))
     }
 

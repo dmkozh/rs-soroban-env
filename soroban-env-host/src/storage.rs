@@ -98,30 +98,38 @@ impl StorageKey {
     pub fn from_ledger_key(lk: LedgerKey, host: &Host) -> Result<Self, HostError> {
         match lk {
             LedgerKey::ContractData(ref cd) => {
-                if cd.key == ScVal::LedgerKeyContractInstance {
-                    // Instance key: extract contract hash
-                    match &cd.contract {
-                        ScAddress::Contract(id) => Ok(StorageKey::ContractInstance {
-                            contract_id: id.0.metered_clone(host.as_budget())?,
-                        }),
-                        _ => Ok(StorageKey::Other(lk)),
+                match &cd.key {
+                    ScVal::LedgerKeyContractInstance => {
+                        // Instance key: extract contract hash
+                        match &cd.contract {
+                            ScAddress::Contract(id) => Ok(StorageKey::ContractInstance {
+                                contract_id: id.0.metered_clone(host.as_budget())?,
+                            }),
+                            _ => Ok(StorageKey::Other(lk)),
+                        }
                     }
-                } else {
-                    // Regular contract data: try to convert ScVal to Val for fast comparison.
-                    // Fall back to Other(LedgerKey) if conversion fails (e.g. for
-                    // ScVal types that can't be represented as host Vals).
-                    match &cd.contract {
-                        ScAddress::Contract(id) => {
-                            match host.to_host_val(&cd.key) {
-                                Ok(val) => Ok(StorageKey::ContractData {
+                    // Nonce keys are internal (used for auth) and don't go
+                    // through the contract Val path — keep as Other.
+                    ScVal::LedgerKeyNonce(_) => Ok(StorageKey::Other(lk)),
+                    _ => {
+                        // Regular contract data: convert ScVal to Val.
+                        match &cd.contract {
+                            ScAddress::Contract(id) => {
+                                let val = host.to_host_val(&cd.key)?;
+                                // Reject muxed addresses (not representable in XDR footprint).
+                                if val.get_tag() == crate::Tag::MuxedAddressObject {
+                                    return Err(
+                                        (ScErrorType::Storage, ScErrorCode::InvalidInput).into()
+                                    );
+                                }
+                                Ok(StorageKey::ContractData {
                                     contract_id: id.0.metered_clone(host.as_budget())?,
                                     key: val,
                                     durability: cd.durability,
-                                }),
-                                Err(_) => Ok(StorageKey::Other(lk)),
+                                })
                             }
+                            _ => Ok(StorageKey::Other(lk)),
                         }
-                        _ => Ok(StorageKey::Other(lk)),
                     }
                 }
             }
