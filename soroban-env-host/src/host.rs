@@ -459,7 +459,8 @@ impl Host {
 
     #[cfg(any(test, feature = "testutils"))]
     pub(crate) fn source_account_id(&self) -> Result<Option<AccountId>, HostError> {
-        self.try_borrow_source_account()?.metered_clone(self.as_budget())
+        self.try_borrow_source_account()?
+            .metered_clone(self.as_budget())
     }
 
     #[cfg(any(test, feature = "testutils"))]
@@ -767,7 +768,9 @@ impl Host {
         constructor_args: Option<VecObject>,
     ) -> Result<AddressObject, HostError> {
         let contract_id_preimage = ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-            address: self.visit_obj(deployer, |addr: &ScAddress| addr.metered_clone(self.as_budget()))?,
+            address: self.visit_obj(deployer, |addr: &ScAddress| {
+                addr.metered_clone(self.as_budget())
+            })?,
             salt: self.u256_from_bytesobj_input("contract_id_salt", salt)?,
         });
         let executable =
@@ -2536,8 +2539,9 @@ impl VmCallerEnv for Host {
             crate::host::invocation_metering::MeteringInvocation::WasmUploadEntryPoint,
         );
 
-        let wasm_vec =
-            self.visit_obj(wasm, |bytes: &ScBytes| bytes.as_vec().metered_clone(self.as_budget()))?;
+        let wasm_vec = self.visit_obj(wasm, |bytes: &ScBytes| {
+            bytes.as_vec().metered_clone(self.as_budget())
+        })?;
         self.upload_contract_wasm(wasm_vec)
     }
 
@@ -2694,21 +2698,7 @@ impl VmCallerEnv for Host {
         let scv = self.visit_obj(b, |hv: &ScBytes| {
             self.metered_from_xdr::<ScVal>(hv.as_slice())
         })?;
-        // Metering bug: the representation check is not metered,
-        // so if the value is not valid, we won't charge anything for
-        // walking the `ScVal`. Since `to_host_val` performs validation
-        // and has proper metering, next protocol version should just
-        // call `to_host_val` directly.
-        if Val::can_represent_scval_recursive(&scv) {
-            self.to_host_val(&scv)
-        } else {
-            Err(self.err(
-                ScErrorType::Value,
-                ScErrorCode::UnexpectedType,
-                "Deserialized ScVal type cannot be represented as Val",
-                &[(scv.discriminant() as i32).into()],
-            ))
-        }
+        self.to_host_val(&scv)
     }
 
     fn string_copy_to_linear_memory(
