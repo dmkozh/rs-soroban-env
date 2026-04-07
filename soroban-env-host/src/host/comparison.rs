@@ -58,9 +58,9 @@ impl Compare<HostObject> for Host {
                 (I128(a), I128(b)) => self.as_budget().compare(a, b),
                 (U256(a), U256(b)) => self.as_budget().compare(a, b),
                 (I256(a), I256(b)) => self.as_budget().compare(a, b),
-                // Only Vec and Map can recurse — depth limit only here.
-                (Vec(a), Vec(b)) => self.budget_ref().with_limited_depth(|| self.compare(a, b)),
-                (Map(a), Map(b)) => self.budget_ref().with_limited_depth(|| self.compare(a, b)),
+                // Depth is enforced at object creation time.
+                (Vec(a), Vec(b)) => self.compare(a, b),
+                (Map(a), Map(b)) => self.compare(a, b),
                 (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
                 (String(a), String(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
                 (Symbol(a), Symbol(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),

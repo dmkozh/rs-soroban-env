@@ -459,16 +459,10 @@ impl Host {
     }
 
     pub(crate) fn from_host_val(&self, val: Val) -> Result<ScVal, HostError> {
-        // This is the depth limit checkpoint for `Val`->`ScVal` conversion.
-        // Metering of val conversion happens only if an object is encountered,
-        // and is done inside `from_host_obj`.
+        // Val depth is enforced at object creation time, so no depth limit needed.
         let _span = tracy_span!("Val to ScVal");
-        let scval = self.budget_ref().with_limited_depth(|| {
-            ScVal::try_from_val(self, &val)
-                .map_err(|cerr| self.error(cerr, "failed to convert host value to ScVal", &[val]))
-        })?;
-        // This is a check of internal logical consistency: we came _from_ a Val
-        // so the ScVal definitely should have been representable.
+        let scval = ScVal::try_from_val(self, &val)
+            .map_err(|cerr| self.error(cerr, "failed to convert host value to ScVal", &[val]))?;
         self.check_val_representable_scval(&scval)?;
         Ok(scval)
     }
@@ -476,10 +470,8 @@ impl Host {
     pub(crate) fn from_host_val_for_storage(&self, val: Val) -> Result<ScVal, HostError> {
         let _span = tracy_span!("Val to ScVal");
         *self.try_borrow_storage_key_conversion_active_mut()? = true;
-        let scval_res = self.budget_ref().with_limited_depth(|| {
-            ScVal::try_from_val(self, &val)
-                .map_err(|cerr| self.error(cerr, "failed to convert host value to ScVal", &[val]))
-        });
+        let scval_res = ScVal::try_from_val(self, &val)
+            .map_err(|cerr| self.error(cerr, "failed to convert host value to ScVal", &[val]));
         *self.try_borrow_storage_key_conversion_active_mut()? = false;
         let scval = scval_res?;
         self.check_val_representable_scval(&scval)?;

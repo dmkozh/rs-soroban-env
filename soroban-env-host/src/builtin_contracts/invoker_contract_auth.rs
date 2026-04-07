@@ -45,7 +45,8 @@ impl InvokerContractAuthEntry {
         host: &Host,
         invoker_contract_addr: &ScAddress,
     ) -> Result<AuthorizedInvocation, HostError> {
-        host.budget_ref().with_limited_depth(|| match &self {
+        // Val depth is enforced at object creation time, no depth check needed.
+        match &self {
             InvokerContractAuthEntry::Contract(contract_invocation) => {
                 let function = AuthorizedFunction::ContractFn(ContractFunction {
                     contract_address: contract_invocation.context.contract.as_object(),
@@ -133,7 +134,7 @@ impl InvokerContractAuthEntry {
                 });
                 Ok(AuthorizedInvocation::new(function, vec![]))
             }
-        })
+        }
     }
 }
 
