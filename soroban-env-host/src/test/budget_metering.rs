@@ -707,6 +707,98 @@ fn bench_budget_charge_linear_production() {
 use crate::Compare;
 use soroban_env_common::xdr::{ScSymbol, ScVec};
 
+#[test]
+fn bench_compare_host_obj_vec_u64() {
+    let host = Host::test_host();
+    host.as_budget().reset_unlimited().unwrap();
+
+    let mut vals = Vec::new();
+    for i in 0..10u32 {
+        vals.push(Val::from_u32(i).into());
+    }
+    let vec_a = HostVec::from_vec(vals.clone()).unwrap();
+    let vec_b = HostVec::from_vec(vals).unwrap();
+    let obj_a = host.add_host_object(vec_a).unwrap();
+    let obj_b = host.add_host_object(vec_b).unwrap();
+
+    for _ in 0..1_000 {
+        std::hint::black_box(host.obj_cmp(obj_a.into(), obj_b.into()).unwrap());
+    }
+
+    let iterations = 500_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(host.obj_cmp(obj_a.into(), obj_b.into()).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "obj_cmp(Vec(10 x U64)): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_compare_host_obj_map() {
+    let host = Host::test_host();
+    host.as_budget().reset_unlimited().unwrap();
+
+    let mut pairs = Vec::new();
+    for i in 0..10u32 {
+        let key = host
+            .to_host_val(&ScVal::Symbol(ScSymbol(
+                format!("key_{i:03}").try_into().unwrap(),
+            )))
+            .unwrap();
+        let val = host.to_host_val(&ScVal::U64(i as u64)).unwrap();
+        pairs.push((key, val));
+    }
+    let map_a = HostMap::from_map(pairs.clone(), &host).unwrap();
+    let map_b = HostMap::from_map(pairs, &host).unwrap();
+    let obj_a = host.add_host_object(map_a).unwrap();
+    let obj_b = host.add_host_object(map_b).unwrap();
+
+    for _ in 0..1_000 {
+        std::hint::black_box(host.obj_cmp(obj_a.into(), obj_b.into()).unwrap());
+    }
+
+    let iterations = 200_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(host.obj_cmp(obj_a.into(), obj_b.into()).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "obj_cmp(Map(10 x Sym->U64)): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_compare_host_obj_bytes() {
+    let host = Host::test_host();
+    host.as_budget().reset_unlimited().unwrap();
+
+    let bytes: Vec<u8> = (0..256u16).map(|i| i as u8).collect();
+    let scbytes = host.scbytes_from_slice(&bytes).unwrap();
+    let obj_a = host.add_host_object(scbytes.clone()).unwrap();
+    let obj_b = host.add_host_object(scbytes).unwrap();
+
+    for _ in 0..1_000 {
+        std::hint::black_box(host.obj_cmp(obj_a.into(), obj_b.into()).unwrap());
+    }
+
+    let iterations = 1_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(host.obj_cmp(obj_a.into(), obj_b.into()).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "obj_cmp(Bytes(256)): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
 fn make_test_scval_map(n_entries: usize) -> ScVal {
     let entries: Vec<ScMapEntry> = (0..n_entries)
         .map(|i| ScMapEntry {
