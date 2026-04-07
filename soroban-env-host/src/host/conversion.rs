@@ -134,20 +134,18 @@ impl Host {
         key: ScVal,
         durability: ContractDataDurability,
     ) -> Result<Rc<crate::storage::StorageKey>, HostError> {
-        // Use StorageKey::from_ledger_key which normalizes ContractInstance
-        // keys to the ContractInstance variant. All other keys remain as
-        // Other(LedgerKey) to ensure they match keys created from XDR.
         let lk = LedgerKey::ContractData(LedgerKeyContractData {
             contract,
             key,
             durability,
         });
         Rc::metered_new(
-            crate::storage::StorageKey::from_ledger_key(lk, self.as_budget())?,
+            crate::storage::StorageKey::from_ledger_key(lk, self)?,
             self.as_budget(),
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn storage_key_from_scval(
         &self,
         key: ScVal,
@@ -165,11 +163,16 @@ impl Host {
         k: Val,
         durability: ContractDataDurability,
     ) -> Result<Rc<crate::storage::StorageKey>, HostError> {
-        // TODO: Once storage init is restructured to build StorageKey::ContractData
-        // variants from external LedgerKeys (requires Host for ScVal→Val),
-        // this can skip the Val→ScVal conversion for inline Vals.
-        let key_scval = self.from_host_val_for_storage(k)?;
-        self.storage_key_from_scval(key_scval, durability)
+        // Create ContractData variant directly — no Val→ScVal conversion needed.
+        let contract_id = self.get_current_contract_id_internal()?.0;
+        Rc::metered_new(
+            crate::storage::StorageKey::ContractData {
+                contract_id,
+                key: k,
+                durability,
+            },
+            self.as_budget(),
+        )
     }
 
     /// Converts a binary search result into a u64. `res` is `Some(index)` if

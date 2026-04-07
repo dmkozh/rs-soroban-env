@@ -206,7 +206,7 @@ fn log_some_diagnostics(host: Host) -> Result<Events, HostError> {
         &Symbol::try_from_small_str("fn_return")?,
         &Symbol::try_from_small_str("pass")?.into(),
     );
-    let (_, evts) = host.try_finish()?;
+    let (_, _, evts) = host.try_finish()?;
     Ok(evts)
 }
 
@@ -281,7 +281,7 @@ fn test_observation_does_not_emit_diagnostic_events_from_failed_borrows() -> Res
     host.obj_from_i64(1)?;
     drop(storage);
     drop(obs_host);
-    let (_, evts) = host.try_finish()?;
+    let (_, _, evts) = host.try_finish()?;
     dbg!(&evts);
     assert_eq!(evts.0.len(), 0);
     Ok(())

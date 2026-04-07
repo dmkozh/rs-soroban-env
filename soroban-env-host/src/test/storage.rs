@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::budget::{AsBudget, Budget};
+use crate::budget::Budget;
 use crate::host_object::MuxedScAddress;
 use crate::storage::{AccessType, Footprint, Storage, StorageKey};
 use crate::xdr::{
@@ -365,7 +365,7 @@ fn test_nested_bump() {
     host.with_mut_storage(|s: &mut Storage| {
         let v = s
             .map
-            .get::<Rc<StorageKey>>(&storage_key, host.as_budget())
+            .get::<Rc<StorageKey>>(&storage_key, &host)
             .unwrap()
             .unwrap()
             .clone()
@@ -394,7 +394,7 @@ fn test_nested_bump() {
     host.with_mut_storage(|s: &mut Storage| {
         let v = s
             .map
-            .get::<Rc<StorageKey>>(&storage_key, host.as_budget())
+            .get::<Rc<StorageKey>>(&storage_key, &host)
             .unwrap()
             .unwrap()
             .clone()

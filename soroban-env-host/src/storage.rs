@@ -160,10 +160,41 @@ impl StorageKey {
         }
     }
 
-    /// Creates a `StorageKey` from a `LedgerKey` without a Host.
-    /// All key types are stored as `Other(LedgerKey)`.
-    pub fn from_ledger_key(lk: LedgerKey, _budget: &crate::budget::Budget) -> Result<Self, HostError> {
-        Ok(StorageKey::Other(lk))
+    /// Creates a `StorageKey` from a `LedgerKey` using the Host to convert
+    /// `ScVal` keys to `Val` for ContractData entries. This ensures all
+    /// ContractData keys use the fast `ContractData` variant consistently.
+    pub fn from_ledger_key(lk: LedgerKey, host: &Host) -> Result<Self, HostError> {
+        match lk {
+            LedgerKey::ContractData(ref cd) => {
+                if cd.key == ScVal::LedgerKeyContractInstance {
+                    // Instance key: extract contract hash
+                    match &cd.contract {
+                        ScAddress::Contract(id) => Ok(StorageKey::ContractInstance {
+                            contract_id: id.0.metered_clone(host.as_budget())?,
+                        }),
+                        _ => Ok(StorageKey::Other(lk)),
+                    }
+                } else {
+                    // Regular contract data: try to convert ScVal to Val for fast comparison.
+                    // Fall back to Other(LedgerKey) if conversion fails (e.g. for
+                    // ScVal types that can't be represented as host Vals).
+                    match &cd.contract {
+                        ScAddress::Contract(id) => {
+                            match host.to_host_val(&cd.key) {
+                                Ok(val) => Ok(StorageKey::ContractData {
+                                    contract_id: id.0.metered_clone(host.as_budget())?,
+                                    key: val,
+                                    durability: cd.durability,
+                                }),
+                                Err(_) => Ok(StorageKey::Other(lk)),
+                            }
+                        }
+                        _ => Ok(StorageKey::Other(lk)),
+                    }
+                }
+            }
+            _ => Ok(StorageKey::Other(lk)),
+        }
     }
 
     /// Get the durability of the key, if applicable.
@@ -178,7 +209,10 @@ impl StorageKey {
 
 pub type FootprintMap = MeteredOrdMap<Rc<StorageKey>, AccessType, Budget>;
 pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
-pub type StorageMap = MeteredOrdMap<Rc<StorageKey>, Option<EntryWithLiveUntil>, Budget>;
+pub type StorageMap = MeteredOrdMap<Rc<StorageKey>, Option<EntryWithLiveUntil>, Host>;
+/// LedgerKey-based maps returned by try_finish for external consumers.
+pub type LedgerKeyEntryMap = MeteredOrdMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>, Budget>;
+pub type LedgerKeyFootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
 
 /// The in-memory instance storage of the current running contract. Initially
 /// contains entries from the `ScMap` of the corresponding `ScContractInstance`
@@ -421,7 +455,7 @@ impl Storage {
         let _span = tracy_span!("storage get");
         Self::check_supported_storage_key_type(key)?;
         self.prepare_read_only_access(key, host)?;
-        match self.map.get::<Rc<StorageKey>>(key, host.budget_ref())? {
+        match self.map.get::<Rc<StorageKey>>(key, host)? {
             // Key has to be in the storage map at this point due to
             // `prepare_read_only_access`.
             None => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
@@ -516,7 +550,7 @@ impl Storage {
                 self.footprint.enforce_access(key, ty, host.budget_ref())?;
             }
         };
-        self.map = self.map.insert(Rc::clone(key), val, host.budget_ref())?;
+        self.map = self.map.insert(Rc::clone(key), val, host)?;
         Ok(())
     }
 
@@ -672,7 +706,7 @@ impl Storage {
             self.map = self.map.insert(
                 key,
                 Some((ttl_ext_info.entry, Some(new_live_until))),
-                host.budget_ref(),
+                host,
             )?;
         }
         Ok(())
@@ -849,7 +883,7 @@ impl Storage {
         key: &Rc<StorageKey>,
         host: &Host,
     ) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        match self.map.get::<Rc<StorageKey>>(key, host.budget_ref())? {
+        match self.map.get::<Rc<StorageKey>>(key, host)? {
             Some(pair_option) => Ok(pair_option.clone()),
             None => Ok(None),
         }
@@ -869,12 +903,12 @@ impl Storage {
                 // that misses read-through to the underlying src.
                 if !self
                     .map
-                    .contains_key::<Rc<StorageKey>>(key, host.budget_ref())?
+                    .contains_key::<Rc<StorageKey>>(key, host)?
                 {
                     // Convert StorageKey to LedgerKey to query the SnapshotSource.
                     let lk = key.to_ledger_key(host)?;
                     let value = src.get(&lk)?;
-                    self.map = self.map.insert(key.clone(), value, host.budget_ref())?;
+                    self.map = self.map.insert(key.clone(), value, host)?;
                 }
                 self.footprint.record_access(key, ty, host.budget_ref())?;
                 self.handle_maybe_expired_entry(key, host)?;
@@ -895,7 +929,7 @@ impl Storage {
         host.with_ledger_info(|li| {
             let budget = host.budget_ref();
             if let Some(Some((entry, live_until))) =
-                self.map.get::<Rc<StorageKey>>(key, host.budget_ref())?
+                self.map.get::<Rc<StorageKey>>(key, host)?
             {
                 if let Some(durability) = key.get_durability() {
                     let live_until = live_until.ok_or_else(|| {
@@ -909,7 +943,7 @@ impl Storage {
                     if live_until < li.sequence_number {
                         match durability {
                             ContractDataDurability::Temporary => {
-                                self.map = self.map.insert(key.clone(), None, host.budget_ref())?;
+                                self.map = self.map.insert(key.clone(), None, host)?;
                             }
                             ContractDataDurability::Persistent => {
                                 self.footprint
@@ -927,7 +961,7 @@ impl Storage {
                                 self.map = self.map.insert(
                                     key.clone(),
                                     Some((entry.clone(), Some(new_live_until))),
-                                    host.budget_ref(),
+                                    host,
                                 )?;
                             }
                         };

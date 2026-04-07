@@ -318,7 +318,7 @@ impl Host {
             let budget = self.budget_ref();
             budget.with_shadow_mode(|| {
                 store.map.len().metered_hash(&mut state, budget)?;
-                for (k, v) in store.map.iter(budget)? {
+                for (k, v) in store.map.iter(self)? {
                     metered_hash_storage_key(&k, &mut state, budget)?;
                     match v {
                         Some((entry, ttl)) => {

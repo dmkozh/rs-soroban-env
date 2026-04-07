@@ -748,12 +748,35 @@ impl Host {
     ///
     /// Use [`Host::can_finish`] to determine before calling the function if it
     /// will succeed.
-    pub fn try_finish(self) -> Result<(Storage, Events), HostError> {
+    /// Finishes execution and returns the final storage as LedgerKey-based maps
+    /// plus events, suitable for the external interface.
+    ///
+    /// Converts internal StorageKey→LedgerKey while the Host is still alive
+    /// (needed for ContractData Val→ScVal conversion).
+    pub fn try_finish(
+        self,
+    ) -> Result<(crate::storage::LedgerKeyEntryMap, crate::storage::LedgerKeyFootprintMap, Events), HostError> {
         let events = self.try_borrow_events()?.externalize(&self)?;
+        let budget = self.budget_ref().clone();
+
+        // Convert StorageMap and FootprintMap to LedgerKey-based maps while Host is alive.
+        let mut lk_map = crate::storage::LedgerKeyEntryMap::new();
+        let mut lk_fp = crate::storage::LedgerKeyFootprintMap::new();
+        {
+            let storage = self.try_borrow_storage()?;
+            for (sk, val) in storage.map.iter(&self)? {
+                let lk = sk.to_ledger_key(&self)?;
+                lk_map = lk_map.insert(lk, val.clone(), &budget)?;
+            }
+            for (sk, access) in storage.footprint.0.iter(&budget)? {
+                let lk = sk.to_ledger_key(&self)?;
+                lk_fp = lk_fp.insert(lk, *access, &budget)?;
+            }
+        }
+
         Rc::try_unwrap(self.0)
-            .map(|host_impl| {
-                let storage = host_impl.storage.into_inner();
-                (storage, events)
+            .map(|_host_impl| {
+                (lk_map, lk_fp, events)
             })
             .map_err(|_| {
                 Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InternalError).into()

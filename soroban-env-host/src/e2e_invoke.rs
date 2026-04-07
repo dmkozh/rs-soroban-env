@@ -21,12 +21,12 @@ use crate::{
         metered_xdr::{metered_from_xdr_with_budget, metered_write_xdr},
         TraceHook,
     },
-    storage::{AccessType, Footprint, FootprintMap, SnapshotSource, Storage, StorageMap},
+    storage::{AccessType, Footprint, FootprintMap, LedgerKeyEntryMap, LedgerKeyFootprintMap, SnapshotSource, Storage, StorageMap},
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
         LedgerEntry, LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey,
         LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData, LedgerKeyTrustLine,
-        ScAddress, ScErrorCode, ScErrorType, SorobanAuthorizationEntry, SorobanResources, TtlEntry,
+        ScErrorCode, ScErrorType, SorobanAuthorizationEntry, SorobanResources, TtlEntry,
     },
     DiagnosticLevel, Error, Host, HostError, LedgerInfo, MeteredOrdMap,
 };
@@ -182,7 +182,8 @@ fn saturating_u64_to_u32(value: u64) -> u32 {
 /// Returns an entry for every item in `storage` footprint.
 fn get_ledger_changes(
     budget: &Budget,
-    storage: &Storage,
+    lk_map: &LedgerKeyEntryMap,
+    footprint_map: &LedgerKeyFootprintMap,
     init_storage_snapshot: &(impl SnapshotSource + ?Sized),
     init_ttl_entries: TtlEntryMap,
     min_live_until_ledger: u32,
@@ -191,9 +192,8 @@ fn get_ledger_changes(
 ) -> Result<Vec<LedgerEntryChange>, HostError> {
     // Skip allocation metering for this for the sake of simplicity - the
     // bounding factor here is XDR decoding which is metered.
-    let mut changes = Vec::with_capacity(storage.map.len());
+    let mut changes = Vec::with_capacity(lk_map.len());
 
-    let footprint_map = &storage.footprint.0;
     // We return any invariant errors here as internal errors, as they would
     // typically mean inconsistency between storage and snapshot that shouldn't
     // happen in embedder environments, or simply fundamental invariant bugs.
@@ -203,27 +203,10 @@ fn get_ledger_changes(
             ScErrorCode::InternalError,
         ))
     };
-    for (storage_key, entry_with_live_until_ledger) in storage.map.iter(budget)? {
-        // Convert StorageKey back to LedgerKey for XDR serialization.
-        let owned_lk: LedgerKey = match storage_key.as_ref() {
-            crate::storage::StorageKey::Other(lk) => lk.metered_clone(budget)?,
-            crate::storage::StorageKey::ContractInstance { contract_id } => {
-                LedgerKey::ContractData(LedgerKeyContractData {
-                    contract: ScAddress::Contract(contract_id.metered_clone(budget)?.into()),
-                    key: crate::xdr::ScVal::LedgerKeyContractInstance,
-                    durability: ContractDataDurability::Persistent,
-                })
-            }
-            crate::storage::StorageKey::ContractData { .. } => {
-                // ContractData with Val shouldn't appear in e2e storage maps
-                return Err(internal_error());
-            }
-        };
+    for (ledger_key_rc, entry_with_live_until_ledger) in lk_map.iter(budget)? {
         let mut entry_change = LedgerEntryChange::default();
-        metered_write_xdr(budget, &owned_lk, &mut entry_change.encoded_key)?;
-        let durability = get_key_durability(&owned_lk);
-        let ledger_key_rc: Rc<LedgerKey> =
-            Rc::metered_new(owned_lk, budget)?;
+        metered_write_xdr(budget, ledger_key_rc.as_ref(), &mut entry_change.encoded_key)?;
+        let durability = get_key_durability(ledger_key_rc.as_ref());
 
         if let Some(durability) = durability {
             let key_hash = match init_ttl_entries.get::<Rc<LedgerKey>>(&ledger_key_rc, budget)? {
@@ -273,7 +256,7 @@ fn get_ledger_changes(
         }
         let maybe_access_type: Option<AccessType> =
             footprint_map
-                .get::<Rc<crate::storage::StorageKey>>(storage_key, budget)?
+                .get::<Rc<LedgerKey>>(&ledger_key_rc, budget)?
                 .copied();
         match maybe_access_type {
             Some(AccessType::ReadOnly) => {
@@ -325,32 +308,16 @@ fn get_ledger_changes(
 #[cfg(any(test, feature = "recording_mode"))]
 fn add_footprint_only_ledger_changes(
     budget: &Budget,
-    storage: &Storage,
+    lk_map: &LedgerKeyEntryMap,
+    footprint_map: &LedgerKeyFootprintMap,
     changes: &mut Vec<LedgerEntryChange>,
 ) -> Result<(), HostError> {
-    for (key, access_type) in storage.footprint.0.iter(budget)? {
-        // We have to check if the entry exists in the internal storage map
-        // because `has` check on storage affects the footprint.
-        if storage
-            .map
-            .contains_key::<Rc<crate::storage::StorageKey>>(key, budget)?
-        {
+    for (key, access_type) in footprint_map.iter(budget)? {
+        if lk_map.contains_key::<Rc<LedgerKey>>(key, budget)? {
             continue;
         }
         let mut entry_change = LedgerEntryChange::default();
-        // For footprint-only entries, we need to extract the LedgerKey for XDR serialization.
-        // During recording mode, keys may be ContractData/ContractInstance variants,
-        // so we need to handle that case too.
-        match key.as_ref() {
-            crate::storage::StorageKey::Other(lk) => {
-                metered_write_xdr(budget, lk, &mut entry_change.encoded_key)?;
-            }
-            _ => {
-                // For non-Other keys (from recording mode), we skip XDR encoding
-                // since we can't serialize them without a Host. These entries
-                // will have empty encoded_key which is fine for footprint-only changes.
-            }
-        }
+        metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
         entry_change.read_only = matches!(*access_type, AccessType::ReadOnly);
         changes.push(entry_change);
     }
@@ -462,7 +429,6 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     let resources: SorobanResources =
         metered_from_xdr_with_budget(encoded_resources.as_ref(), &budget)?;
     let restored_keys = build_restored_key_set(&budget, &resources, &restored_rw_entry_indices)?;
-    let footprint = build_storage_footprint_from_xdr(&budget, resources.footprint)?;
     let current_ledger_seq = ledger_info.sequence_number;
     let min_live_until_ledger = ledger_info
         .min_live_until_ledger_checked(ContractDataDurability::Persistent)
@@ -472,8 +438,15 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
                 ScErrorCode::InternalError,
             ))
         })?;
+    // Create Host first with empty storage so we can use it for
+    // ScVal→Val conversion when building StorageKey::ContractData keys.
+    let empty_storage =
+        Storage::with_enforcing_footprint_and_map(Footprint::default(), StorageMap::new());
+    let host = Host::with_storage_and_budget(empty_storage, budget.clone());
+    // Now build footprint and storage map using the Host for key conversion.
+    let footprint = build_storage_footprint_from_xdr(&host, resources.footprint)?;
     let (storage_map, init_ttl_map) = build_storage_map_from_xdr_ledger_entries(
-        &budget,
+        &host,
         &footprint,
         encoded_ledger_entries,
         encoded_ttl_entries,
@@ -481,11 +454,12 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         #[cfg(any(test, feature = "recording_mode"))]
         false,
     )?;
-
-    let init_storage_map = storage_map.metered_clone(budget)?;
-
-    let storage = Storage::with_enforcing_footprint_and_map(footprint, storage_map);
-    let host = Host::with_storage_and_budget(storage, budget.clone());
+    let init_storage_map = storage_map.metered_clone(host.budget_ref())?;
+    // Replace the empty storage with the populated one.
+    host.with_mut_storage(|storage| {
+        *storage = Storage::with_enforcing_footprint_and_map(footprint, storage_map);
+        Ok(())
+    })?;
     let have_trace_hook = trace_hook.is_some();
     if let Some(th) = trace_hook {
         host.set_trace_hook(Some(th))?;
@@ -518,7 +492,10 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     if have_trace_hook {
         host.set_trace_hook(None)?;
     }
-    let (storage, events) = host.try_finish()?;
+    // Convert init storage map to LedgerKey-based snapshot before try_finish
+    // consumes the Host (needed for StorageKey → LedgerKey conversion).
+    let init_storage_snapshot = build_ledger_key_snapshot(&host, &init_storage_map)?;
+    let (lk_map, footprint_map, events) = host.try_finish()?;
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
     }
@@ -527,13 +504,10 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         metered_write_xdr(&budget, &res, &mut encoded_result_sc_val).map(|_| encoded_result_sc_val)
     });
     if encoded_invoke_result.is_ok() {
-        let init_storage_snapshot = StorageMapSnapshotSource {
-            budget: &budget,
-            map: &init_storage_map,
-        };
         let ledger_changes = get_ledger_changes(
             &budget,
-            &storage,
+            &lk_map,
+            &footprint_map,
             &init_storage_snapshot,
             init_ttl_map,
             min_live_until_ledger,
@@ -759,7 +733,7 @@ pub fn invoke_host_function_in_recording_mode(
     let (footprint, disk_read_bytes, init_ttl_map, restored_rw_entry_ids, restored_keys) = host
         .with_mut_storage(|storage| {
             let footprint = storage_footprint_to_ledger_footprint(&storage.footprint, &host)?;
-            let _footprint_from_xdr = build_storage_footprint_from_xdr(&budget, footprint.clone())?;
+            let _footprint_from_xdr = build_storage_footprint_from_xdr(&host, footprint.clone())?;
 
             let mut encoded_ledger_entries = Vec::with_capacity(storage.footprint.0.len());
             let mut encoded_ttl_entries = Vec::with_capacity(storage.footprint.0.len());
@@ -825,7 +799,7 @@ pub fn invoke_host_function_in_recording_mode(
                 }
             }
             let (init_storage, init_ttl_map) = build_storage_map_from_xdr_ledger_entries(
-                &budget,
+                &host,
                 &storage.footprint,
                 encoded_ledger_entries.iter(),
                 encoded_ttl_entries.iter(),
@@ -849,7 +823,7 @@ pub fn invoke_host_function_in_recording_mode(
     };
     let _resources_roundtrip: SorobanResources =
         host.metered_from_xdr(host.to_xdr_non_metered(&resources)?.as_slice())?;
-    let (storage, events) = host.try_finish()?;
+    let (lk_map, footprint_map, events) = host.try_finish()?;
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
     }
@@ -861,7 +835,8 @@ pub fn invoke_host_function_in_recording_mode(
     let (ledger_changes, contract_events) = if invoke_result.is_ok() {
         let mut ledger_changes = get_ledger_changes(
             &budget,
-            &storage,
+            &lk_map,
+            &footprint_map,
             &*ledger_snapshot,
             init_ttl_map,
             min_live_until_ledger,
@@ -872,7 +847,7 @@ pub fn invoke_host_function_in_recording_mode(
         // storage. This doesn't resemble anything in the enforcing mode, so use
         // the shadow budget for this.
         budget.with_shadow_mode(|| {
-            add_footprint_only_ledger_changes(budget, &storage, &mut ledger_changes)
+            add_footprint_only_ledger_changes(budget, &lk_map, &footprint_map, &mut ledger_changes)
         });
 
         let encoded_contract_events = encode_contract_events(budget, &events)?;
@@ -973,16 +948,17 @@ pub(crate) fn ledger_entry_to_ledger_key(
 }
 
 fn build_storage_footprint_from_xdr(
-    budget: &Budget,
+    host: &Host,
     footprint: LedgerFootprint,
 ) -> Result<Footprint, HostError> {
+    let budget = host.budget_ref();
     let mut footprint_map = FootprintMap::new();
 
     for key in footprint.read_write.as_vec() {
         Storage::check_supported_ledger_key_type(&key)?;
         footprint_map = footprint_map.insert(
             Rc::metered_new(
-                crate::storage::StorageKey::from_ledger_key(key.metered_clone(budget)?, budget)?,
+                crate::storage::StorageKey::from_ledger_key(key.metered_clone(budget)?, host)?,
                 budget,
             )?,
             AccessType::ReadWrite,
@@ -994,7 +970,7 @@ fn build_storage_footprint_from_xdr(
         Storage::check_supported_ledger_key_type(&key)?;
         footprint_map = footprint_map.insert(
             Rc::metered_new(
-                crate::storage::StorageKey::from_ledger_key(key.metered_clone(budget)?, budget)?,
+                crate::storage::StorageKey::from_ledger_key(key.metered_clone(budget)?, host)?,
                 budget,
             )?,
             AccessType::ReadOnly,
@@ -1005,13 +981,14 @@ fn build_storage_footprint_from_xdr(
 }
 
 fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
-    budget: &Budget,
+    host: &Host,
     footprint: &Footprint,
     encoded_ledger_entries: I,
     encoded_ttl_entries: I,
     ledger_num: u32,
     #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
 ) -> Result<(StorageMap, TtlEntryMap), HostError> {
+    let budget = host.budget_ref();
     let mut storage_map = StorageMap::new();
     let mut ttl_map = TtlEntryMap::new();
 
@@ -1032,7 +1009,7 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
         let storage_key: Rc<crate::storage::StorageKey> = Rc::metered_new(
             crate::storage::StorageKey::from_ledger_key(
                 (*ledger_key).metered_clone(budget)?,
-                budget,
+                host,
             )?,
             budget,
         )?;
@@ -1098,13 +1075,13 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             )
             .into());
         }
-        storage_map = storage_map.insert(storage_key, Some((le, live_until_ledger)), budget)?;
+        storage_map = storage_map.insert(storage_key, Some((le, live_until_ledger)), host)?;
     }
 
     // Add non-existing entries from the footprint to the storage.
     for k in footprint.0.keys(budget)? {
-        if !storage_map.contains_key::<crate::storage::StorageKey>(k, budget)? {
-            storage_map = storage_map.insert(Rc::clone(k), None, budget)?;
+        if !storage_map.contains_key::<crate::storage::StorageKey>(k, host)? {
+            storage_map = storage_map.insert(Rc::clone(k), None, host)?;
         }
     }
     Ok((storage_map, ttl_map))
@@ -1123,28 +1100,28 @@ impl Host {
     }
 }
 
-struct StorageMapSnapshotSource<'a> {
-    budget: &'a Budget,
-    map: &'a StorageMap,
+/// A snapshot source backed by a BTreeMap of LedgerKey → EntryWithLiveUntil.
+/// Built from the initial StorageMap before try_finish consumes the Host.
+struct LedgerKeySnapshotSource {
+    entries: std::collections::BTreeMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>,
 }
 
-impl SnapshotSource for StorageMapSnapshotSource<'_> {
+impl SnapshotSource for LedgerKeySnapshotSource {
     fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        // Wrap the LedgerKey in StorageKey for map lookup.
-        let sk: Rc<crate::storage::StorageKey> = Rc::metered_new(
-            crate::storage::StorageKey::from_ledger_key(
-                (**key).metered_clone(self.budget)?,
-                self.budget,
-            )?,
-            self.budget,
-        )?;
-        if let Some(Some((entry, live_until_ledger))) =
-            self.map
-                .get::<Rc<crate::storage::StorageKey>>(&sk, self.budget)?
-        {
-            Ok(Some((Rc::clone(entry), *live_until_ledger)))
-        } else {
-            Ok(None)
-        }
+        Ok(self.entries.get(key).cloned().flatten())
     }
+}
+
+/// Convert a StorageMap to a LedgerKey-based snapshot, using the Host for
+/// StorageKey → LedgerKey conversion.
+fn build_ledger_key_snapshot(
+    host: &Host,
+    storage_map: &StorageMap,
+) -> Result<LedgerKeySnapshotSource, HostError> {
+    let mut entries = std::collections::BTreeMap::new();
+    for (sk, val) in storage_map.iter(host)? {
+        let lk = sk.to_ledger_key(host)?;
+        entries.insert(lk, val.clone());
+    }
+    Ok(LedgerKeySnapshotSource { entries })
 }

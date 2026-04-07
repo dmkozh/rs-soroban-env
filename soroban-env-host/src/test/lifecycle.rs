@@ -816,31 +816,31 @@ mod cap_54_55_56 {
                     .unwrap(),
             )
         }
-        fn storage_map(&self, budget: &Budget) -> StorageMap {
+        fn storage_map(&self, host: &Host) -> StorageMap {
             StorageMap::new()
                 .insert(
                     self.contract_key.clone(),
                     Some((self.contract_entry.clone(), Some(99999))),
-                    budget,
+                    host,
                 )
                 .unwrap()
                 .insert(
                     self.wasm_key.clone(),
                     Some((self.wasm_entry.clone(), Some(99999))),
-                    budget,
+                    host,
                 )
                 .unwrap()
         }
-        fn read_only_storage(&self, budget: &Budget) -> Storage {
+        fn read_only_storage(&self, host: &Host) -> Storage {
             Storage::with_enforcing_footprint_and_map(
-                self.read_only_footprint(budget),
-                self.storage_map(budget),
+                self.read_only_footprint(host.budget_ref()),
+                self.storage_map(host),
             )
         }
-        fn wasm_writing_storage(&self, budget: &Budget) -> Storage {
+        fn wasm_writing_storage(&self, host: &Host) -> Storage {
             Storage::with_enforcing_footprint_and_map(
-                self.wasm_writing_footprint(budget),
-                self.storage_map(budget),
+                self.wasm_writing_footprint(host.budget_ref()),
+                self.storage_map(host),
             )
         }
     }
@@ -881,8 +881,13 @@ mod cap_54_55_56 {
         }
         let realhost = host.clone();
         drop(host);
-        let (storage, _events) = realhost.try_finish()?;
-        let storage = Storage::with_enforcing_footprint_and_map(storage.footprint, storage.map);
+        // Clone storage before try_finish consumes the host, since we need
+        // to reconstruct a Storage for the next host.
+        let storage = {
+            let s = realhost.try_borrow_storage()?;
+            Storage::with_enforcing_footprint_and_map(s.footprint.clone(), s.map.clone())
+        };
+        let (_, _, _events) = realhost.try_finish()?;
 
         // Phase 2: build new host with previous ledger output as storage. Possibly on new protocol.
         let host = observed_test_host_with_storage_and_budget(
@@ -926,7 +931,7 @@ mod cap_54_55_56 {
         upload_hostname: &'static str,
         call_hostname: &'static str,
         contract_cost_model_mode: TestContractCostModelMode,
-    ) -> Result<(Budget, Storage), HostError> {
+    ) -> Result<Budget, HostError> {
         let (host, contract_id) = upload_and_make_host_for_next_ledger(
             upload_hostname,
             call_hostname,
@@ -941,8 +946,8 @@ mod cap_54_55_56 {
         let realhost = host.clone();
         drop(host);
         let budget = realhost.budget_cloned();
-        let (storage, _events) = realhost.try_finish()?;
-        Ok((budget, storage))
+        let (_, _, _events) = realhost.try_finish()?;
+        Ok(budget)
     }
 
     fn code_entry_has_cost_inputs(entry: &Rc<LedgerEntry>) -> bool {
@@ -963,7 +968,7 @@ mod cap_54_55_56 {
     // cost types.
     #[test]
     fn test_v_new_no_contract_code_cost_inputs() -> Result<(), HostError> {
-        let (budget, _storage) = upload_and_call(
+        let budget = upload_and_call(
             "test_v_new_no_contract_code_cost_inputs_upload",
             "test_v_new_no_contract_code_cost_inputs_call",
             OldContractWithNoCostInputs,
@@ -993,7 +998,7 @@ mod cap_54_55_56 {
     // (both parsing and instantiation).
     #[test]
     fn test_v_new_with_contract_code_cost_inputs_causes_nonzero_costs() -> Result<(), HostError> {
-        let (budget, _storage) = upload_and_call(
+        let budget = upload_and_call(
             "test_v_new_with_contract_code_cost_inputs_causes_nonzero_costs_upload",
             "test_v_new_with_contract_code_cost_inputs_causes_nonzero_costs_call",
             NewContractWithCostInputs,
@@ -1025,11 +1030,15 @@ mod cap_54_55_56 {
 
         // make a new storage map for a new upload but with read-only footprint -- this should fail
         let budget = Budget::default();
-        let storage = entries.read_only_storage(&budget);
+        let tmp_host = Host::with_storage_and_budget(
+            Storage::with_enforcing_footprint_and_map(Footprint::default(), StorageMap::new()),
+            budget,
+        );
+        let storage = entries.read_only_storage(&tmp_host);
         let host = observed_test_host_with_storage_and_budget(
             "test_v_new_rewrite_call_fail",
             storage,
-            budget,
+            tmp_host.budget_cloned(),
         )?;
         let wasm_blob = match &entries.wasm_entry.data {
             LedgerEntryData::ContractCode(cce) => cce.code.to_vec(),
@@ -1041,11 +1050,15 @@ mod cap_54_55_56 {
 
         // make a new storage map for a new upload but with read-write footprint -- this should pass
         let budget = Budget::default();
-        let storage = entries.wasm_writing_storage(&budget);
+        let tmp_host = Host::with_storage_and_budget(
+            Storage::with_enforcing_footprint_and_map(Footprint::default(), StorageMap::new()),
+            budget,
+        );
+        let storage = entries.wasm_writing_storage(&tmp_host);
         let host = observed_test_host_with_storage_and_budget(
             "test_v_new_rewrite_call_succeed",
             storage,
-            budget,
+            tmp_host.budget_cloned(),
         )?;
         host.upload_contract_wasm(wasm_blob)?;
         let entries = entries.reload(&host)?;
@@ -1066,11 +1079,15 @@ mod cap_54_55_56 {
 
         // make a new storage map for a new upload but with read-only footprint -- this should pass
         let budget = Budget::default();
-        let storage = entries.read_only_storage(&budget);
+        let tmp_host = Host::with_storage_and_budget(
+            Storage::with_enforcing_footprint_and_map(Footprint::default(), StorageMap::new()),
+            budget,
+        );
+        let storage = entries.read_only_storage(&tmp_host);
         let host = observed_test_host_with_storage_and_budget(
             "test_v_new_no_rewrite_call_pass",
             storage,
-            budget,
+            tmp_host.budget_cloned(),
         )?;
         let wasm_blob = match &entries.wasm_entry.data {
             LedgerEntryData::ContractCode(cce) => cce.code.to_vec(),
@@ -1231,17 +1248,16 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
-        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
             storage.footprint.0 = storage
                 .footprint
                 .0
-                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, &budget)?
+                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, host.budget_ref())?
                 .unwrap()
                 .0;
             storage.map = storage
                 .map
-                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, &budget)?
+                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, &host)?
                 .unwrap()
                 .0;
             Ok(())
@@ -1280,9 +1296,8 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
-        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
-            storage.map = storage.map.insert(wasm_key, None, &budget)?;
+            storage.map = storage.map.insert(wasm_key, None, &host)?;
             Ok(())
         })?;
 
@@ -1326,17 +1341,16 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
-        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
             storage.footprint.0 = storage
                 .footprint
                 .0
-                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, &budget)?
+                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, host.budget_ref())?
                 .unwrap()
                 .0;
             storage.map = storage
                 .map
-                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, &budget)?
+                .remove::<Rc<crate::storage::StorageKey>>(&wasm_key, &host)?
                 .unwrap()
                 .0;
             Ok(())
@@ -1380,7 +1394,7 @@ mod cap_54_55_56 {
                 AccessType::ReadWrite,
                 host.as_budget(),
             )?;
-            storage.map = storage.map.insert(wasm_code_key, None, host.as_budget())?;
+            storage.map = storage.map.insert(wasm_code_key, None, &host)?;
             Ok(())
         })?;
 

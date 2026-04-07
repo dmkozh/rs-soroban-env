@@ -1,5 +1,6 @@
 use crate::{
     budget::Budget,
+    host::metered_clone::MeteredClone,
     host_object::HostVec,
     storage::{Footprint, Storage},
     testutils::{generate_account_id, generate_bytes_array},
@@ -45,8 +46,12 @@ fn run_complex() -> Result<(), HostError> {
         )?;
         let realhost: Host = (*host).clone();
         drop(host);
-        let (store, _) = realhost.try_finish().unwrap();
-        store.footprint
+        let footprint = {
+            let s = realhost.try_borrow_storage().unwrap();
+            Footprint(s.footprint.0.metered_clone(realhost.budget_ref()).unwrap())
+        };
+        let _ = realhost.try_finish().unwrap();
+        footprint
     };
 
     // Run 2: enforce preflight footprint, with empty map -- contract should only write.

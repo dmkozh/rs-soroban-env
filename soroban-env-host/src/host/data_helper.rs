@@ -11,7 +11,7 @@ use crate::{
         AccountEntry, AccountId, Asset, BytesM, ContractCodeEntry, ContractDataDurability,
         ContractDataEntry, ContractExecutable, ContractId, ContractIdPreimage, ExtensionPoint,
         Hash, HashIdPreimage, HashIdPreimageContractId, LedgerEntry, LedgerEntryData,
-        LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode, LedgerKeyContractData,
+        LedgerEntryExt, LedgerKey, LedgerKeyAccount, LedgerKeyContractCode,
         LedgerKeyTrustLine,
         PublicKey, ScAddress, ScContractInstance, ScErrorCode, ScErrorType,
         ScMap, ScVal, Signer, SignerKey, ThresholdIndexes, TrustLineAsset, Uint256,
@@ -77,13 +77,10 @@ impl Host {
         &self,
         contract_id: &ContractId,
     ) -> Result<Rc<StorageKey>, HostError> {
-        let contract_id = contract_id.metered_clone(self.as_budget())?;
         Rc::metered_new(
-            StorageKey::Other(LedgerKey::ContractData(LedgerKeyContractData {
-                key: ScVal::LedgerKeyContractInstance,
-                durability: ContractDataDurability::Persistent,
-                contract: ScAddress::Contract(contract_id),
-            })),
+            StorageKey::ContractInstance {
+                contract_id: contract_id.0.metered_clone(self.as_budget())?,
+            },
             self.as_budget(),
         )
     }
@@ -620,7 +617,7 @@ impl Host {
             storage
                 .footprint
                 .record_access(&key, access_type, self.as_budget())?;
-            storage.map = storage.map.insert(key, val, self.as_budget())?;
+            storage.map = storage.map.insert(key, val, self)?;
             Ok(())
         })
     }

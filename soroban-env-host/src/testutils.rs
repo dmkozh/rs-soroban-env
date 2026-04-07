@@ -448,7 +448,7 @@ impl Host {
             // will be in the footprint but not yet in the map, which is an
             // invariant violation we need to repair here).
             let mut map = BTreeMap::new();
-            for (k, v) in storage.map.iter(self.budget_ref()).unwrap() {
+            for (k, v) in storage.map.iter(self).unwrap() {
                 map.insert(k.clone(), v.clone());
             }
             for (k, _) in storage.footprint.0.iter(self.budget_ref()).unwrap() {
@@ -470,7 +470,7 @@ impl Host {
             }
             storage.map = MeteredOrdMap::from_exact_iter(
                 map.iter().map(|(k, v)| (k.clone(), v.clone())),
-                self.budget_ref(),
+                self,
             )
             .unwrap();
             storage.mode = crate::storage::FootprintMode::Enforcing;
