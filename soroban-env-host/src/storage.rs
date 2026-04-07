@@ -113,15 +113,11 @@ impl StorageKey {
                     ScVal::LedgerKeyNonce(_) => Ok(StorageKey::Other(lk)),
                     _ => {
                         // Regular contract data: convert ScVal to Val.
+                        // Uses to_host_val_for_storage which recursively
+                        // rejects MuxedAddress values.
                         match &cd.contract {
                             ScAddress::Contract(id) => {
-                                let val = host.to_host_val(&cd.key)?;
-                                // Reject muxed addresses (not representable in XDR footprint).
-                                if val.get_tag() == crate::Tag::MuxedAddressObject {
-                                    return Err(
-                                        (ScErrorType::Storage, ScErrorCode::InvalidInput).into()
-                                    );
-                                }
+                                let val = host.to_host_val_for_storage(&cd.key)?;
                                 Ok(StorageKey::ContractData {
                                     contract_id: id.0.metered_clone(host.as_budget())?,
                                     key: val,

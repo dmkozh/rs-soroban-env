@@ -486,6 +486,16 @@ impl Host {
         Ok(scval)
     }
 
+    /// Like `to_host_val`, but sets the `storage_key_conversion_active` flag
+    /// so that `MuxedAddress` values are rejected during conversion.
+    /// Mirrors `from_host_val_for_storage`.
+    pub(crate) fn to_host_val_for_storage(&self, v: &ScVal) -> Result<Val, HostError> {
+        *self.try_borrow_storage_key_conversion_active_mut()? = true;
+        let res = self.to_host_val(v);
+        *self.try_borrow_storage_key_conversion_active_mut()? = false;
+        res
+    }
+
     pub(crate) fn to_host_val(&self, v: &ScVal) -> Result<Val, HostError> {
         let _span = tracy_span!("ScVal to Val");
         // This is the depth limit checkpoint for `ScVal`->`Val` conversion.
@@ -795,9 +805,21 @@ impl Host {
                     ScAddress::Account(_) | ScAddress::Contract(_) => {
                         Ok(self.add_host_object(addr.metered_clone(self.as_budget())?)?.into())
                     }
-                    ScAddress::MuxedAccount(_) => Ok(self
-                        .add_host_object(MuxedScAddress(addr.metered_clone(self.as_budget())?))?
-                        .into()),
+                    ScAddress::MuxedAccount(_) => {
+                        if *self.try_borrow_storage_key_conversion_active()? {
+                            return Err(self.err(
+                                ScErrorType::Storage,
+                                ScErrorCode::InvalidInput,
+                                "muxed addresses should not be used in the storage keys",
+                                &[],
+                            ));
+                        }
+                        Ok(self
+                            .add_host_object(MuxedScAddress(
+                                addr.metered_clone(self.as_budget())?,
+                            ))?
+                            .into())
+                    }
                     _ => Err(self.err(
                         ScErrorType::Object,
                         ScErrorCode::UnexpectedType,
