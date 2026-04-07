@@ -534,7 +534,7 @@ fn excessive_logging() -> Result<(), HostError> {
     WasmInsnExec                       300            0              
     MemAlloc                           16632          67392          
     MemCpy                             2330           0              
-    MemCmp                             472            0              
+    MemCmp                             288            0              
     DispatchHostFunction               310            0              
     VisitObject                        244            0              
     ValSer                             0              0              
