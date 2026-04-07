@@ -580,7 +580,9 @@ impl AuthStackFrame {
             AuthStackFrame::Contract(contract_frame) => {
                 Ok(AuthorizedFunction::ContractFn(ContractFunction {
                     contract_address: contract_frame.contract_address,
-                    function_name: contract_frame.function_name.metered_clone(host.as_budget())?,
+                    function_name: contract_frame
+                        .function_name
+                        .metered_clone(host.as_budget())?,
                     args,
                 }))
             }
@@ -688,7 +690,9 @@ impl AuthorizedInvocation {
                 .iter()
                 .filter(|i| i.is_exhausted || !exhausted_sub_invocations_only)
                 .map(|i| i.to_xdr(host, exhausted_sub_invocations_only))
-                .metered_collect::<Result<Vec<xdr::SorobanAuthorizedInvocation>, HostError>>(host.as_budget())??
+                .metered_collect::<Result<Vec<xdr::SorobanAuthorizedInvocation>, HostError>>(
+                    host.as_budget(),
+                )??
                 .try_into()?,
         })
     }
@@ -1173,7 +1177,8 @@ impl AuthorizationManager {
                 let len = self.try_borrow_account_trackers(host)?.len();
                 let mut snapshots =
                     Vec::<Option<AccountAuthorizationTrackerSnapshot>>::with_metered_capacity(
-                        len, host.as_budget(),
+                        len,
+                        host.as_budget(),
                     )?;
                 for t in self.try_borrow_account_trackers(host)?.iter() {
                     let sp = if let Ok(tracker) = t.try_borrow() {
@@ -1200,7 +1205,9 @@ impl AuthorizationManager {
             .try_borrow_invoker_contract_trackers(host)?
             .iter()
             .map(|t| t.invocation_tracker.snapshot(host.as_budget()))
-            .metered_collect::<Result<Vec<AuthorizedInvocationSnapshot>, HostError>>(host.as_budget())??;
+            .metered_collect::<Result<Vec<AuthorizedInvocationSnapshot>, HostError>>(
+                host.as_budget(),
+            )??;
         #[cfg(any(test, feature = "recording_mode"))]
         let tracker_by_address_handle = match &self.mode {
             AuthorizationMode::Enforcing => None,
@@ -1353,7 +1360,9 @@ impl AuthorizationManager {
             // `push_create_contract_host_fn_frame`) functions instead to push
             // the frame with the required info.
             Frame::HostFunction(_) => return self.snapshot(host),
-            Frame::StellarAssetContract(id, fn_name, ..) => (id.metered_clone(host.as_budget())?, *fn_name),
+            Frame::StellarAssetContract(id, fn_name, ..) => {
+                (id.metered_clone(host.as_budget())?, *fn_name)
+            }
             #[cfg(any(test, feature = "testutils"))]
             Frame::TestContract(tc) => (tc.id.metered_clone(host.as_budget())?, tc.func),
         };
@@ -1966,7 +1975,9 @@ impl AccountAuthorizationTracker {
         host.as_budget().with_observable_shadow_mode(|| {
             Ok(RecordedAuthPayload {
                 address: if !self.is_transaction_source_account {
-                    Some(host.visit_obj(self.address, |a: &ScAddress| a.metered_clone(host.as_budget()))?)
+                    Some(host.visit_obj(self.address, |a: &ScAddress| {
+                        a.metered_clone(host.as_budget())
+                    })?)
                 } else {
                     None
                 },
@@ -2064,7 +2075,9 @@ impl AccountAuthorizationTracker {
         })?;
         let payload_preimage =
             HashIdPreimage::SorobanAuthorization(HashIdPreimageSorobanAuthorization {
-                network_id: Hash(host.with_ledger_info(|li| li.network_id.metered_clone(host.as_budget()))?),
+                network_id: Hash(
+                    host.with_ledger_info(|li| li.network_id.metered_clone(host.as_budget()))?,
+                ),
                 nonce,
                 signature_expiration_ledger: live_until_ledger,
                 invocation: self.root_invocation_to_xdr(host)?,
@@ -2153,12 +2166,12 @@ impl AccountAuthorizationTracker {
                     host,
                     |opt| match opt {
                         Some(entry) => match &entry.data {
-                        LedgerEntryData::ContractData(e) => match &e.val {
+                            LedgerEntryData::ContractData(e) => match &e.val {
                                 ScVal::ContractInstance(instance) => {
-                                    Ok(Some(instance.metered_clone(host)?))
-                            }
+                                    Ok(Some(instance.metered_clone(host.budget_ref())?))
+                                }
                                 _ => Ok(None),
-                        },
+                            },
                             _ => Ok(None),
                         },
                         None => Ok(None),
@@ -2325,7 +2338,7 @@ impl Host {
                 data,
                 ext: LedgerEntryExt::V0,
             };
-            let entry_rc = Rc::metered_new(entry, self)?;
+            let entry_rc = Rc::metered_new(entry, self.budget_ref())?;
             storage.create_entry(&nonce_key, &entry_rc, Some(live_until_ledger), self)
         })
     }

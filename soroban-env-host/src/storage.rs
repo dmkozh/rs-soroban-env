@@ -289,7 +289,7 @@ impl StorageEntry {
             ));
         }
         // Different depth: push new frame
-        charge_shallow_copy::<EntryTTLFrame>(1, host)?;
+        charge_shallow_copy::<EntryTTLFrame>(1, host.budget_ref())?;
         self.ttl_stack.push(EntryTTLFrame { depth, live_until });
         Ok(())
     }
@@ -370,10 +370,10 @@ impl StorageEntry {
                             Some(StorageLedgerEntryData::ContractData(*val))
                         }
                         Some(StorageLedgerEntryData::Entry(entry_rc)) => {
-                            let cloned = entry_rc.borrow().metered_clone(host)?;
+                            let cloned = entry_rc.borrow().metered_clone(host.budget_ref())?;
                             Some(StorageLedgerEntryData::Entry(Rc::metered_new(
                                 RefCell::new(cloned),
-                                host,
+                                host.budget_ref(),
                             )?))
                         }
                         None => None,
@@ -384,7 +384,7 @@ impl StorageEntry {
 
         if let Some(value) = new_value {
             // Different depth: push new frame
-            charge_shallow_copy::<StorageEntryFrame>(1, host)?;
+            charge_shallow_copy::<StorageEntryFrame>(1, host.budget_ref())?;
             stack.push(StorageEntryFrame { depth, value });
         }
 
@@ -784,8 +784,8 @@ impl StorageLedgerEntryData {
                 if matches!(contract_data.val, ScVal::ContractInstance(_)) {
                     // Store as Entry - don't try to convert to Val
                     return Ok(StorageLedgerEntryData::Entry(Rc::metered_new(
-                        RefCell::new(entry.metered_clone(host)?),
-                        host,
+                        RefCell::new(entry.metered_clone(host.budget_ref())?),
+                        host.budget_ref(),
                     )?));
                 }
 
@@ -816,8 +816,8 @@ impl StorageLedgerEntryData {
             _ => {
                 // Other entry types are stored as Entry variant
                 Ok(StorageLedgerEntryData::Entry(Rc::metered_new(
-                    RefCell::new(entry.metered_clone(host)?),
-                    host,
+                    RefCell::new(entry.metered_clone(host.budget_ref())?),
+                    host.budget_ref(),
                 )?))
             }
         }
@@ -832,8 +832,8 @@ impl StorageLedgerEntryData {
     ) -> Result<Rc<LedgerEntry>, HostError> {
         match self {
             StorageLedgerEntryData::Entry(entry) => {
-                let cloned = entry.borrow().metered_clone(host)?;
-                Rc::metered_new(cloned, host)
+                let cloned = entry.borrow().metered_clone(host.budget_ref())?;
+                Rc::metered_new(cloned, host.budget_ref())
             }
             StorageLedgerEntryData::ContractData(val) => {
                 // Reconstruct the LedgerEntry from key and value
@@ -848,14 +848,14 @@ impl StorageLedgerEntryData {
                         last_modified_ledger_seq: 0,
                         data: LedgerEntryData::ContractData(ContractDataEntry {
                             ext: crate::xdr::ExtensionPoint::V0,
-                            contract: contract.metered_clone(host)?,
-                            key: data_key.metered_clone(host)?,
+                            contract: contract.metered_clone(host.budget_ref())?,
+                            key: data_key.metered_clone(host.budget_ref())?,
                             durability: *durability,
                             val: sc_val,
                         }),
                         ext: LedgerEntryExt::V0,
                     };
-                    Rc::metered_new(entry, host)
+                    Rc::metered_new(entry, host.budget_ref())
                 } else {
                     Err(host.err(
                         ScErrorType::Storage,
@@ -901,7 +901,7 @@ impl InstanceStorageMap {
                                 host.to_valid_host_val(&i.val)?,
                             ))
                         })
-                        .metered_collect::<Result<Vec<(Val, Val)>, HostError>>(host.as_budget())?
+                        .metered_collect::<Result<Vec<(Val, Val)>, HostError>>(host.budget_ref())?
                 },
             )?,
             host,

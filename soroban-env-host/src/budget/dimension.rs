@@ -94,17 +94,11 @@ impl BudgetDimension {
 
     // The cost_models array is statically sized to ContractCostType::variants().len(),
     // so indexing by `ty as usize` is always in bounds.
-    pub(crate) fn get_cost_model(
-        &self,
-        ty: ContractCostType,
-    ) -> &MeteredCostComponent {
+    pub(crate) fn get_cost_model(&self, ty: ContractCostType) -> &MeteredCostComponent {
         &self.cost_models[ty as usize]
     }
 
-    pub(crate) fn get_cost_model_mut(
-        &mut self,
-        ty: ContractCostType,
-    ) -> &mut MeteredCostComponent {
+    pub(crate) fn get_cost_model_mut(&mut self, ty: ContractCostType) -> &mut MeteredCostComponent {
         &mut self.cost_models[ty as usize]
     }
 

@@ -854,7 +854,7 @@ fn test_wasm_upload_success_in_recording_mode() {
         }]
     );
     assert!(res.auth.is_empty());
-    expect!["1779283"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1779238"].assert_eq(&res.resources.instructions.to_string());
     expect!["684"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -989,13 +989,13 @@ fn test_wasm_upload_budget_exceeded() {
         }
         Ok(res) => {
             // Budget exceeded during invocation
-    assert!(HostError::result_matches_err(
-        res.invoke_result,
-        (ScErrorType::Budget, ScErrorCode::ExceededLimit)
-    ));
-    assert!(res.ledger_changes.is_empty());
-    assert!(res.contract_events.is_empty());
-    assert_eq!(res.budget.get_cpu_insns_remaining().unwrap(), 0);
+            assert!(HostError::result_matches_err(
+                res.invoke_result,
+                (ScErrorType::Budget, ScErrorCode::ExceededLimit)
+            ));
+            assert!(res.ledger_changes.is_empty());
+            assert!(res.contract_events.is_empty());
+            assert_eq!(res.budget.get_cpu_insns_remaining().unwrap(), 0);
         }
     }
 }
@@ -1423,7 +1423,7 @@ fn test_create_contract_success_in_recording_mode() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["695091"].assert_eq(&res.resources.instructions.to_string());
+    expect!["695529"].assert_eq(&res.resources.instructions.to_string());
     expect!["104"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -1562,7 +1562,7 @@ fn test_create_contract_success_in_recording_mode_with_custom_account() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["1146809"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1147247"].assert_eq(&res.resources.instructions.to_string());
     expect!["176"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -1633,7 +1633,7 @@ fn test_create_contract_success_in_recording_mode_with_enforced_auth() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["698125"].assert_eq(&res.resources.instructions.to_string());
+    expect!["698563"].assert_eq(&res.resources.instructions.to_string());
     expect!["104"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -2074,7 +2074,7 @@ fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
         ]
     );
     assert!(res.restored_rw_entry_ids.is_empty());
-    expect!["946304"].assert_eq(&res.resources.instructions.to_string());
+    expect!["946739"].assert_eq(&res.resources.instructions.to_string());
     expect!["80"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -2141,7 +2141,7 @@ fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
             wasm_entry_change.clone()
         ]
     );
-    expect!["1067694"].assert_eq(&extend_res.resources.instructions.to_string());
+    expect!["1068129"].assert_eq(&extend_res.resources.instructions.to_string());
     assert_eq!(
         extend_res.resources,
         SorobanResources {
@@ -2442,7 +2442,7 @@ fn test_auto_restore_with_extension_in_recording_mode() {
         ]
     );
 
-    expect!["1625383"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1625818"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -2585,7 +2585,7 @@ fn test_auto_restore_with_overwrite_in_recording_mode() {
         ]
     );
 
-    expect!["1086061"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1086496"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -2725,7 +2725,7 @@ fn test_auto_restore_with_new_entry_in_recording_mode() {
         ]
     );
     let wasm_entry_size = cd.wasm_entry.to_xdr(Limits::none()).unwrap().len() as u32;
-    expect!["1497881"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1498316"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {

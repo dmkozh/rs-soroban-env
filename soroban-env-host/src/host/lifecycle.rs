@@ -198,8 +198,9 @@ impl Host {
             )),
         }?;
 
-        let id_preimage =
-            self.get_full_contract_id_preimage(args.contract_id_preimage.metered_clone(self.as_budget())?)?;
+        let id_preimage = self.get_full_contract_id_preimage(
+            args.contract_id_preimage.metered_clone(self.as_budget())?,
+        )?;
         let contract_id = ContractId(Hash(self.metered_hash_xdr(&id_preimage)?));
         self.create_contract_with_id(
             contract_id.metered_clone(self.as_budget())?,
@@ -218,12 +219,14 @@ impl Host {
         salt: BytesObject,
     ) -> Result<ContractId, HostError> {
         let contract_id_preimage = ContractIdPreimage::Address(ContractIdPreimageFromAddress {
-            address: self.visit_obj(deployer, |addr: &ScAddress| addr.metered_clone(self.as_budget()))?,
+            address: self.visit_obj(deployer, |addr: &ScAddress| {
+                addr.metered_clone(self.as_budget())
+            })?,
             salt: self.u256_from_bytesobj_input("contract_id_salt", salt)?,
         });
 
-        let id_preimage =
-            self.get_full_contract_id_preimage(contract_id_preimage.metered_clone(self.as_budget())?)?;
+        let id_preimage = self
+            .get_full_contract_id_preimage(contract_id_preimage.metered_clone(self.as_budget())?)?;
         Ok(ContractId(Hash(self.metered_hash_xdr(&id_preimage)?)))
     }
 
@@ -234,16 +237,17 @@ impl Host {
     }
 
     pub(crate) fn upload_contract_wasm(&self, wasm: Vec<u8>) -> Result<BytesObject, HostError> {
-        let hash_bytes: [u8; 32] = crypto::sha256_hash_from_bytes(wasm.as_slice(), self.as_budget())?
-            .try_into()
-            .map_err(|_| {
-                self.err(
-                    ScErrorType::Value,
-                    ScErrorCode::InternalError,
-                    "unexpected hash length",
-                    &[],
-                )
-            })?;
+        let hash_bytes: [u8; 32] =
+            crypto::sha256_hash_from_bytes(wasm.as_slice(), self.as_budget())?
+                .try_into()
+                .map_err(|_| {
+                    self.err(
+                        ScErrorType::Value,
+                        ScErrorCode::InternalError,
+                        "unexpected hash length",
+                        &[],
+                    )
+                })?;
 
         // Check size before instantiation.
         let wasm_bytes_m: crate::xdr::BytesM = wasm.try_into().map_err(|_| {

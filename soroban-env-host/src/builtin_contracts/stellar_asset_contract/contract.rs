@@ -93,7 +93,8 @@ impl StellarAssetContract {
         validate_asset(e, &asset)?;
 
         let curr_contract_id = e.get_current_contract_id_internal()?;
-        let expected_contract_id = e.get_asset_contract_id_hash(asset.metered_clone(e.as_budget())?)?;
+        let expected_contract_id =
+            e.get_asset_contract_id_hash(asset.metered_clone(e.as_budget())?)?;
         if curr_contract_id != expected_contract_id {
             return Err(e.err(
                 ScErrorType::Context,

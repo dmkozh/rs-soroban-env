@@ -141,7 +141,11 @@ impl Host {
             ];
             Vec::<InternalDiagnosticArg>::charge_bulk_init_cpy(1, self.as_budget())?;
             let args = vec![InternalDiagnosticArg::HostVal(*res)];
-            self.record_diagnostic_event(Some(contract_id.metered_clone(self.as_budget())?), topics, args)
+            self.record_diagnostic_event(
+                Some(contract_id.metered_clone(self.as_budget())?),
+                topics,
+                args,
+            )
         })
     }
 }

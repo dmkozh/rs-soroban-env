@@ -549,12 +549,14 @@ impl Host {
         use crate::Tag;
         let tag = val.get_tag();
         if tag.is_object() {
-            let obj: Object = val.try_into().map_err(|_| self.err(
-                ScErrorType::Value,
-                ScErrorCode::InternalError,
-                "expected object val",
-                &[],
-            ))?;
+            let obj: Object = val.try_into().map_err(|_| {
+                self.err(
+                    ScErrorType::Value,
+                    ScErrorCode::InternalError,
+                    "expected object val",
+                    &[],
+                )
+            })?;
             let handle = obj.get_handle();
             let r = self.try_borrow_objects()?;
             if let Some((_obj, meta)) = r.get(handle_to_index(handle)) {
@@ -567,7 +569,7 @@ impl Host {
             // Inline Val — approximate XDR size based on tag
             Ok(match tag {
                 Tag::False | Tag::True | Tag::Void => 4,
-                Tag::U32Val | Tag::I32Val => 8,  // 4 disc + 4 val
+                Tag::U32Val | Tag::I32Val => 8,      // 4 disc + 4 val
                 Tag::U64Small | Tag::I64Small => 12, // 4 disc + 8 val
                 Tag::TimepointSmall | Tag::DurationSmall => 12,
                 Tag::U128Small | Tag::I128Small => 20, // 4 disc + 16 val
@@ -577,7 +579,7 @@ impl Host {
                     12 // approximate
                 }
                 Tag::Error => 12, // 4 disc + 4 type + 4 code
-                _ => 8, // conservative fallback for any other inline types
+                _ => 8,           // conservative fallback for any other inline types
             })
         }
     }
@@ -585,12 +587,14 @@ impl Host {
     /// Returns the ObjectMeta for the given Val, or a default for inline vals.
     pub(crate) fn val_object_meta(&self, val: Val) -> Result<ObjectMeta, HostError> {
         if val.get_tag().is_object() {
-            let obj: Object = val.try_into().map_err(|_| self.err(
-                ScErrorType::Value,
-                ScErrorCode::InternalError,
-                "expected object val",
-                &[],
-            ))?;
+            let obj: Object = val.try_into().map_err(|_| {
+                self.err(
+                    ScErrorType::Value,
+                    ScErrorCode::InternalError,
+                    "expected object val",
+                    &[],
+                )
+            })?;
             let handle = obj.get_handle();
             let r = self.try_borrow_objects()?;
             if let Some((_obj, meta)) = r.get(handle_to_index(handle)) {
@@ -610,34 +614,73 @@ impl Host {
     fn compute_object_meta(&self, obj: &HostObject) -> Result<ObjectMeta, HostError> {
         match obj {
             // Leaf scalar objects — fixed XDR sizes, depth 0
-            HostObject::U64(_) => Ok(ObjectMeta { xdr_byte_size: 8, depth: 0 }),
-            HostObject::I64(_) => Ok(ObjectMeta { xdr_byte_size: 8, depth: 0 }),
-            HostObject::U128(_) => Ok(ObjectMeta { xdr_byte_size: 16, depth: 0 }),
-            HostObject::I128(_) => Ok(ObjectMeta { xdr_byte_size: 16, depth: 0 }),
-            HostObject::U256(_) => Ok(ObjectMeta { xdr_byte_size: 32, depth: 0 }),
-            HostObject::I256(_) => Ok(ObjectMeta { xdr_byte_size: 32, depth: 0 }),
-            HostObject::TimePoint(_) => Ok(ObjectMeta { xdr_byte_size: 8, depth: 0 }),
-            HostObject::Duration(_) => Ok(ObjectMeta { xdr_byte_size: 8, depth: 0 }),
+            HostObject::U64(_) => Ok(ObjectMeta {
+                xdr_byte_size: 8,
+                depth: 0,
+            }),
+            HostObject::I64(_) => Ok(ObjectMeta {
+                xdr_byte_size: 8,
+                depth: 0,
+            }),
+            HostObject::U128(_) => Ok(ObjectMeta {
+                xdr_byte_size: 16,
+                depth: 0,
+            }),
+            HostObject::I128(_) => Ok(ObjectMeta {
+                xdr_byte_size: 16,
+                depth: 0,
+            }),
+            HostObject::U256(_) => Ok(ObjectMeta {
+                xdr_byte_size: 32,
+                depth: 0,
+            }),
+            HostObject::I256(_) => Ok(ObjectMeta {
+                xdr_byte_size: 32,
+                depth: 0,
+            }),
+            HostObject::TimePoint(_) => Ok(ObjectMeta {
+                xdr_byte_size: 8,
+                depth: 0,
+            }),
+            HostObject::Duration(_) => Ok(ObjectMeta {
+                xdr_byte_size: 8,
+                depth: 0,
+            }),
 
             // Variable-length leaf objects — size from len, depth 0
             // XDR encoding: 4 (length) + padded-to-4 bytes
             HostObject::Bytes(b) => {
                 let padded = ((b.len() + 3) / 4) * 4;
-                Ok(ObjectMeta { xdr_byte_size: (4 + padded) as u32, depth: 0 })
+                Ok(ObjectMeta {
+                    xdr_byte_size: (4 + padded) as u32,
+                    depth: 0,
+                })
             }
             HostObject::String(s) => {
                 let padded = ((s.len() + 3) / 4) * 4;
-                Ok(ObjectMeta { xdr_byte_size: (4 + padded) as u32, depth: 0 })
+                Ok(ObjectMeta {
+                    xdr_byte_size: (4 + padded) as u32,
+                    depth: 0,
+                })
             }
             HostObject::Symbol(s) => {
                 let padded = ((s.len() + 3) / 4) * 4;
-                Ok(ObjectMeta { xdr_byte_size: (4 + padded) as u32, depth: 0 })
+                Ok(ObjectMeta {
+                    xdr_byte_size: (4 + padded) as u32,
+                    depth: 0,
+                })
             }
 
             // Address: ScAddress is either Account(32 bytes) or Contract(32 bytes)
             // XDR: 4 (disc) + 4 (inner disc) + 32 (key) = 40
-            HostObject::Address(_) => Ok(ObjectMeta { xdr_byte_size: 40, depth: 0 }),
-            HostObject::MuxedAddress(_) => Ok(ObjectMeta { xdr_byte_size: 48, depth: 0 }),
+            HostObject::Address(_) => Ok(ObjectMeta {
+                xdr_byte_size: 40,
+                depth: 0,
+            }),
+            HostObject::MuxedAddress(_) => Ok(ObjectMeta {
+                xdr_byte_size: 48,
+                depth: 0,
+            }),
 
             // Container objects — sum child sizes + overhead
             HostObject::Vec(v) => {
@@ -647,7 +690,9 @@ impl Host {
                 let mut max_depth: u32 = 0;
                 for val in v.iter() {
                     let child_meta = self.val_object_meta_from_table(&r, *val);
-                    total_size = total_size.saturating_add(child_meta.xdr_byte_size).saturating_add(4); // +4 for ScVal disc
+                    total_size = total_size
+                        .saturating_add(child_meta.xdr_byte_size)
+                        .saturating_add(4); // +4 for ScVal disc
                     max_depth = max_depth.max(child_meta.depth);
                 }
                 Ok(ObjectMeta {
@@ -666,8 +711,10 @@ impl Host {
                     let v_meta = self.val_object_meta_from_table(&r, *v);
                     // Each entry: key XDR + 4 disc + val XDR + 4 disc
                     total_size = total_size
-                        .saturating_add(k_meta.xdr_byte_size).saturating_add(4)
-                        .saturating_add(v_meta.xdr_byte_size).saturating_add(4);
+                        .saturating_add(k_meta.xdr_byte_size)
+                        .saturating_add(4)
+                        .saturating_add(v_meta.xdr_byte_size)
+                        .saturating_add(4);
                     max_depth = max_depth.max(k_meta.depth).max(v_meta.depth);
                 }
                 Ok(ObjectMeta {

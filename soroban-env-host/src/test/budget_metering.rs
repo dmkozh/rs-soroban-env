@@ -575,19 +575,13 @@ fn bench_budget_charge_constant() {
     let budget = make_unlimited_budget();
     // Warm up
     for _ in 0..10_000 {
-        budget
-            .charge(ContractCostType::WasmInsnExec, None)
-            .unwrap();
+        budget.charge(ContractCostType::WasmInsnExec, None).unwrap();
     }
 
     let iterations = 10_000_000u64;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
-        std::hint::black_box(
-            budget
-                .charge(ContractCostType::WasmInsnExec, None)
-                .unwrap(),
-        );
+        std::hint::black_box(budget.charge(ContractCostType::WasmInsnExec, None).unwrap());
     }
     let elapsed = start.elapsed();
     eprintln!(
@@ -664,19 +658,13 @@ fn bench_budget_bulk_charge() {
 fn bench_budget_charge_production() {
     let budget = make_production_budget();
     for _ in 0..10_000 {
-        budget
-            .charge(ContractCostType::WasmInsnExec, None)
-            .unwrap();
+        budget.charge(ContractCostType::WasmInsnExec, None).unwrap();
     }
 
     let iterations = 10_000_000u64;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
-        std::hint::black_box(
-            budget
-                .charge(ContractCostType::WasmInsnExec, None)
-                .unwrap(),
-        );
+        std::hint::black_box(budget.charge(ContractCostType::WasmInsnExec, None).unwrap());
     }
     let elapsed = start.elapsed();
     eprintln!(
@@ -718,9 +706,7 @@ fn make_test_scval_map(n_entries: usize) -> ScVal {
 }
 
 fn make_test_scval_vec(n_entries: usize) -> ScVal {
-    let entries: Vec<ScVal> = (0..n_entries)
-        .map(|i| ScVal::U64(i as u64))
-        .collect();
+    let entries: Vec<ScVal> = (0..n_entries).map(|i| ScVal::U64(i as u64)).collect();
     ScVal::Vec(Some(ScVec(entries.try_into().unwrap())))
 }
 
@@ -819,9 +805,7 @@ fn bench_from_host_val_map() {
                 format!("key_{i:03}").try_into().unwrap(),
             )))
             .unwrap();
-        let val = host
-            .to_host_val(&ScVal::U64(i as u64))
-            .unwrap();
+        let val = host.to_host_val(&ScVal::U64(i as u64)).unwrap();
         pairs.push((key, val));
     }
     let map = HostMap::from_map(pairs, &host).unwrap();

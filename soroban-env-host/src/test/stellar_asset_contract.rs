@@ -155,8 +155,8 @@ impl StellarAssetContractTest {
                     .0
                     .data
                 {
-                LedgerEntryData::Trustline(trustline) => Ok(trustline.balance),
-                _ => unreachable!(),
+                    LedgerEntryData::Trustline(trustline) => Ok(trustline.balance),
+                    _ => unreachable!(),
                 }
             })
             .unwrap()
@@ -3630,8 +3630,8 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 803028,
-                mem_bytes: 1207232,
+                instructions: 803352,
+                mem_bytes: 1207200,
                 disk_read_entries: 0,
                 memory_read_entries: 1,
                 write_entries: 1,
@@ -3656,8 +3656,8 @@ fn test_custom_account_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 710965,
-                        mem_bytes: 1195867,
+                        instructions: 710851,
+                        mem_bytes: 1195779,
                         disk_read_entries: 0,
                         memory_read_entries: 0,
                         write_entries: 0,

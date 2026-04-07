@@ -218,10 +218,7 @@ pub trait MeteredClone: Clone + DeclaredSizeForMetering {
     /// Self::IS_SHALLOW, this is a no-op. If Self::IS_SHALLOW is false, this
     /// method will do element-wise charging for substructure, assuming it is
     /// paired with element-wise cloning.
-    fn bulk_charge_for_substructure(
-        clones: &[Self],
-        budget: &Budget,
-    ) -> Result<(), HostError> {
+    fn bulk_charge_for_substructure(clones: &[Self], budget: &Budget) -> Result<(), HostError> {
         if Self::IS_SHALLOW {
             // If we're shallow, just return.
             Ok(())
@@ -445,7 +442,7 @@ impl MeteredClone for StorageLedgerEntryData {
     // Neither requires deep cloning, so we treat it as shallow.
     const IS_SHALLOW: bool = true;
 
-    fn charge_for_substructure(&self, _budget: impl AsBudget) -> Result<(), HostError> {
+    fn charge_for_substructure(&self, _budget: &Budget) -> Result<(), HostError> {
         // Val is a tagged 64-bit value (shallow)
         // Rc<LedgerEntry> clone is just a refcount increment (shallow)
         // No deep structure to charge for
@@ -457,7 +454,7 @@ impl MeteredClone for EntryTTLFrame {
     // EntryTTLFrame contains u32 depth and Option<u32> live_until - completely shallow.
     const IS_SHALLOW: bool = true;
 
-    fn charge_for_substructure(&self, _budget: impl AsBudget) -> Result<(), HostError> {
+    fn charge_for_substructure(&self, _budget: &Budget) -> Result<(), HostError> {
         Ok(())
     }
 }
@@ -466,7 +463,7 @@ impl MeteredClone for StorageEntryFrame {
     // StorageEntryFrame contains depth (u32) and Option<StorageLedgerEntryData>
     const IS_SHALLOW: bool = true;
 
-    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
+    fn charge_for_substructure(&self, budget: &Budget) -> Result<(), HostError> {
         self.value.charge_for_substructure(budget)
     }
 }
@@ -476,13 +473,13 @@ impl MeteredClone for StorageEntry {
     // Both have substructure that needs charging.
     const IS_SHALLOW: bool = false;
 
-    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
+    fn charge_for_substructure(&self, budget: &Budget) -> Result<(), HostError> {
         match &self.data {
             StorageEntryData::ReadOnly(value) => {
-                value.charge_for_substructure(budget.clone())?;
+                value.charge_for_substructure(budget)?;
             }
             StorageEntryData::ReadWrite(stack) => {
-                stack.charge_for_substructure(budget.clone())?;
+                stack.charge_for_substructure(budget)?;
             }
         }
         self.ttl_stack.charge_for_substructure(budget)
@@ -497,28 +494,26 @@ impl MeteredClone for ScVal {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_substructure(&self, budget: &Budget) -> Result<(), HostError> {
-            match self {
+        match self {
             // Only Vec and Map can recurse into more ScVal, so only they
             // need the depth limit checkpoint.
-            ScVal::Vec(Some(v)) => budget.with_limited_depth(|| {
-                ScVec::charge_for_substructure(v, budget)
-            }),
-            ScVal::Map(Some(m)) => budget.with_limited_depth(|| {
-                ScMap::charge_for_substructure(m, budget)
-            }),
-                ScVal::Vec(None) | ScVal::Map(None) => {
-                    Err((ScErrorType::Value, ScErrorCode::InvalidInput).into())
-                }
+            ScVal::Vec(Some(v)) => {
+                budget.with_limited_depth(|| ScVec::charge_for_substructure(v, budget))
+            }
+            ScVal::Map(Some(m)) => {
+                budget.with_limited_depth(|| ScMap::charge_for_substructure(m, budget))
+            }
+            ScVal::Vec(None) | ScVal::Map(None) => {
+                Err((ScErrorType::Value, ScErrorCode::InvalidInput).into())
+            }
             // Non-recursive substructure: no depth limit needed.
-                ScVal::Bytes(b) => BytesM::charge_for_substructure(b, budget),
-                ScVal::String(s) => StringM::charge_for_substructure(s, budget),
-                ScVal::Symbol(s) => StringM::charge_for_substructure(s, budget),
-                ScVal::ContractInstance(i) => {
-                    ScContractInstance::charge_for_substructure(i, budget)
-                }
+            ScVal::Bytes(b) => BytesM::charge_for_substructure(b, budget),
+            ScVal::String(s) => StringM::charge_for_substructure(s, budget),
+            ScVal::Symbol(s) => StringM::charge_for_substructure(s, budget),
+            ScVal::ContractInstance(i) => ScContractInstance::charge_for_substructure(i, budget),
             // Everything else is shallow — no substructure to charge.
             _ => Ok(()),
-            }
+        }
     }
 }
 
@@ -727,8 +722,7 @@ impl MeteredClone for CreateContractArgsV2 {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_substructure(&self, budget: &Budget) -> Result<(), HostError> {
-        self.contract_id_preimage
-            .charge_for_substructure(budget)?;
+        self.contract_id_preimage.charge_for_substructure(budget)?;
         self.executable.charge_for_substructure(budget)?;
         self.constructor_args.charge_for_substructure(budget)
     }
@@ -737,8 +731,8 @@ impl MeteredClone for CreateContractArgsV2 {
 impl MeteredClone for LedgerFootprint {
     const IS_SHALLOW: bool = false;
 
-    fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        self.read_only.charge_for_substructure(budget.clone())?;
+    fn charge_for_substructure(&self, budget: &Budget) -> Result<(), HostError> {
+        self.read_only.charge_for_substructure(budget)?;
         self.read_write.charge_for_substructure(budget)
     }
 }

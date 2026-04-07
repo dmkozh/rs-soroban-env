@@ -2596,7 +2596,7 @@ impl VmCallerEnv for Host {
         let new_executable = ContractExecutable::Wasm(wasm_hash);
         self.modify_contract_instance(&key, |instance| {
             self.emit_update_contract_event(&instance.executable, &new_executable)?;
-            instance.executable = new_executable.metered_clone(self)?;
+            instance.executable = new_executable.metered_clone(self.budget_ref())?;
             Ok(())
         })?;
         Ok(Val::VOID)
@@ -2732,7 +2732,7 @@ impl VmCallerEnv for Host {
         let scv = self.visit_obj(b, |hv: &ScBytes| {
             self.metered_from_xdr::<ScVal>(hv.as_slice())
         })?;
-            self.to_host_val(&scv)
+        self.to_host_val(&scv)
     }
 
     fn string_copy_to_linear_memory(
@@ -3959,17 +3959,17 @@ impl Host {
                 }
             })?;
         let live_until = self
-                    .try_borrow_storage_mut()?
+            .try_borrow_storage_mut()?
             .get_live_until(&code_key, self, None)?;
-                live_until.ok_or_else(|| {
-                    self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "unexpected contract code without TTL for a contract",
-                        &[contract.into()],
-                    )
-                })
-            }
+        live_until.ok_or_else(|| {
+            self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "unexpected contract code without TTL for a contract",
+                &[contract.into()],
+            )
+        })
+    }
 
     /// Returns the ledger number until a current contract's data entry
     /// with given key and storage type lives (inclusive).

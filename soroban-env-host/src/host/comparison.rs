@@ -50,46 +50,46 @@ impl Compare<HostObject> for Host {
         use HostObject::*;
         let _span = tracy_span!("Compare<HostObject>");
         match (a, b) {
-                (U64(a), U64(b)) => self.as_budget().compare(a, b),
-                (I64(a), I64(b)) => self.as_budget().compare(a, b),
-                (TimePoint(a), TimePoint(b)) => self.as_budget().compare(a, b),
-                (Duration(a), Duration(b)) => self.as_budget().compare(a, b),
-                (U128(a), U128(b)) => self.as_budget().compare(a, b),
-                (I128(a), I128(b)) => self.as_budget().compare(a, b),
-                (U256(a), U256(b)) => self.as_budget().compare(a, b),
-                (I256(a), I256(b)) => self.as_budget().compare(a, b),
-                // Only Vec and Map can recurse — depth limit only here.
-                (Vec(a), Vec(b)) => self.budget_ref().with_limited_depth(|| self.compare(a, b)),
-                (Map(a), Map(b)) => self.budget_ref().with_limited_depth(|| self.compare(a, b)),
-                (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (String(a), String(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (Symbol(a), Symbol(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (Address(a), Address(b)) => self.as_budget().compare(a, b),
-                (MuxedAddress(a), MuxedAddress(b)) => self.as_budget().compare(a, b),
+            (U64(a), U64(b)) => self.as_budget().compare(a, b),
+            (I64(a), I64(b)) => self.as_budget().compare(a, b),
+            (TimePoint(a), TimePoint(b)) => self.as_budget().compare(a, b),
+            (Duration(a), Duration(b)) => self.as_budget().compare(a, b),
+            (U128(a), U128(b)) => self.as_budget().compare(a, b),
+            (I128(a), I128(b)) => self.as_budget().compare(a, b),
+            (U256(a), U256(b)) => self.as_budget().compare(a, b),
+            (I256(a), I256(b)) => self.as_budget().compare(a, b),
+            // Only Vec and Map can recurse — depth limit only here.
+            (Vec(a), Vec(b)) => self.budget_ref().with_limited_depth(|| self.compare(a, b)),
+            (Map(a), Map(b)) => self.budget_ref().with_limited_depth(|| self.compare(a, b)),
+            (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
+            (String(a), String(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
+            (Symbol(a), Symbol(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
+            (Address(a), Address(b)) => self.as_budget().compare(a, b),
+            (MuxedAddress(a), MuxedAddress(b)) => self.as_budget().compare(a, b),
 
-                // List out at least one side of all the remaining cases here so
-                // we don't accidentally forget to update this when/if a new
-                // HostObject type is added.
-                (U64(_), _)
-                | (TimePoint(_), _)
-                | (Duration(_), _)
-                | (I64(_), _)
-                | (U128(_), _)
-                | (I128(_), _)
-                | (U256(_), _)
-                | (I256(_), _)
-                | (Vec(_), _)
-                | (Map(_), _)
-                | (Bytes(_), _)
-                | (String(_), _)
-                | (Symbol(_), _)
-                | (Address(_), _)
-                | (MuxedAddress(_), _) => {
-                    let a = host_obj_discriminant(a);
-                    let b = host_obj_discriminant(b);
-                    Ok(a.cmp(&b))
-                }
+            // List out at least one side of all the remaining cases here so
+            // we don't accidentally forget to update this when/if a new
+            // HostObject type is added.
+            (U64(_), _)
+            | (TimePoint(_), _)
+            | (Duration(_), _)
+            | (I64(_), _)
+            | (U128(_), _)
+            | (I128(_), _)
+            | (U256(_), _)
+            | (I256(_), _)
+            | (Vec(_), _)
+            | (Map(_), _)
+            | (Bytes(_), _)
+            | (String(_), _)
+            | (Symbol(_), _)
+            | (Address(_), _)
+            | (MuxedAddress(_), _) => {
+                let a = host_obj_discriminant(a);
+                let b = host_obj_discriminant(b);
+                Ok(a.cmp(&b))
             }
+        }
     }
 }
 
@@ -296,12 +296,8 @@ impl Compare<ScVal> for Budget {
         match (a, b) {
             // Only Vec and Map can recurse into more ScVal, so only they
             // need the depth limit checkpoint.
-            (Vec(Some(a)), Vec(Some(b))) => {
-                self.with_limited_depth(|| self.compare(a, b))
-            }
-            (Map(Some(a)), Map(Some(b))) => {
-                self.with_limited_depth(|| self.compare(a, b))
-            }
+            (Vec(Some(a)), Vec(Some(b))) => self.with_limited_depth(|| self.compare(a, b)),
+            (Map(Some(a)), Map(Some(b))) => self.with_limited_depth(|| self.compare(a, b)),
 
             (Vec(None), _) | (_, Vec(None)) | (Map(None), _) | (_, Map(None)) => {
                 Err((ScErrorType::Value, ScErrorCode::InvalidInput).into())

@@ -547,14 +547,14 @@ impl Host {
             }
         }
         if res.is_ok() && instance_storage_persisted {
-                    // If we did persist instance storage, we may need to reload
-                    // it into the re-entrant parent frames.
-                        // Similarly to above, if reloading instance storage, if
-                        // this fails we need to roll back everything.
-                        if let Err(e) = self.maybe_reload_instance_storage_on_frame_pop() {
-                            res = Err(e);
-                        }
-                    }
+            // If we did persist instance storage, we may need to reload
+            // it into the re-entrant parent frames.
+            // Similarly to above, if reloading instance storage, if
+            // this fails we need to roll back everything.
+            if let Err(e) = self.maybe_reload_instance_storage_on_frame_pop() {
+                res = Err(e);
+            }
+        }
         {
             // We do this _before_ the context is popped, in order to let the
             // observation code assume a context exists
@@ -756,7 +756,7 @@ impl Host {
     ) -> Result<TestContractFrame, HostError> {
         let instance_key = self.contract_instance_ledger_key(&id)?;
         let instance = self.with_contract_instance_from_storage(&instance_key, |instance| {
-            instance.metered_clone(self)
+            instance.metered_clone(self.budget_ref())
         })?;
         Ok(TestContractFrame::new(id, func, args.to_vec(), instance))
     }
@@ -772,7 +772,7 @@ impl Host {
         // Create key for storage
         let storage_key = self.contract_instance_ledger_key(id)?;
         let instance = self.with_contract_instance_from_storage(&storage_key, |instance| {
-            instance.metered_clone(self)
+            instance.metered_clone(self.budget_ref())
         })?;
         Vec::<Val>::charge_bulk_init_cpy(args.len() as u64, self.as_budget())?;
         let args_vec = args.to_vec();
@@ -792,7 +792,12 @@ impl Host {
                 )
             }
             ContractExecutable::StellarAsset => self.with_frame(
-                Frame::StellarAssetContract(id.metered_clone(self.as_budget())?, *func, args_vec, instance),
+                Frame::StellarAssetContract(
+                    id.metered_clone(self.as_budget())?,
+                    *func,
+                    args_vec,
+                    instance,
+                ),
                 || {
                     use crate::builtin_contracts::{BuiltinContract, StellarAssetContract};
                     StellarAssetContract.call(func, self, args)
@@ -923,8 +928,8 @@ impl Host {
         }
         let storage_key = self.contract_instance_ledger_key(contract_id)?;
         let code_key = self.with_contract_instance_from_storage(&storage_key, |instance| {
-        match &instance.executable {
-            ContractExecutable::Wasm(wasm_hash) => {
+            match &instance.executable {
+                ContractExecutable::Wasm(wasm_hash) => {
                     Ok(Some(self.contract_code_ledger_key(wasm_hash)?))
                 }
                 ContractExecutable::StellarAsset => Ok(None),
@@ -1177,9 +1182,9 @@ impl Host {
             }
             HostFunction::CreateContract(args) => self.with_frame(frame, || {
                 let deployer: Option<AddressObject> = match &args.contract_id_preimage {
-                    ContractIdPreimage::Address(preimage_from_addr) => {
-                        Some(self.add_host_object(preimage_from_addr.address.metered_clone(self.as_budget())?)?)
-                    }
+                    ContractIdPreimage::Address(preimage_from_addr) => Some(self.add_host_object(
+                        preimage_from_addr.address.metered_clone(self.as_budget())?,
+                    )?),
                     ContractIdPreimage::Asset(_) => None,
                 };
                 self.create_contract_internal(
@@ -1195,9 +1200,9 @@ impl Host {
             }),
             HostFunction::CreateContractV2(args) => self.with_frame(frame, || {
                 let deployer: Option<AddressObject> = match &args.contract_id_preimage {
-                    ContractIdPreimage::Address(preimage_from_addr) => {
-                        Some(self.add_host_object(preimage_from_addr.address.metered_clone(self.as_budget())?)?)
-                    }
+                    ContractIdPreimage::Address(preimage_from_addr) => Some(self.add_host_object(
+                        preimage_from_addr.address.metered_clone(self.as_budget())?,
+                    )?),
                     ContractIdPreimage::Asset(_) => None,
                 };
                 let arg_vals = self.scvals_to_val_vec(args.constructor_args.as_slice())?;

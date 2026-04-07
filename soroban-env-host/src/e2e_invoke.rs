@@ -672,7 +672,7 @@ pub fn invoke_host_function_in_recording_mode(
 
     match &auth_mode {
         RecordingInvocationAuthMode::Enforcing(auth_entries) => {
-            host.set_authorization_entries(auth_entries.metered_clone(budget.clone())?)?;
+            host.set_authorization_entries(auth_entries.metered_clone(budget)?)?;
         }
         RecordingInvocationAuthMode::Recording(disable_non_root_auth) => {
             host.switch_to_recording_auth(*disable_non_root_auth)?;

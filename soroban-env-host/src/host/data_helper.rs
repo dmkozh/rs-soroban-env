@@ -78,9 +78,9 @@ impl Host {
     ) -> Result<LedgerKey, HostError> {
         let contract_id = contract_id.metered_clone(self.as_budget())?;
         Ok(LedgerKey::ContractData(LedgerKeyContractData {
-                key: ScVal::LedgerKeyContractInstance,
-                durability: ContractDataDurability::Persistent,
-                contract: ScAddress::Contract(contract_id),
+            key: ScVal::LedgerKeyContractInstance,
+            durability: ContractDataDurability::Persistent,
+            contract: ScAddress::Contract(contract_id),
         }))
     }
 
@@ -96,21 +96,21 @@ impl Host {
         self.try_borrow_storage_mut()?
             .with_ledger_entry(key, self, |opt| match opt {
                 Some(entry) => match &entry.data {
-            LedgerEntryData::ContractData(e) => match &e.val {
+                    LedgerEntryData::ContractData(e) => match &e.val {
                         ScVal::ContractInstance(instance) => f(instance),
-                _ => Err(self.err(
-                    ScErrorType::Storage,
-                    ScErrorCode::InternalError,
-                    "ledger entry for contract instance does not contain contract instance",
-                    &[],
-                )),
-            },
-            _ => Err(self.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "expected ContractData ledger entry",
-                &[],
-            )),
+                        _ => Err(self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                            "ledger entry for contract instance does not contain contract instance",
+                            &[],
+                        )),
+                    },
+                    _ => Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected ContractData ledger entry",
+                        &[],
+                    )),
                 },
                 None => Err(self.storage_error_missing_value(key, None)),
             })
@@ -120,7 +120,7 @@ impl Host {
         &self,
         wasm_hash: &Hash,
     ) -> Result<LedgerKey, HostError> {
-        let wasm_hash = wasm_hash.metered_clone(self)?;
+        let wasm_hash = wasm_hash.metered_clone(self.budget_ref())?;
         Ok(LedgerKey::ContractCode(LedgerKeyContractCode {
             hash: wasm_hash,
         }))
@@ -134,28 +134,28 @@ impl Host {
         self.try_borrow_storage_mut()?
             .with_ledger_entry(&key, self, |opt| match opt {
                 Some(entry) => match &entry.data {
-            LedgerEntryData::ContractCode(e) => {
-                let code = e.code.metered_clone(self.as_budget())?;
-                let costs = match &e.ext {
+                    LedgerEntryData::ContractCode(e) => {
+                        let code = e.code.metered_clone(self.as_budget())?;
+                        let costs = match &e.ext {
                             crate::xdr::ContractCodeEntryExt::V0 => {
                                 VersionedContractCodeCostInputs::V0 {
-                        wasm_bytes: code.len(),
+                                    wasm_bytes: code.len(),
                                 }
                             }
-                    crate::xdr::ContractCodeEntryExt::V1(v1) => {
-                        VersionedContractCodeCostInputs::V1(
-                            v1.cost_inputs.metered_clone(self.as_budget())?,
-                        )
+                            crate::xdr::ContractCodeEntryExt::V1(v1) => {
+                                VersionedContractCodeCostInputs::V1(
+                                    v1.cost_inputs.metered_clone(self.as_budget())?,
+                                )
+                            }
+                        };
+                        Ok((code, costs))
                     }
-                };
-                Ok((code, costs))
-            }
                     e => Err(err!(
-                self,
-                (ScErrorType::Storage, ScErrorCode::InternalError),
+                        self,
+                        (ScErrorType::Storage, ScErrorCode::InternalError),
                         "ledger entry is not contract code",
                         e.name()
-            )),
+                    )),
                 },
                 None => Err(self.storage_error_missing_value(&key, None)),
             })
@@ -179,7 +179,7 @@ impl Host {
         key: &LedgerKey,
     ) -> Result<(), HostError> {
         let data = ContractDataEntry {
-            contract: ScAddress::Contract(contract_id.metered_clone(self)?),
+            contract: ScAddress::Contract(contract_id.metered_clone(self.budget_ref())?),
             key: ScVal::LedgerKeyContractInstance,
             val: ScVal::ContractInstance(ScContractInstance {
                 executable,
@@ -193,7 +193,7 @@ impl Host {
         self.try_borrow_storage_mut()?
             .create_entry(key, &entry, live_until, self)?;
         Ok(())
-                    }
+    }
 
     /// Provides mutable access to a contract instance via a callback.
     ///
@@ -219,22 +219,22 @@ impl Host {
                 if let LedgerEntryData::ContractData(ref mut data_entry) = entry.data {
                     if let ScVal::ContractInstance(ref mut instance) = data_entry.val {
                         f(instance)
-            } else {
+                    } else {
                         Err(self.err(
-                    ScErrorType::Storage,
-                    ScErrorCode::InternalError,
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
                             "expected ScVal::ContractInstance for contract instance",
-                    &[],
+                            &[],
                         ))
-            }
-        } else {
+                    }
+                } else {
                     Err(self.err(
                         ScErrorType::Storage,
-                            ScErrorCode::InternalError,
+                        ScErrorCode::InternalError,
                         "expected ContractData ledger entry",
-                            &[],
+                        &[],
                     ))
-        }
+                }
             })
     }
 
@@ -284,22 +284,22 @@ impl Host {
     ) -> Result<(), HostError> {
         let code_key = self.with_contract_instance_from_storage(instance_key, |instance| {
             match &instance.executable {
-            ContractExecutable::Wasm(wasm_hash) => {
+                ContractExecutable::Wasm(wasm_hash) => {
                     Ok(Some(self.contract_code_ledger_key(wasm_hash)?))
                 }
                 ContractExecutable::StellarAsset => Ok(None),
             }
         })?;
         if let Some(code_key) = code_key {
-                self.try_borrow_storage_mut()?.extend_ttl_v2(
-                    self,
+            self.try_borrow_storage_mut()?.extend_ttl_v2(
+                self,
                 &code_key,
-                    extend_to,
-                    min_extension,
-                    max_extension,
-                    None,
-                )?;
-            }
+                extend_to,
+                min_extension,
+                max_extension,
+                None,
+            )?;
+        }
         Ok(())
     }
 
@@ -339,13 +339,13 @@ impl Host {
         self.with_mut_storage(|storage| {
             storage.with_ledger_entry(&acc, self, |opt| match opt {
                 Some(entry) => match &entry.data {
-                    LedgerEntryData::Account(ae) => ae.metered_clone(self),
-            e => Err(err!(
-                self,
-                (ScErrorType::Storage, ScErrorCode::InternalError),
-                "ledger entry is not account",
-                e.name()
-            )),
+                    LedgerEntryData::Account(ae) => ae.metered_clone(self.budget_ref()),
+                    e => Err(err!(
+                        self,
+                        (ScErrorType::Storage, ScErrorCode::InternalError),
+                        "ledger entry is not account",
+                        e.name()
+                    )),
                 },
                 None => Err(self.storage_error_missing_value(&acc, None)),
             })
@@ -462,7 +462,7 @@ impl Host {
                 data: LedgerEntryData::ContractCode(data),
                 ext: LedgerEntryExt::V0,
             },
-            self,
+            self.budget_ref(),
         )
     }
 
@@ -500,7 +500,7 @@ impl Host {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
         Ok((key, durability))
-                }
+    }
 
     /// Tries to get contract data, returning None if not found.
     pub(crate) fn try_get_contract_data(
@@ -511,7 +511,7 @@ impl Host {
         let (key, _) = self.storage_key_and_durability(k, t)?;
         self.try_borrow_storage_mut()?
             .with_contract_data_val(&key, self, Some(k), |opt| Ok(opt))
-                }
+    }
 
     /// Gets contract data from storage.
     pub(super) fn get_contract_data_from_ledger(
@@ -524,7 +524,7 @@ impl Host {
             .with_contract_data_val(&key, self, Some(k), |opt| {
                 opt.ok_or_else(|| self.storage_error_missing_value(&key, Some(k)))
             })
-            }
+    }
 
     /// Deletes contract data by marking it as deleted in storage.
     /// Uses depth-aware writing for automatic rollback on frame failure.
@@ -535,7 +535,7 @@ impl Host {
     ) -> Result<(), HostError> {
         let (key, _) = self.storage_key_and_durability(k, t)?;
         self.try_borrow_storage_mut()?.del(&key, self, Some(k))
-        }
+    }
 
     /// Checks if contract data exists in storage.
     /// Reads directly from storage which tracks values at each frame depth.
@@ -682,7 +682,7 @@ impl Host {
                 })?,
         );
         self.with_contract_instance_from_storage(&key, |instance| {
-        Ok(test_contract_executable == instance.executable)
+            Ok(test_contract_executable == instance.executable)
         })
     }
 

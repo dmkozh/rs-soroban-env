@@ -858,7 +858,7 @@ mod cap_54_55_56 {
         fn wasm_writing_storage_map(&self, budget: &Budget) -> StorageMap {
             let mut map = StorageMap::new();
             map.insert(
-                    self.contract_key.clone(),
+                self.contract_key.clone(),
                 StorageEntry::new(
                     AccessType::ReadOnly,
                     true,
@@ -869,11 +869,11 @@ mod cap_54_55_56 {
                         Some(99999),
                     )),
                 ),
-                    budget,
-                )
+                budget,
+            )
             .unwrap();
             map.insert(
-                    self.wasm_key.clone(),
+                self.wasm_key.clone(),
                 StorageEntry::new(
                     AccessType::ReadWrite,
                     true,
@@ -884,8 +884,8 @@ mod cap_54_55_56 {
                         Some(99999),
                     )),
                 ),
-                    budget,
-                )
+                budget,
+            )
             .unwrap();
             map
         }
@@ -950,8 +950,8 @@ mod cap_54_55_56 {
         let contract_key = host.contract_instance_ledger_key(&contract_id)?;
         let wasm_hash = host.with_contract_instance_from_storage(&contract_key, |instance| {
             let ContractExecutable::Wasm(wasm_hash) = &instance.executable else {
-            panic!("expected Wasm executable");
-        };
+                panic!("expected Wasm executable");
+            };
             Ok(wasm_hash.clone())
         })?;
         let code_key = Rc::new(LedgerKey::ContractCode(xdr::LedgerKeyContractCode {
@@ -965,7 +965,7 @@ mod cap_54_55_56 {
             if let LedgerEntryData::ContractCode(code) = &mut entry.data {
                 code.ext = xdr::ContractCodeEntryExt::V0;
             } else {
-            panic!("expected ContractCode");
+                panic!("expected ContractCode");
             }
             Ok(())
         })?;
@@ -1288,7 +1288,6 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
-        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
             storage.map.remove(&wasm_key);
             Ok(())
@@ -1327,7 +1326,6 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
-        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
             use crate::storage::StorageEntry;
             let budget = host.budget_cloned();
@@ -1385,7 +1383,6 @@ mod cap_54_55_56 {
                 .unwrap(),
         );
         let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
-        let budget = host.budget_ref().clone();
         host.with_mut_storage(|storage| {
             storage.map.remove(&wasm_key);
             Ok(())
@@ -1878,8 +1875,8 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 886050,
-                            mem_bytes: 3464111,
+                            instructions: 886488,
+                            mem_bytes: 3464167,
                             disk_read_entries: 0,
                             memory_read_entries: 2,
                             write_entries: 2,
@@ -2036,8 +2033,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2388893,
-                            mem_bytes: 5937046,
+                            instructions: 2390207,
+                            mem_bytes: 5937214,
                             disk_read_entries: 0,
                             memory_read_entries: 3,
                             write_entries: 3,

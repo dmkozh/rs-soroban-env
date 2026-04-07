@@ -419,10 +419,7 @@ pub(crate) fn sha256_hash_from_bytes_raw(
     Ok(<Sha256 as sha2::Digest>::digest(bytes).into())
 }
 
-pub(crate) fn sha256_hash_from_bytes(
-    bytes: &[u8],
-    budget: &Budget,
-) -> Result<Vec<u8>, HostError> {
+pub(crate) fn sha256_hash_from_bytes(bytes: &[u8], budget: &Budget) -> Result<Vec<u8>, HostError> {
     Vec::<u8>::charge_bulk_init_cpy(32, budget)?;
     sha256_hash_from_bytes_raw(bytes, budget).map(|x| x.to_vec())
 }

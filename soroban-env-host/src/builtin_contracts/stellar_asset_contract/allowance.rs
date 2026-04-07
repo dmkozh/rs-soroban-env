@@ -138,7 +138,11 @@ pub(crate) fn spend_allowance(
     spender: Address,
     amount: i128,
 ) -> Result<(), HostError> {
-    let allowance = read_allowance(e, from.metered_clone(e.as_budget())?, spender.metered_clone(e.as_budget())?)?;
+    let allowance = read_allowance(
+        e,
+        from.metered_clone(e.as_budget())?,
+        spender.metered_clone(e.as_budget())?,
+    )?;
     if allowance < amount {
         return Err(err!(
             e,

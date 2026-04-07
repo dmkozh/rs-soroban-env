@@ -502,7 +502,7 @@ fn transfer_account_balance(
                 )?;
 
                 Ok(Some((new_le, None)))
-        }
+            }
             Some(le) => {
                 let ae = match &mut le.data {
                     LedgerEntryData::Account(ae) => Ok(ae),
@@ -535,7 +535,7 @@ fn transfer_account_balance(
                         new_balance,
                         max_balance
                     ))
-        }
+                }
             }
         })
     })
@@ -561,37 +561,37 @@ fn transfer_trustline_balance(
             })?;
             let tl = match &mut le.data {
                 LedgerEntryData::Trustline(tl) => Ok(tl),
-            _ => Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "unexpected entry found",
-                &[],
-            )),
-        }?;
+                _ => Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "unexpected entry found",
+                    &[],
+                )),
+            }?;
 
             let (min_balance, max_balance) = get_min_max_trustline_balance(host, tl)?;
 
-        let Some(new_balance) = tl.balance.checked_add(amount) else {
-            return Err(host.error(
-                ContractError::BalanceError.into(),
-                "resulting balance overflow",
-                &[],
-            ));
-        };
-        if new_balance >= min_balance && new_balance <= max_balance {
-            tl.balance = new_balance;
+            let Some(new_balance) = tl.balance.checked_add(amount) else {
+                return Err(host.error(
+                    ContractError::BalanceError.into(),
+                    "resulting balance overflow",
+                    &[],
+                ));
+            };
+            if new_balance >= min_balance && new_balance <= max_balance {
+                tl.balance = new_balance;
                 Ok(())
-        } else {
-            Err(err!(
-                host,
-                ContractError::BalanceError,
-                "resulting balance is not within the allowed range",
-                min_balance,
-                new_balance,
-                max_balance
-            ))
-        }
-    })
+            } else {
+                Err(err!(
+                    host,
+                    ContractError::BalanceError,
+                    "resulting balance is not within the allowed range",
+                    min_balance,
+                    new_balance,
+                    max_balance
+                ))
+            }
+        })
 }
 
 // Metering: covered by components
@@ -612,35 +612,35 @@ fn get_account_balance(
                 )
             })?;
 
-        let ae = match &le.data {
-            LedgerEntryData::Account(ae) => Ok(ae),
-            _ => Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "unexpected entry found",
-                &[],
-            )),
-        }?;
+            let ae = match &le.data {
+                LedgerEntryData::Account(ae) => Ok(ae),
+                _ => Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "unexpected entry found",
+                    &[],
+                )),
+            }?;
 
-        let (min, max) = get_min_max_account_balance(host, ae)?;
-        if ae.balance < min {
-            return Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "account has balance < minimum",
-                &[],
-            ));
-        }
-        if ae.balance > max {
-            return Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "account has balance > maximum",
-                &[],
-            ));
-        }
-        Ok(ae.balance)
-    })
+            let (min, max) = get_min_max_account_balance(host, ae)?;
+            if ae.balance < min {
+                return Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "account has balance < minimum",
+                    &[],
+                ));
+            }
+            if ae.balance > max {
+                return Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "account has balance > maximum",
+                    &[],
+                ));
+            }
+            Ok(ae.balance)
+        })
 }
 
 // Metering: covered by components.
@@ -702,35 +702,35 @@ fn get_trustline_balance(
                     &[addr.as_object().to_val()],
                 )
             })?;
-        let tl = match &le.data {
-            LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host)?),
-            _ => Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "unexpected entry found",
-                &[],
-            )),
-        }?;
+            let tl = match &le.data {
+                LedgerEntryData::Trustline(tl) => Ok(tl.metered_clone(host.budget_ref())?),
+                _ => Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "unexpected entry found",
+                    &[],
+                )),
+            }?;
 
-            let (min, max) = get_min_max_trustline_balance(host, tl)?;
-        if tl.balance < min {
-            return Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "trustline has balance < minimum",
-                &[],
-            ));
-        }
-        if tl.balance > max {
-            return Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "trustline has balance > maximum",
-                &[],
-            ));
-        }
-        Ok(tl.balance)
-    })
+            let (min, max) = get_min_max_trustline_balance(host, &tl)?;
+            if tl.balance < min {
+                return Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "trustline has balance < minimum",
+                    &[],
+                ));
+            }
+            if tl.balance > max {
+                return Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "trustline has balance > maximum",
+                    &[],
+                ));
+            }
+            Ok(tl.balance)
+        })
 }
 
 // Metering: covered by components.
@@ -809,18 +809,18 @@ fn get_trustline_flags(
                     &[addr.as_object().to_val()],
                 )
             })?;
-        let tl = match &le.data {
-            LedgerEntryData::Trustline(tl) => Ok(tl),
-            _ => Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "unexpected entry found",
-                &[],
-            )),
-        }?;
+            let tl = match &le.data {
+                LedgerEntryData::Trustline(tl) => Ok(tl),
+                _ => Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "unexpected entry found",
+                    &[],
+                )),
+            }?;
 
-        Ok(tl.flags)
-    })
+            Ok(tl.flags)
+        })
 }
 
 // Metering: covered by components.
@@ -892,30 +892,30 @@ fn set_trustline_authorization(
             })?;
             let tl = match &mut le.data {
                 LedgerEntryData::Trustline(tl) => Ok(tl),
-            _ => Err(host.err(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-                "unexpected entry found",
-                &[],
-            )),
-        }?;
+                _ => Err(host.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "unexpected entry found",
+                    &[],
+                )),
+            }?;
 
-        let is_authorized = tl.flags & (TrustLineFlags::AuthorizedFlag as u32) != 0;
-        if is_authorized == authorize {
-            return Ok(());
-        }
+            let is_authorized = tl.flags & (TrustLineFlags::AuthorizedFlag as u32) != 0;
+            if is_authorized == authorize {
+                return Ok(());
+            }
 
-        if authorize {
-            tl.flags &= !(TrustLineFlags::AuthorizedToMaintainLiabilitiesFlag as u32);
-            tl.flags |= TrustLineFlags::AuthorizedFlag as u32;
-        } else {
-            // Set AuthorizedToMaintainLiabilitiesFlag to indicate deauthorization so
-            // offers don't need to get pulled and pool shares don't get redeemed.
-            tl.flags &= !(TrustLineFlags::AuthorizedFlag as u32);
-            tl.flags |= TrustLineFlags::AuthorizedToMaintainLiabilitiesFlag as u32;
-        }
+            if authorize {
+                tl.flags &= !(TrustLineFlags::AuthorizedToMaintainLiabilitiesFlag as u32);
+                tl.flags |= TrustLineFlags::AuthorizedFlag as u32;
+            } else {
+                // Set AuthorizedToMaintainLiabilitiesFlag to indicate deauthorization so
+                // offers don't need to get pulled and pool shares don't get redeemed.
+                tl.flags &= !(TrustLineFlags::AuthorizedFlag as u32);
+                tl.flags |= TrustLineFlags::AuthorizedToMaintainLiabilitiesFlag as u32;
+            }
             Ok(())
-    })
+        })
 }
 
 fn is_asset_auth_required(e: &Host) -> Result<bool, HostError> {
@@ -994,7 +994,10 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
         ));
     }
 
-    let tl_key = e.to_trustline_key(account_id.metered_clone(e.as_budget())?, asset.metered_clone(e.as_budget())?)?;
+    let tl_key = e.to_trustline_key(
+        account_id.metered_clone(e.as_budget())?,
+        asset.metered_clone(e.as_budget())?,
+    )?;
 
     // Check if trustline already exists - if so, no-op
     let trustline_exists = e.with_mut_storage(|storage| storage.has(&tl_key, e, None))?;
@@ -1023,12 +1026,12 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
     e.try_borrow_storage_mut()?
         .modify_ledger_entry(&acc_key, e, |le_opt| {
             let le = le_opt.ok_or_else(|| {
-            e.error(
-                ContractError::AccountMissingError.into(),
-                "account entry is missing",
-                &[addr.as_object().to_val()],
-            )
-        })?;
+                e.error(
+                    ContractError::AccountMissingError.into(),
+                    "account entry is missing",
+                    &[addr.as_object().to_val()],
+                )
+            })?;
 
             let ae = match &mut le.data {
                 LedgerEntryData::Account(ae) => Ok(ae),
@@ -1040,25 +1043,25 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
                 )),
             }?;
 
-        // Check sub-entry limit (1000 max)
-        if ae.num_sub_entries >= MAX_ACCOUNT_SUBENTRIES {
-            return Err(e.error(
-                ContractError::TooManyAccountSubentries.into(),
-                "account has reached maximum number of sub-entries",
-                &[],
-            ));
-        }
+            // Check sub-entry limit (1000 max)
+            if ae.num_sub_entries >= MAX_ACCOUNT_SUBENTRIES {
+                return Err(e.error(
+                    ContractError::TooManyAccountSubentries.into(),
+                    "account has reached maximum number of sub-entries",
+                    &[],
+                ));
+            }
 
-        // Check reserve requirement: adding a trustline requires one additional base_reserve
-        let base_reserve = e.with_ledger_info(|li| Ok(li.base_reserve))? as i64;
+            // Check reserve requirement: adding a trustline requires one additional base_reserve
+            let base_reserve = e.with_ledger_info(|li| Ok(li.base_reserve))? as i64;
             let (current_min_balance, _) = get_min_max_account_balance(e, ae)?;
-        if ae.balance < current_min_balance + base_reserve {
-            return Err(e.error(
-                ContractError::InsufficientAccountReserve.into(),
-                "account has insufficient reserve for new trustline",
-                &[],
-            ));
-        }
+            if ae.balance < current_min_balance + base_reserve {
+                return Err(e.error(
+                    ContractError::InsufficientAccountReserve.into(),
+                    "account has insufficient reserve for new trustline",
+                    &[],
+                ));
+            }
 
             // Increment account's num_sub_entries
             ae.num_sub_entries += 1;
@@ -1066,23 +1069,23 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
         })?;
 
     // Create the trustline entry
-        let trustline_entry = TrustLineEntry {
-            account_id,
-            asset,
-            balance: 0,
-            limit: i64::MAX,
-            flags: tl_flags,
-            ext: TrustLineEntryExt::V0,
-        };
+    let trustline_entry = TrustLineEntry {
+        account_id,
+        asset,
+        balance: 0,
+        limit: i64::MAX,
+        flags: tl_flags,
+        ext: TrustLineEntryExt::V0,
+    };
 
-        let tl_ledger_entry = Rc::metered_new(
-            LedgerEntry {
-                last_modified_ledger_seq: 0,
-                data: LedgerEntryData::Trustline(trustline_entry),
-                ext: LedgerEntryExt::V0,
-            },
-            e.as_budget(),
-        )?;
+    let tl_ledger_entry = Rc::metered_new(
+        LedgerEntry {
+            last_modified_ledger_seq: 0,
+            data: LedgerEntryData::Trustline(trustline_entry),
+            ext: LedgerEntryExt::V0,
+        },
+        e.as_budget(),
+    )?;
 
     e.with_mut_storage(|storage| storage.create_entry(&tl_key, &tl_ledger_entry, None, e))
 }
