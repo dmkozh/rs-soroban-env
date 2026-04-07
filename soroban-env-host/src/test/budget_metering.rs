@@ -704,8 +704,9 @@ fn bench_budget_charge_linear_production() {
     );
 }
 
-use crate::Compare;
-use soroban_env_common::xdr::{ScSymbol, ScVec};
+use crate::{host::ContractFunctionSet, Compare};
+use soroban_env_common::xdr::{ContractId, Hash, ScAddress, ScSymbol, ScVec};
+use soroban_env_common::StorageType;
 
 #[test]
 fn bench_compare_host_obj_vec_u64() {
@@ -964,4 +965,120 @@ fn bench_from_host_val_vec_u64() {
         "from_host_obj(Vec(10 x U64)): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
         elapsed.as_nanos() as f64 / iterations as f64
     );
+}
+
+#[test]
+fn bench_storage_has_contract_data() {
+    let host = Host::test_host_with_recording_footprint();
+    host.as_budget().reset_unlimited().unwrap();
+
+    struct Noop;
+    impl ContractFunctionSet for Noop {
+        fn call(&self, _: &Symbol, _: &Host, _: &[Val]) -> Option<Val> { None }
+    }
+    let contract_id = ContractId(Hash([7u8; 32]));
+    let address = host
+        .add_host_object(ScAddress::Contract(contract_id.clone()))
+        .unwrap();
+    host.register_test_contract(address, std::rc::Rc::new(Noop))
+        .unwrap();
+
+    host.with_test_contract_frame(
+        contract_id,
+        Symbol::try_from_small_str("test").unwrap(),
+        || {
+            // Populate 20 contract data entries with U64 keys.
+            for i in 0..20u64 {
+                host.put_contract_data(
+                    Val::from_u32(i as u32).to_val(),
+                    Val::from_u32(i as u32).to_val(),
+                    StorageType::Persistent,
+                )
+                .unwrap();
+            }
+
+            // Benchmark has_contract_data for key in the middle.
+            let lookup_key = Val::from_u32(10).to_val();
+            for _ in 0..1_000 {
+                std::hint::black_box(
+                    host.has_contract_data(lookup_key, StorageType::Persistent)
+                        .unwrap(),
+                );
+            }
+
+            let iterations = 500_000u64;
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                std::hint::black_box(
+                    host.has_contract_data(lookup_key, StorageType::Persistent)
+                        .unwrap(),
+                );
+            }
+            let elapsed = start.elapsed();
+            eprintln!(
+                "has_contract_data(20 entries, mid key): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+                elapsed.as_nanos() as f64 / iterations as f64
+            );
+
+            Ok(Val::VOID.into())
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn bench_storage_get_contract_data() {
+    let host = Host::test_host_with_recording_footprint();
+    host.as_budget().reset_unlimited().unwrap();
+
+    struct Noop;
+    impl ContractFunctionSet for Noop {
+        fn call(&self, _: &Symbol, _: &Host, _: &[Val]) -> Option<Val> { None }
+    }
+    let contract_id = ContractId(Hash([7u8; 32]));
+    let address = host
+        .add_host_object(ScAddress::Contract(contract_id.clone()))
+        .unwrap();
+    host.register_test_contract(address, std::rc::Rc::new(Noop))
+        .unwrap();
+
+    host.with_test_contract_frame(
+        contract_id,
+        Symbol::try_from_small_str("test").unwrap(),
+        || {
+            for i in 0..20u64 {
+                host.put_contract_data(
+                    Val::from_u32(i as u32).to_val(),
+                    Val::from_u32(i as u32).to_val(),
+                    StorageType::Persistent,
+                )
+                .unwrap();
+            }
+
+            let lookup_key = Val::from_u32(10).to_val();
+            for _ in 0..1_000 {
+                std::hint::black_box(
+                    host.get_contract_data(lookup_key, StorageType::Persistent)
+                        .unwrap(),
+                );
+            }
+
+            let iterations = 500_000u64;
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                std::hint::black_box(
+                    host.get_contract_data(lookup_key, StorageType::Persistent)
+                        .unwrap(),
+                );
+            }
+            let elapsed = start.elapsed();
+            eprintln!(
+                "get_contract_data(20 entries, mid key): {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+                elapsed.as_nanos() as f64 / iterations as f64
+            );
+
+            Ok(Val::VOID.into())
+        },
+    )
+    .unwrap();
 }
