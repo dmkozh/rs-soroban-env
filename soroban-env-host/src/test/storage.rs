@@ -610,13 +610,12 @@ mod ttl_extension_v2_tests {
             "temporary" => ContractDataDurability::Temporary,
             _ => panic!("unexpected storage type"),
         };
-        Rc::new(StorageKey::Other(LedgerKey::ContractData(
-            LedgerKeyContractData {
-                contract: ScAddress::Contract(contract_id_hash),
-                key: ScVal::Symbol(ScSymbol("key_1".try_into().unwrap())),
-                durability,
-            },
-        )))
+        let lk = LedgerKey::ContractData(LedgerKeyContractData {
+            contract: ScAddress::Contract(contract_id_hash),
+            key: ScVal::Symbol(ScSymbol("key_1".try_into().unwrap())),
+            durability,
+        });
+        Rc::new(StorageKey::from_ledger_key(lk, host).unwrap())
     }
 
     fn extend_v2_fn_name(host: &Host, storage: &str) -> Symbol {

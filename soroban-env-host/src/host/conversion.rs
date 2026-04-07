@@ -163,6 +163,15 @@ impl Host {
         k: Val,
         durability: ContractDataDurability,
     ) -> Result<Rc<crate::storage::StorageKey>, HostError> {
+        // Reject muxed addresses as storage keys (they can't be represented in XDR).
+        if k.get_tag() == crate::Tag::MuxedAddressObject {
+            return Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InvalidInput,
+                "muxed addresses are not allowed as storage keys",
+                &[k],
+            ));
+        }
         // Create ContractData variant directly — no Val→ScVal conversion needed.
         let contract_id = self.get_current_contract_id_internal()?.0;
         Rc::metered_new(

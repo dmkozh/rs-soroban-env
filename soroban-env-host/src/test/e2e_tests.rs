@@ -829,7 +829,7 @@ fn test_wasm_upload_success_in_recording_mode() {
         }]
     );
     assert!(res.auth.is_empty());
-    expect!["1769572"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1771522"].assert_eq(&res.resources.instructions.to_string());
     expect!["684"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -868,7 +868,7 @@ fn test_wasm_upload_failure_in_recording_mode() {
     ));
     assert!(res.ledger_changes.is_empty());
     assert!(res.auth.is_empty());
-    expect!["1093647"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1093731"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -946,7 +946,7 @@ fn test_wasm_upload_budget_exceeded() {
     let res = invoke_host_function_helper(
         true,
         &upload_wasm_host_fn(CONTRACT_STORAGE),
-        &resources(1_000_000, vec![], vec![ledger_key.clone()]),
+        &resources(1_100_000, vec![], vec![ledger_key.clone()]),
         &get_account_id([123; 32]),
         vec![],
         &ledger_info,
@@ -1385,7 +1385,7 @@ fn test_create_contract_success_in_recording_mode() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["668620"].assert_eq(&res.resources.instructions.to_string());
+    expect!["671464"].assert_eq(&res.resources.instructions.to_string());
     expect!["104"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -1523,7 +1523,7 @@ fn test_create_contract_success_in_recording_mode_with_custom_account() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["1082862"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1089915"].assert_eq(&res.resources.instructions.to_string());
     expect!["176"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -1594,7 +1594,7 @@ fn test_create_contract_success_in_recording_mode_with_enforced_auth() {
         ]
     );
     assert_eq!(res.auth, vec![cd.auth_entry]);
-    expect!["670106"].assert_eq(&res.resources.instructions.to_string());
+    expect!["672950"].assert_eq(&res.resources.instructions.to_string());
     expect!["104"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -2033,7 +2033,7 @@ fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
         ]
     );
     assert!(res.restored_rw_entry_ids.is_empty());
-    expect!["906923"].assert_eq(&res.resources.instructions.to_string());
+    expect!["909473"].assert_eq(&res.resources.instructions.to_string());
     expect!["80"].assert_eq(&res.resources.write_bytes.to_string());
     assert_eq!(
         res.resources,
@@ -2100,7 +2100,7 @@ fn test_invoke_contract_with_storage_ops_success_in_recording_mode() {
             wasm_entry_change.clone()
         ]
     );
-    expect!["1019324"].assert_eq(&extend_res.resources.instructions.to_string());
+    expect!["1021971"].assert_eq(&extend_res.resources.instructions.to_string());
     assert_eq!(
         extend_res.resources,
         SorobanResources {
@@ -2400,7 +2400,7 @@ fn test_auto_restore_with_extension_in_recording_mode() {
         ]
     );
 
-    expect!["1572591"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1574802"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -2543,7 +2543,7 @@ fn test_auto_restore_with_overwrite_in_recording_mode() {
         ]
     );
 
-    expect!["1038243"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1039967"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -2683,7 +2683,7 @@ fn test_auto_restore_with_new_entry_in_recording_mode() {
         ]
     );
     let wasm_entry_size = cd.wasm_entry.to_xdr(Limits::none()).unwrap().len() as u32;
-    expect!["1453604"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1456016"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -2820,7 +2820,7 @@ fn test_auto_restore_with_expired_temp_entry_in_recording_mode() {
         ]
     );
 
-    expect!["1571446"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1574202"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {
@@ -2943,7 +2943,7 @@ fn test_auto_restore_with_recreated_temp_entry_in_recording_mode() {
         ]
     );
 
-    expect!["1573619"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1576119"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {

@@ -191,7 +191,12 @@ fn test_internal_diagnostic_event_metering_free() -> Result<(), HostError> {
     Ok(())
 }
 
-fn log_some_diagnostics(host: Host) -> Result<Events, HostError> {
+/// Logs some diagnostics and returns (budget_snapshot_before_finish, events).
+/// Budget is captured after diagnostics but before try_finish, since try_finish
+/// does real metered work (StorageKey→LedgerKey conversion).
+fn log_some_diagnostics(
+    host: Host,
+) -> Result<(u64, u64, u64, u64, Events), HostError> {
     let args: Vec<_> = (0..1000).map(|u| Val::from_u32(u).to_val()).collect();
     let contract_id = ContractId(Hash([0; 32]));
     host.log_diagnostics("logging some diagnostics", args.as_slice());
@@ -206,8 +211,13 @@ fn log_some_diagnostics(host: Host) -> Result<Events, HostError> {
         &Symbol::try_from_small_str("fn_return")?,
         &Symbol::try_from_small_str("pass")?.into(),
     );
+    let budget = host.budget_ref().clone();
+    let cpu = budget.get_cpu_insns_consumed()?;
+    let mem = budget.get_mem_bytes_consumed()?;
+    let shadow_cpu = budget.get_shadow_cpu_insns_consumed()?;
+    let shadow_mem = budget.get_shadow_mem_bytes_consumed()?;
     let (_, _, evts) = host.try_finish()?;
-    Ok(evts)
+    Ok((cpu, mem, shadow_cpu, shadow_mem, evts))
 }
 
 #[test]
@@ -218,11 +228,11 @@ fn test_diagnostic_events_do_not_affect_metering_with_debug_off() -> Result<(), 
     let host = Host::test_host_with_prng();
     let budget = host.budget_ref().clone();
     budget.reset_default()?;
-    let evts = log_some_diagnostics(host)?;
-    assert_eq!(budget.get_cpu_insns_consumed()?, 0);
-    assert_eq!(budget.get_mem_bytes_consumed()?, 0);
-    assert_eq!(budget.get_shadow_cpu_insns_consumed()?, 0);
-    assert_eq!(budget.get_shadow_mem_bytes_consumed()?, 0);
+    let (cpu, mem, shadow_cpu, shadow_mem, evts) = log_some_diagnostics(host)?;
+    assert_eq!(cpu, 0);
+    assert_eq!(mem, 0);
+    assert_eq!(shadow_cpu, 0);
+    assert_eq!(shadow_mem, 0);
     assert_eq!(evts.0.len(), 0);
     Ok(())
 }
@@ -237,11 +247,11 @@ fn test_diagnostic_events_do_not_affect_metering_with_debug_on_and_sufficient_bu
     host.enable_debug()?;
     let budget = host.budget_ref().clone();
     budget.reset_default()?;
-    let evts = log_some_diagnostics(host)?;
-    assert_eq!(budget.get_cpu_insns_consumed()?, 0);
-    assert_eq!(budget.get_mem_bytes_consumed()?, 0);
-    assert_ne!(budget.get_shadow_cpu_insns_consumed()?, 0);
-    assert_ne!(budget.get_shadow_mem_bytes_consumed()?, 0);
+    let (cpu, mem, shadow_cpu, shadow_mem, evts) = log_some_diagnostics(host)?;
+    assert_eq!(cpu, 0);
+    assert_eq!(mem, 0);
+    assert_ne!(shadow_cpu, 0);
+    assert_ne!(shadow_mem, 0);
     assert_eq!(evts.0.len(), 4);
     Ok(())
 }
@@ -257,11 +267,11 @@ fn test_diagnostic_events_do_not_affect_metering_with_debug_on_and_insufficient_
     let budget = host.budget_ref().clone();
     budget.reset_default()?;
     host.set_shadow_budget_limits(100000, 100000)?;
-    let evts = log_some_diagnostics(host)?;
-    assert_eq!(budget.get_cpu_insns_consumed()?, 0);
-    assert_eq!(budget.get_mem_bytes_consumed()?, 0);
-    assert_ne!(budget.get_shadow_cpu_insns_consumed()?, 0);
-    assert_ne!(budget.get_shadow_mem_bytes_consumed()?, 0);
+    let (cpu, mem, shadow_cpu, shadow_mem, evts) = log_some_diagnostics(host)?;
+    assert_eq!(cpu, 0);
+    assert_eq!(mem, 0);
+    assert_ne!(shadow_cpu, 0);
+    assert_ne!(shadow_mem, 0);
     assert_eq!(evts.0.len(), 0);
     Ok(())
 }
