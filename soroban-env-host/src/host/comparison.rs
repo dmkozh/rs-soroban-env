@@ -466,52 +466,48 @@ impl Host {
             (Symbol(a), Symbol(b)) => Ok(a.as_slice().cmp(b.as_slice())),
             (Address(a), Address(b)) => Ok(a.cmp(b)),
             (MuxedAddress(a), MuxedAddress(b)) => Ok(a.cmp(b)),
-            // Vec and Map can recurse — apply depth limit as a stack
-            // overflow safety net. (Should eventually move to object creation.)
+            // Depth is enforced at object creation time, so no depth
+            // limit check needed during comparison.
             (Vec(a), Vec(b)) => {
-                return self.budget_ref().with_limited_depth(|| {
-                    let a_vals = a.as_slice();
-                    let b_vals = b.as_slice();
-                    let mut i = 0;
-                    loop {
-                        match (a_vals.get(i), b_vals.get(i)) {
-                            (None, None) => return Ok(Ordering::Equal),
-                            (None, Some(_)) => return Ok(Ordering::Less),
-                            (Some(_), None) => return Ok(Ordering::Greater),
-                            (Some(av), Some(bv)) => {
-                                match self.compare_val_unmetered(*av, *bv)? {
-                                    Ordering::Equal => i += 1,
-                                    unequal => return Ok(unequal),
-                                }
+                let a_vals = a.as_slice();
+                let b_vals = b.as_slice();
+                let mut i = 0;
+                loop {
+                    match (a_vals.get(i), b_vals.get(i)) {
+                        (None, None) => return Ok(Ordering::Equal),
+                        (None, Some(_)) => return Ok(Ordering::Less),
+                        (Some(_), None) => return Ok(Ordering::Greater),
+                        (Some(av), Some(bv)) => {
+                            match self.compare_val_unmetered(*av, *bv)? {
+                                Ordering::Equal => i += 1,
+                                unequal => return Ok(unequal),
                             }
                         }
                     }
-                });
+                }
             }
             (Map(a), Map(b)) => {
-                return self.budget_ref().with_limited_depth(|| {
-                    let a_entries = a.map.as_slice();
-                    let b_entries = b.map.as_slice();
-                    let mut i = 0;
-                    loop {
-                        match (a_entries.get(i), b_entries.get(i)) {
-                            (None, None) => return Ok(Ordering::Equal),
-                            (None, Some(_)) => return Ok(Ordering::Less),
-                            (Some(_), None) => return Ok(Ordering::Greater),
-                            (Some((ak, av)), Some((bk, bv))) => {
-                                match self.compare_val_unmetered(*ak, *bk)? {
-                                    Ordering::Equal => {
-                                        match self.compare_val_unmetered(*av, *bv)? {
-                                            Ordering::Equal => i += 1,
-                                            unequal => return Ok(unequal),
-                                        }
+                let a_entries = a.map.as_slice();
+                let b_entries = b.map.as_slice();
+                let mut i = 0;
+                loop {
+                    match (a_entries.get(i), b_entries.get(i)) {
+                        (None, None) => return Ok(Ordering::Equal),
+                        (None, Some(_)) => return Ok(Ordering::Less),
+                        (Some(_), None) => return Ok(Ordering::Greater),
+                        (Some((ak, av)), Some((bk, bv))) => {
+                            match self.compare_val_unmetered(*ak, *bk)? {
+                                Ordering::Equal => {
+                                    match self.compare_val_unmetered(*av, *bv)? {
+                                        Ordering::Equal => i += 1,
+                                        unequal => return Ok(unequal),
                                     }
-                                    unequal => return Ok(unequal),
                                 }
+                                unequal => return Ok(unequal),
                             }
                         }
                     }
-                });
+                }
             }
             // Different discriminants
             (U64(_), _)

@@ -2,10 +2,7 @@ use crate::{
     builtin_contracts::{
         account_contract::ContractAuthorizationContext,
         base_types::{Address, Vec as ContractVec},
-        invoker_contract_auth::{
-            invoker_contract_auth_to_authorized_invocation, InvokerContractAuthEntry,
-            SubContractInvocation,
-        },
+        invoker_contract_auth::{InvokerContractAuthEntry, SubContractInvocation},
         testutils::{
             create_account, generate_signing_key, sign_payload_for_account,
             signing_key_to_account_id,
@@ -2229,20 +2226,32 @@ fn test_invoker_auth_depth_limit() {
     });
     let mut tree_val = leaf.try_into_val(&host).unwrap();
 
+    // Depth is enforced at object creation time: building a tree deeper
+    // than DEFAULT_HOST_DEPTH_LIMIT will fail during host object creation.
+    let mut last_err = None;
     for _ in 0..DEFAULT_HOST_DEPTH_LIMIT + 1 {
         let mut subs: ContractVec = ContractVec::new(&host).unwrap();
-        subs.push(&tree_val).unwrap();
+        if let Err(e) = subs.push(&tree_val) {
+            last_err = Some(e);
+            break;
+        }
         let entry = InvokerContractAuthEntry::Contract(SubContractInvocation {
             context: context.clone(),
             sub_invocations: subs,
         });
-        tree_val = entry.try_into_val(&host).unwrap();
+        let res: Result<crate::Val, _> = entry.try_into_val(&host);
+        match res {
+            Ok(v) => tree_val = v,
+            Err(e) => {
+                last_err = Some(e);
+                break;
+            }
+        }
     }
-    let sc_addr = ScAddress::Contract(ContractId(Hash([0u8; 32])));
-
-    let result = invoker_contract_auth_to_authorized_invocation(&host, &sc_addr, tree_val);
+    // Should have hit the depth limit during object creation.
+    assert!(last_err.is_some(), "expected depth limit error");
     assert!(HostError::result_matches_err(
-        result,
+        Err::<(), _>(last_err.unwrap()),
         (ScErrorType::Context, ScErrorCode::ExceededLimit)
     ));
 }

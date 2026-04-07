@@ -36,14 +36,20 @@ fn deep_host_val_to_scval() -> Result<(), HostError> {
     let host = observe_host!(Host::test_host());
     host.as_budget().reset_unlimited()?;
 
+    // Depth is enforced at object creation time. Building a vec deeper
+    // than DEFAULT_HOST_DEPTH_LIMIT will fail during vec_push_back.
     let mut hv = host.test_vec_obj::<u32>(&[])?;
+    let mut last_res: Result<_, HostError> = Ok(hv);
     for _ in 0..1000 {
         let vv = host.test_vec_obj::<u32>(&[])?;
-        hv = host.vec_push_back(vv, hv.to_val())?;
+        last_res = host.vec_push_back(vv, hv.to_val());
+        match &last_res {
+            Ok(v) => hv = *v,
+            Err(_) => break,
+        }
     }
-    let res = host.from_host_obj(hv);
     let code = (ScErrorType::Context, ScErrorCode::ExceededLimit);
-    assert!(HostError::result_matches_err(res, code));
+    assert!(HostError::result_matches_err(last_res, code));
     Ok(())
 }
 
@@ -65,28 +71,24 @@ fn deep_host_obj_clone() -> Result<(), HostError> {
 }
 
 #[test]
-fn deep_host_obj_cmp() -> Result<(), HostError> {
+fn deep_host_obj_creation_rejected() -> Result<(), HostError> {
     let host = observe_host!(Host::test_host());
     host.as_budget().reset_unlimited()?;
 
+    // Depth is enforced at object creation time. Building a vec deeper
+    // than DEFAULT_HOST_DEPTH_LIMIT should fail during vec_push_back.
     let mut hv = host.test_vec_obj::<u32>(&[])?;
+    let mut last_res: Result<_, HostError> = Ok(hv);
     for _ in 0..1000 {
         let vv = host.test_vec_obj::<u32>(&[])?;
-        hv = host.vec_push_back(vv, hv.to_val())?;
+        last_res = host.vec_push_back(vv, hv.to_val());
+        match &last_res {
+            Ok(v) => hv = *v,
+            Err(_) => break,
+        }
     }
-
-    let mut hv2 = host.test_vec_obj::<u32>(&[])?;
-    for _ in 0..1000 {
-        let vv = host.test_vec_obj::<u32>(&[])?;
-        hv2 = host.vec_push_back(vv, hv2.to_val())?;
-    }
-
-    // TODO: This should fail during vec construction (depth enforcement
-    // at object creation time), not during comparison. For now it still
-    // fails during comparison via with_limited_depth as a safety net.
-    let res = host.obj_cmp(hv.to_val(), hv2.to_val());
     let code = (ScErrorType::Context, ScErrorCode::ExceededLimit);
-    assert!(HostError::result_matches_err(res, code));
+    assert!(HostError::result_matches_err(last_res, code));
     Ok(())
 }
 

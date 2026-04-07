@@ -550,6 +550,17 @@ impl Host {
         metered_clone::charge_heap_alloc::<HostObject>(1, self.as_budget())?;
         let obj = HOT::inject(hot, self)?;
         let meta = self.compute_object_meta(&obj)?;
+        // Enforce depth limit at creation time. This prevents construction
+        // of objects too deep to safely recurse into during comparison,
+        // cloning, or conversion.
+        if meta.depth >= crate::DEFAULT_HOST_DEPTH_LIMIT {
+            return Err(self.err(
+                ScErrorType::Context,
+                ScErrorCode::ExceededLimit,
+                "host object depth exceeds limit",
+                &[],
+            ));
+        }
         self.try_borrow_objects_mut()?.push((obj, meta));
         Ok(HOT::new_from_handle(handle))
     }
