@@ -372,13 +372,10 @@ fn map_build_bad_element_integrity() -> Result<(), HostError> {
     assert!(host.map_put(obj, ok_val, ok_val).is_ok());
     assert!(host.map_new_from_slices(&["hi"], &[ok_val]).is_ok());
 
-    // Inserting corrupt object references into maps should fail.
-    assert!(host.map_put(obj, ok_val, bad_tag).is_err());
-    assert!(host.map_put(obj, bad_tag, ok_val).is_err());
+    // Inserting corrupt object references via EnvBase methods (which
+    // explicitly call check_val_integrity) should fail. Env trait methods
+    // do not validate args (validation happens at the Wasm dispatch layer).
     assert!(host.map_new_from_slices(&["hi"], &[bad_tag]).is_err());
-
-    assert!(host.map_put(obj, ok_val, bad_handle).is_err());
-    assert!(host.map_put(obj, bad_handle, ok_val).is_err());
     assert!(host.map_new_from_slices(&["hi"], &[bad_handle]).is_err());
 
     Ok(())

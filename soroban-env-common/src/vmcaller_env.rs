@@ -9,7 +9,7 @@ use super::{
     VecObject, Void,
 };
 use crate::call_macro_with_all_host_functions;
-use crate::{CheckedEnvArg, EnvBase, Symbol};
+use crate::{EnvBase, Symbol};
 #[cfg(not(feature = "wasmi"))]
 use core::marker::PhantomData;
 
@@ -193,11 +193,7 @@ macro_rules! vmcaller_none_function_helper {
             {
                 self.trace_env_call(&core::stringify!($fn_id), &[$(&$arg),*])?;
             }
-            let res: Result<_, _> = self.augment_err_result(<Self as VmCallerEnv>::$fn_id(self, &mut VmCaller::none(), $($arg.check_env_arg(self)?),*));
-            let res = match res {
-                Ok(ok) => Ok(ok.check_env_arg(self)?),
-                Err(err) => Err(err)
-            };
+            let res = self.augment_err_result(<Self as VmCallerEnv>::$fn_id(self, &mut VmCaller::none(), $($arg),*));
             #[cfg(feature = "std")]
             if self.tracing_enabled()
             {

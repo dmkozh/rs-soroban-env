@@ -134,7 +134,7 @@ impl<E: Env> Compare<Val> for E {
         }
         if a.is_object() || b.is_object() {
             // Delegate any object-comparing to environment.
-            let v = self.obj_cmp_internal(*a, *b)?;
+            let v = self.obj_cmp(*a, *b)?;
             return if v == 0 {
                 Ok(Ordering::Equal)
             } else if v < 0 {

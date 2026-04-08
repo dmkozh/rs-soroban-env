@@ -901,18 +901,6 @@ impl EnvBase for Host {
         })
     }
 
-    fn obj_cmp_internal(&self, a: Val, b: Val) -> Result<i64, Self::Error>
-    where
-        Self: soroban_env_common::Env,
-    {
-        self.augment_err_result(<Host as VmCallerEnv>::obj_cmp(
-            self,
-            &mut VmCaller::none(),
-            a,
-            b,
-        ))
-    }
-
     // This function is somewhat subtle.
     //
     // It exists to allow the client of the (VmCaller)Env interface(s) to

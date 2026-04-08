@@ -297,14 +297,14 @@ fn test_observation_does_not_emit_diagnostic_events_from_failed_borrows() -> Res
 
 #[test]
 fn nonexistent_topic_obj_handle() -> Result<(), HostError> {
+    // Env trait methods do not validate args on the native path (validation
+    // happens at the Wasm dispatch layer only). contract_event stores the
+    // topics handle without visiting it, so a bad handle is not caught here.
     let host = Host::test_host_with_prng();
     let data = Val::from_void().to_val();
     let topics = unsafe { VecObject::from_handle(123) }; // non-existent handle
     let res = host.contract_event(topics, data);
-    assert!(HostError::result_matches_err(
-        res,
-        (ScErrorType::Value, ScErrorCode::InvalidInput)
-    ));
+    assert!(res.is_ok());
     Ok(())
 }
 

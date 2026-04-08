@@ -266,24 +266,15 @@ fn guest_val_integrity_errors() {
 
 #[test]
 fn local_val_integrity_errors() {
-    fn check_badval(host: &Host, badval: u64) {
-        let badval = Val::from_payload(badval);
-        let res = if let Ok(u) = crate::U32Val::try_from(badval) {
-            // create a valid local vector with a single boolean element and then
-            // index into it using the bad value
-            let vin = vec![Val::TRUE.to_val(); u32::from(u) as usize + 1];
-            let vec = host.vec_new_from_slice(&vin).unwrap();
-            host.vec_get(vec, u)
-        } else {
-            // pass the bad value as a polymorphic Val argument to vec_new_from_slice
-            host.vec_new_from_slice(&[badval]).map(|x| x.to_val())
-        };
-        assert_err_value_invalid_input(res);
-    }
-
+    // EnvBase methods (like vec_new_from_slice) explicitly call
+    // check_val_integrity on their arguments. Env trait methods do not
+    // validate args on the native path (validation happens at the Wasm
+    // dispatch layer only).
     let host = Host::default();
     for i in BAD_VALS {
-        check_badval(&host, *i);
+        let badval = Val::from_payload(*i);
+        let res = host.vec_new_from_slice(&[badval]).map(|x| x.to_val());
+        assert_err_value_invalid_input(res);
     }
 }
 
@@ -527,7 +518,7 @@ fn excessive_logging() -> Result<(), HostError> {
     let expected_budget = expect![
         r#"
     =================================================================
-    Cpu limit: 2000000; used: 214122
+    Cpu limit: 2000000; used: 214000
     Mem limit: 500000; used: 166836
     =================================================================
     CostType                           cpu_insns      mem_bytes      
@@ -536,7 +527,7 @@ fn excessive_logging() -> Result<(), HostError> {
     MemCpy                             2330           0              
     MemCmp                             288            0              
     DispatchHostFunction               310            0              
-    VisitObject                        244            0              
+    VisitObject                        122            0              
     ValSer                             0              0              
     ValDeser                           0              0              
     ComputeSha256Hash                  3738           0              

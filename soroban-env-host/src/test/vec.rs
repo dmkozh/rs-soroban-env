@@ -325,15 +325,10 @@ fn vec_build_bad_element_integrity() -> Result<(), HostError> {
     assert!(host.vec_push_back(obj, ok_val).is_ok());
     assert!(host.vec_new_from_slice(&[ok_val]).is_ok());
 
-    // Inserting corrupt object references into vectors should fail.
-    assert!(host.vec_put(obj, i, bad_tag).is_err());
-    assert!(host.vec_push_front(obj, bad_tag).is_err());
-    assert!(host.vec_push_back(obj, bad_tag).is_err());
+    // Inserting corrupt object references via EnvBase methods (which
+    // explicitly call check_val_integrity) should fail. Env trait methods
+    // do not validate args (validation happens at the Wasm dispatch layer).
     assert!(host.vec_new_from_slice(&[bad_tag]).is_err());
-
-    assert!(host.vec_put(obj, i, bad_handle).is_err());
-    assert!(host.vec_push_front(obj, bad_handle).is_err());
-    assert!(host.vec_push_back(obj, bad_handle).is_err());
     assert!(host.vec_new_from_slice(&[bad_handle]).is_err());
 
     Ok(())

@@ -250,22 +250,19 @@ fn map_insert_key_vec_obj() -> Result<(), HostError> {
     host.map_put(m, k1.into(), v1)?;
 
     host.with_budget(|budget| {
-        // 13 visit-objs =
-        //    1 to ensure value integrity of key for first map-put
-        //  + 1 to get map to do first map-put
-        //  + 1 to ensure value integrity of key for second map-put
-        //  + 1 to get map to do second map-put
-        //  + 2 for actually doing comparison in obj_cmp during lookup
-        //  + 2 for actually doing comparison in obj_cmp when validating order of new map
-        //  + 5 lookups on objects returned from 5 host fn calls to check their integrity
-        // = 13
-        // (obj_cmp called from Compare<Val> uses obj_cmp_internal which
-        //  bypasses check_env_arg, saving 2 VisitObject charges per call)
+        // 6 visit-objs =
+        //   2 for doing comparison in obj_cmp during lookup (1 per object)
+        // + 2 for doing comparison in obj_cmp when validating order of new map
+        // + 1 to visit the map object during map-put
+        // + 1 to visit the map object during order validation
+        // = 6
+        // (check_env_arg is only applied at the Wasm dispatch layer, not
+        //  in the blanket Env impl, so host-internal calls skip it)
         assert_eq!(
             budget
                 .get_tracker(ContractCostType::VisitObject)?
                 .iterations,
-            13
+            6
         );
         // upper bound of number of map-accesses, counting both binary-search, point-access and validate-scan.
         Ok(())
