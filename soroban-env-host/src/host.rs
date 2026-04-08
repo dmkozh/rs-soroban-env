@@ -40,6 +40,7 @@ pub(crate) mod metered_map;
 pub(crate) mod metered_vector;
 pub(crate) mod metered_xdr;
 mod num;
+pub(crate) mod xdr_object;
 pub(crate) mod prng;
 pub(crate) mod trace;
 mod validity;
