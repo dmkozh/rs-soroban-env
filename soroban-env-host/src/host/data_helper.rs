@@ -113,8 +113,17 @@ impl Host {
         &self,
         key: &Rc<StorageKey>,
     ) -> Result<ScContractInstance, HostError> {
+        use crate::storage::StorageEntry;
         let entry = self.try_borrow_storage_mut()?.get(key, self, None)?;
-        self.extract_contract_instance_from_ledger_entry(&entry)
+        match entry {
+            StorageEntry::LedgerEntry(le) => self.extract_contract_instance_from_ledger_entry(&le),
+            StorageEntry::ContractDataVal(_) => Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "expected LedgerEntry for contract instance, got ContractDataVal",
+                &[],
+            )),
+        }
     }
 
     pub(crate) fn contract_code_ledger_key(
@@ -134,8 +143,21 @@ impl Host {
         &self,
         wasm_hash: &Hash,
     ) -> Result<(BytesM, VersionedContractCodeCostInputs), HostError> {
+        use crate::storage::StorageEntry;
         let key = self.contract_code_ledger_key(wasm_hash)?;
-        match &self.try_borrow_storage_mut()?.get(&key, self, None)?.data {
+        let entry = self.try_borrow_storage_mut()?.get(&key, self, None)?;
+        let le = match entry {
+            StorageEntry::LedgerEntry(le) => le,
+            StorageEntry::ContractDataVal(_) => {
+                return Err(err!(
+                    self,
+                    (ScErrorType::Storage, ScErrorCode::InternalError),
+                    "expected LedgerEntry for contract code, got ContractDataVal",
+                    *wasm_hash
+                ));
+            }
+        };
+        match &le.data {
             LedgerEntryData::ContractCode(e) => {
                 let code = e.code.metered_clone(self.as_budget())?;
                 let costs = match &e.ext {
@@ -178,10 +200,21 @@ impl Host {
         key: &Rc<StorageKey>,
     ) -> Result<(), HostError> {
         if self.try_borrow_storage_mut()?.has(key, self, None)? {
-            let (current, live_until_ledger) = self
+            let (current_entry, live_until_ledger) = self
                 .try_borrow_storage_mut()?
                 .get_with_live_until_ledger(key, self, None)?;
-            let mut current = (*current).metered_clone(self.as_budget())?;
+            let current_le = match current_entry {
+                crate::storage::StorageEntry::LedgerEntry(le) => le,
+                crate::storage::StorageEntry::ContractDataVal(_) => {
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected LedgerEntry for contract instance, got ContractDataVal",
+                        &[],
+                    ));
+                }
+            };
+            let mut current = (*current_le).metered_clone(self.as_budget())?;
 
             if let LedgerEntryData::ContractData(ref mut entry) = current.data {
                 if let ScVal::ContractInstance(ref mut instance) = entry.val {
@@ -210,7 +243,9 @@ impl Host {
 
             self.try_borrow_storage_mut()?.put(
                 &key,
-                &Rc::metered_new(current, self.as_budget())?,
+                &crate::storage::StorageEntry::LedgerEntry(
+                    Rc::metered_new(current, self.as_budget())?
+                ),
                 live_until_ledger,
                 self,
                 None,
@@ -235,7 +270,9 @@ impl Host {
             };
             self.try_borrow_storage_mut()?.put(
                 key,
-                &Host::new_contract_data(self, data)?,
+                &crate::storage::StorageEntry::LedgerEntry(
+                    Host::new_contract_data(self, data)?
+                ),
                 Some(self.get_min_live_until_ledger(ContractDataDurability::Persistent)?),
                 self,
                 None,
@@ -339,15 +376,30 @@ impl Host {
 
     // notes on metering: `get` from storage is covered. Rest are free.
     pub(crate) fn load_account(&self, account_id: AccountId) -> Result<AccountEntry, HostError> {
+        use crate::storage::StorageEntry;
         let acc = self.to_account_key(account_id)?;
-        self.with_mut_storage(|storage| match &storage.get(&acc, self, None)?.data {
-            LedgerEntryData::Account(ae) => ae.metered_clone(self.as_budget()),
-            e => Err(err!(
-                self,
-                (ScErrorType::Storage, ScErrorCode::InternalError),
-                "ledger entry is not account",
-                e.name()
-            )),
+        self.with_mut_storage(|storage| {
+            let entry = storage.get(&acc, self, None)?;
+            let le = match entry {
+                StorageEntry::LedgerEntry(le) => le,
+                StorageEntry::ContractDataVal(_) => {
+                    return Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "expected LedgerEntry for account, got ContractDataVal",
+                        &[],
+                    ));
+                }
+            };
+            match &le.data {
+                LedgerEntryData::Account(ae) => ae.metered_clone(self.as_budget()),
+                e => Err(err!(
+                    self,
+                    (ScErrorType::Storage, ScErrorCode::InternalError),
+                    "ledger entry is not account",
+                    e.name()
+                )),
+            }
         })
     }
 
@@ -520,46 +572,23 @@ impl Host {
     ) -> Result<(), HostError> {
         let durability: ContractDataDurability = t.try_into()?;
         let key = self.storage_key_from_val(k, durability)?;
-        // Currently the storage stores the whole ledger entries, while this
-        // operation might only modify the internal `ScVal` value. Thus we
-        // need to only overwrite the value in case if there is already an
-        // existing ledger entry value for the key in the storage.
+        // Store just the Val for contract data — the key fields (contract,
+        // key, durability) are already in the StorageKey::ContractData variant.
         if self.try_borrow_storage_mut()?.has(&key, self, Some(k))? {
-            let (current, live_until_ledger) = self
+            let (_current, live_until_ledger) = self
                 .try_borrow_storage_mut()?
                 .get_with_live_until_ledger(&key, self, Some(k))?;
-            let mut current = (*current).metered_clone(self.as_budget())?;
-            match current.data {
-                LedgerEntryData::ContractData(ref mut entry) => {
-                    entry.val = self.from_host_val(v)?;
-                }
-                _ => {
-                    return Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "expected DataEntry",
-                        &[],
-                    ));
-                }
-            }
             self.try_borrow_storage_mut()?.put(
                 &key,
-                &Rc::metered_new(current, self.as_budget())?,
+                &crate::storage::StorageEntry::ContractDataVal(v),
                 live_until_ledger,
                 self,
                 Some(k),
             )?;
         } else {
-            let data = ContractDataEntry {
-                contract: ScAddress::Contract(self.get_current_contract_id_internal()?),
-                key: self.from_host_val(k)?,
-                val: self.from_host_val(v)?,
-                durability,
-                ext: ExtensionPoint::V0,
-            };
             self.try_borrow_storage_mut()?.put(
                 &key,
-                &Host::new_contract_data(self, data)?,
+                &crate::storage::StorageEntry::ContractDataVal(v),
                 Some(self.get_min_live_until_ledger(durability)?),
                 self,
                 Some(k),
@@ -584,7 +613,8 @@ impl Host {
         val: &Rc<soroban_env_common::xdr::LedgerEntry>,
         live_until_ledger: Option<u32>,
     ) -> Result<(), HostError> {
-        self.with_mut_storage(|storage| storage.put(key, val, live_until_ledger, self, None))
+        let storage_entry = crate::storage::StorageEntry::LedgerEntry(val.clone());
+        self.with_mut_storage(|storage| storage.put(key, &storage_entry, live_until_ledger, self, None))
     }
 
     /// Reads an arbitrary ledger entry from the storage.
@@ -605,6 +635,63 @@ impl Host {
         self.with_mut_storage(|storage| Ok(storage.map.map.clone()))
     }
 
+    /// Helper: unwraps a `StorageEntry` to `Rc<LedgerEntry>`, returning an error
+    /// if it's a `ContractDataVal`.
+    pub(crate) fn storage_entry_to_ledger_entry(
+        &self,
+        entry: &crate::storage::StorageEntry,
+    ) -> Result<Rc<LedgerEntry>, HostError> {
+        match entry {
+            crate::storage::StorageEntry::LedgerEntry(le) => Ok(le.clone()),
+            crate::storage::StorageEntry::ContractDataVal(_) => Err(self.err(
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
+                "expected LedgerEntry, got ContractDataVal",
+                &[],
+            )),
+        }
+    }
+
+    /// Converts a `StorageEntry` to `Rc<LedgerEntry>` for output/serialization.
+    /// For `LedgerEntry` variant, returns the entry directly.
+    /// For `ContractDataVal`, reconstructs the full `LedgerEntry` using the
+    /// key's contract_id, key, and durability.
+    pub(crate) fn storage_entry_to_ledger_entry_for_output(
+        &self,
+        sk: &Rc<StorageKey>,
+        entry: &crate::storage::StorageEntry,
+    ) -> Result<Rc<LedgerEntry>, HostError> {
+        match entry {
+            crate::storage::StorageEntry::LedgerEntry(le) => Ok(le.clone()),
+            crate::storage::StorageEntry::ContractDataVal(val) => {
+                match sk.as_ref() {
+                    StorageKey::ContractData {
+                        contract_id,
+                        key,
+                        durability,
+                    } => {
+                        let data = ContractDataEntry {
+                            contract: ScAddress::Contract(
+                                contract_id.metered_clone(self.as_budget())?.into(),
+                            ),
+                            key: self.from_host_val(*key)?,
+                            val: self.from_host_val(*val)?,
+                            durability: *durability,
+                            ext: ExtensionPoint::V0,
+                        };
+                        Host::new_contract_data(self, data)
+                    }
+                    _ => Err(self.err(
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
+                        "ContractDataVal with non-ContractData storage key",
+                        &[],
+                    )),
+                }
+            }
+        }
+    }
+
     // Performs the necessary setup to access the provided ledger key/entry in
     // enforcing storage mode.
     pub fn setup_storage_entry(
@@ -617,7 +704,10 @@ impl Host {
             storage
                 .footprint
                 .record_access(&key, access_type, self)?;
-            storage.map = storage.map.insert(key, val, self)?;
+            let storage_val = val.map(|(le, live_until)| {
+                (crate::storage::StorageEntry::LedgerEntry(le), live_until)
+            });
+            storage.map = storage.map.insert(key, storage_val, self)?;
             Ok(())
         })
     }

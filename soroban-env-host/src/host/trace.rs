@@ -323,7 +323,8 @@ impl Host {
                     match v {
                         Some((entry, ttl)) => {
                             0.metered_hash(&mut state, budget)?;
-                            entry.metered_hash_xdr(&mut state, budget)?;
+                            let le = self.storage_entry_to_ledger_entry_for_output(k, entry)?;
+                            le.metered_hash_xdr(&mut state, budget)?;
                             ttl.metered_hash(&mut state, budget)?;
                         }
                         None => {

@@ -304,12 +304,14 @@ impl Host {
         // We may also, in the cache-supporting protocol, overwrite the contract if its ext field changed.
         if !should_put_contract {
             let entry = storage.get(&code_key, self, None)?;
-            if let crate::xdr::LedgerEntryData::ContractCode(ContractCodeEntry {
-                ext: old_ext,
-                ..
-            }) = &entry.data
-            {
-                should_put_contract = *old_ext != ext;
+            if let crate::storage::StorageEntry::LedgerEntry(le) = &entry {
+                if let crate::xdr::LedgerEntryData::ContractCode(ContractCodeEntry {
+                    ext: old_ext,
+                    ..
+                }) = &le.data
+                {
+                    should_put_contract = *old_ext != ext;
+                }
             }
         }
 
@@ -321,7 +323,9 @@ impl Host {
             };
             storage.put(
                 &code_key,
-                &Host::new_contract_code(self, data)?,
+                &crate::storage::StorageEntry::LedgerEntry(
+                    Host::new_contract_code(self, data)?
+                ),
                 Some(self.get_min_live_until_ledger(ContractDataDurability::Persistent)?),
                 self,
                 None,

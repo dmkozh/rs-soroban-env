@@ -444,7 +444,8 @@ fn transfer_account_balance(
         let existing_entry = storage.try_get(&lk, host, None)?;
 
         match existing_entry {
-            Some(le) => {
+            Some(se) => {
+                let le = host.storage_entry_to_ledger_entry(&se)?;
                 // Account exists - update the balance
                 let mut ae = match &le.data {
                     LedgerEntryData::Account(ae) => Ok(ae.metered_clone(host.as_budget())?),
@@ -469,7 +470,7 @@ fn transfer_account_balance(
                     ae.balance = new_balance;
                     let updated_le =
                         Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Account(ae))?;
-                    storage.put(&lk, &updated_le, None, host, None)
+                    storage.put(&lk, &crate::storage::StorageEntry::LedgerEntry(updated_le), None, host, None)
                 } else {
                     Err(err!(
                         host,
@@ -542,7 +543,7 @@ fn transfer_account_balance(
                     host.as_budget(),
                 )?;
 
-                storage.put(&lk, &new_le, None, host, None)
+                storage.put(&lk, &crate::storage::StorageEntry::LedgerEntry(new_le), None, host, None)
             }
         }
     })
@@ -554,13 +555,14 @@ fn read_account_entry(
     lk: &Rc<crate::storage::StorageKey>,
     addr: &Address,
 ) -> Result<Rc<LedgerEntry>, HostError> {
-    storage.try_get(&lk, &host, None)?.ok_or_else(|| {
+    let entry = storage.try_get(&lk, &host, None)?.ok_or_else(|| {
         host.error(
             ContractError::AccountMissingError.into(),
             "account entry is missing",
             &[addr.as_object().to_val()],
         )
-    })
+    })?;
+    host.storage_entry_to_ledger_entry(&entry)
 }
 
 fn read_trustline_entry(
@@ -568,7 +570,7 @@ fn read_trustline_entry(
     storage: &mut Storage,
     lk: &Rc<crate::storage::StorageKey>,
 ) -> Result<Rc<LedgerEntry>, HostError> {
-    storage.try_get(&lk, &host, None)?.ok_or_else(|| {
+    let entry = storage.try_get(&lk, &host, None)?.ok_or_else(|| {
         // Extract the LedgerKey for error reporting if possible.
         let account_address = match lk.as_ref() {
             crate::storage::StorageKey::Other(ledger_key) => {
@@ -584,7 +586,8 @@ fn read_trustline_entry(
             ),
             Err(e) => e,
         }
-    })
+    })?;
+    host.storage_entry_to_ledger_entry(&entry)
 }
 
 // Metering: covered by components.
@@ -620,7 +623,7 @@ fn transfer_trustline_balance(
         if new_balance >= min_balance && new_balance <= max_balance {
             tl.balance = new_balance;
             le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
-            storage.put(&lk, &le, None, &host, None)
+            storage.put(&lk, &crate::storage::StorageEntry::LedgerEntry(le), None, &host, None)
         } else {
             Err(err!(
                 host,
@@ -917,7 +920,7 @@ fn set_trustline_authorization(
             tl.flags |= TrustLineFlags::AuthorizedToMaintainLiabilitiesFlag as u32;
         }
         le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
-        storage.put(&lk, &le, None, &host, None)
+        storage.put(&lk, &crate::storage::StorageEntry::LedgerEntry(le), None, &host, None)
     })
 }
 
@@ -1023,13 +1026,14 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
     let acc_key = e.to_account_key(account_id.metered_clone(e.as_budget())?)?;
     // Load the account to check sub-entry limit and reserve, then create trustline
     e.with_mut_storage(|storage| {
-        let acc_entry = storage.try_get(&acc_key, e, None)?.ok_or_else(|| {
+        let acc_se = storage.try_get(&acc_key, e, None)?.ok_or_else(|| {
             e.error(
                 ContractError::AccountMissingError.into(),
                 "account entry is missing",
                 &[addr.as_object().to_val()],
             )
         })?;
+        let acc_entry = e.storage_entry_to_ledger_entry(&acc_se)?;
 
         let mut ae = match &acc_entry.data {
             LedgerEntryData::Account(ae) => ae.metered_clone(e.as_budget())?,
@@ -1088,8 +1092,8 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
             Host::modify_ledger_entry_data(e, &acc_entry, LedgerEntryData::Account(ae))?;
 
         // Write both entries
-        storage.put(&tl_key, &tl_ledger_entry, None, e, None)?;
-        storage.put(&acc_key, &updated_acc_entry, None, e, None)?;
+        storage.put(&tl_key, &crate::storage::StorageEntry::LedgerEntry(tl_ledger_entry), None, e, None)?;
+        storage.put(&acc_key, &crate::storage::StorageEntry::LedgerEntry(updated_acc_entry), None, e, None)?;
 
         Ok(())
     })

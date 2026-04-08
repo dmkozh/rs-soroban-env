@@ -2541,7 +2541,7 @@ fn test_auto_restore_with_overwrite_in_recording_mode() {
         ]
     );
 
-    expect!["1033864"].assert_eq(&res.resources.instructions.to_string());
+    expect!["1033360"].assert_eq(&res.resources.instructions.to_string());
     assert_eq!(
         res.resources,
         SorobanResources {

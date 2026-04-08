@@ -473,13 +473,20 @@ impl InvocationResources {
                     // Get the entry to check its size
                     if let Ok(maybe_entry) = storage.get_from_map(key, host) {
                         if let Some((entry, _)) = maybe_entry {
+                            let le = match &entry {
+                                crate::storage::StorageEntry::LedgerEntry(le) => Some(le.clone()),
+                                crate::storage::StorageEntry::ContractDataVal(_) => {
+                                    host.storage_entry_to_ledger_entry_for_output(key, &entry).ok()
+                                }
+                            };
+                            if let Some(le) = le {
                             let mut entry_buf = Vec::<u8>::new();
-                            if metered_write_xdr(host.budget_ref(), entry.as_ref(), &mut entry_buf)
+                            if metered_write_xdr(host.budget_ref(), le.as_ref(), &mut entry_buf)
                                 .is_ok()
                             {
                                 let entry_size = entry_buf.len() as u32;
 
-                                match &entry.data {
+                                match &le.data {
                                     LedgerEntryData::ContractData(_) => {
                                         if entry_size > limits.max_contract_data_entry_size_bytes {
                                             exceeded.push(format!(
@@ -503,6 +510,7 @@ impl InvocationResources {
                                     _ => (),
                                 }
                             }
+                            } // if let Some(le)
                         }
                     }
                 }
@@ -972,7 +980,7 @@ impl Host {
             let mut init_live_until_ledger = curr_ledger_seq;
             let has_durability = key.get_durability().is_some();
             let mut is_disk_read = !has_durability;
-            if let Some((init_entry, init_entry_live_until)) = maybe_init_entry {
+            if let Some((init_entry_se, init_entry_live_until)) = maybe_init_entry {
                 if let Some(live_until) = init_entry_live_until {
                     if live_until >= curr_ledger_seq {
                         // Only bump `init_live_until_ledger` to a value higher than the current
@@ -987,6 +995,7 @@ impl Host {
                     }
                 }
 
+                let init_entry = self.storage_entry_to_ledger_entry_for_output(key, &init_entry_se)?;
                 let mut buf = Vec::<u8>::new();
                 metered_write_xdr(self.budget_ref(), init_entry.as_ref(), &mut buf)?;
                 if is_disk_read {
@@ -999,7 +1008,8 @@ impl Host {
             let mut new_entry_size_for_rent = 0;
             let mut entry_live_until_ledger = None;
             let maybe_entry = curr_storage.try_get_full(key, self, None)?;
-            if let Some((entry, entry_live_until)) = maybe_entry {
+            if let Some((entry_se, entry_live_until)) = maybe_entry {
+                let entry = self.storage_entry_to_ledger_entry_for_output(key, &entry_se)?;
                 let mut buf = Vec::<u8>::new();
                 metered_write_xdr(self.budget_ref(), entry.as_ref(), &mut buf)?;
                 entry_size = buf.len() as u32;
@@ -1214,8 +1224,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 318814,
-                mem_bytes: 1135322,
+                instructions: 318302,
+                mem_bytes: 1135050,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 1,
@@ -1266,8 +1276,8 @@ mod test {
             .unwrap();
         expect![[r#"
             InvocationResources {
-                instructions: 320798,
-                mem_bytes: 1135814,
+                instructions: 320286,
+                mem_bytes: 1135542,
                 disk_read_entries: 0,
                 memory_read_entries: 3,
                 write_entries: 1,

@@ -2152,7 +2152,11 @@ impl AccountAuthorizationTracker {
                 // not, we still make our best effort and include at least the necessary instance key
                 // into the footprint.
                 let instance = if let Some(entry) = entry {
-                    match &entry.data {
+                    let le = match &entry {
+                        crate::storage::StorageEntry::LedgerEntry(le) => le,
+                        _ => { return Ok(()); }
+                    };
+                    match &le.data {
                         LedgerEntryData::ContractData(e) => match &e.val {
                             ScVal::ContractInstance(instance) => instance.metered_clone(host.as_budget())?,
                             _ => {
@@ -2326,7 +2330,9 @@ impl Host {
             };
             storage.put(
                 &nonce_key,
-                &Rc::metered_new(entry, self.as_budget())?,
+                &crate::storage::StorageEntry::LedgerEntry(
+                    Rc::metered_new(entry, self.as_budget())?
+                ),
                 Some(live_until_ledger),
                 self,
                 None,

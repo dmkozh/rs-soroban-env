@@ -756,11 +756,21 @@ impl Host {
     ) -> Result<(crate::storage::LedgerKeyEntryMap, crate::storage::LedgerKeyFootprintMap), HostError> {
         let budget = self.budget_ref();
         let storage = self.try_borrow_storage()?;
-        // Collect entries, converting StorageKey→LedgerKey.
-        let mut map_entries: Vec<_> = storage
+        // Collect entries, converting StorageKey→LedgerKey and StorageEntry→Rc<LedgerEntry>.
+        let mut map_entries: Vec<(Rc<crate::xdr::LedgerKey>, Option<crate::storage::LedgerEntryWithLiveUntil>)> = storage
             .map
             .iter(self)?
-            .map(|(sk, val)| Ok((sk.to_ledger_key(self)?, val.clone())))
+            .map(|(sk, val)| {
+                let lk = sk.to_ledger_key(self)?;
+                let converted = match val {
+                    Some((entry, live_until)) => {
+                        let le = self.storage_entry_to_ledger_entry_for_output(sk, entry)?;
+                        Some((le, *live_until))
+                    }
+                    None => None,
+                };
+                Ok((lk, converted))
+            })
             .collect::<Result<Vec<_>, HostError>>()?;
         let mut fp_entries: Vec<_> = storage
             .footprint
@@ -2295,16 +2305,20 @@ impl VmCallerEnv for Host {
     ) -> Result<Val, HostError> {
         match t {
             StorageType::Temporary | StorageType::Persistent => {
+                use crate::storage::StorageEntry;
                 let key = self.storage_key_from_val(k, t.try_into()?)?;
                 let entry = self.try_borrow_storage_mut()?.get(&key, self, Some(k))?;
-                match &entry.data {
-                    LedgerEntryData::ContractData(e) => Ok(self.to_valid_host_val(&e.val)?),
-                    _ => Err(self.err(
-                        ScErrorType::Storage,
-                        ScErrorCode::InternalError,
-                        "expected contract data ledger entry",
-                        &[],
-                    )),
+                match entry {
+                    StorageEntry::ContractDataVal(val) => Ok(val),
+                    StorageEntry::LedgerEntry(le) => match &le.data {
+                        LedgerEntryData::ContractData(e) => Ok(self.to_valid_host_val(&e.val)?),
+                        _ => Err(self.err(
+                            ScErrorType::Storage,
+                            ScErrorCode::InternalError,
+                            "expected contract data ledger entry",
+                            &[],
+                        )),
+                    },
                 }
             }
             StorageType::Instance => self.with_instance_storage(|s| {
@@ -3808,8 +3822,9 @@ impl VmCallerEnv for Host {
                     self.try_borrow_storage_mut()?
                         .try_get_full(&storage_key, self, None)?;
                 if let Some((instance_entry, _ttl)) = maybe_instance_entry {
+                    let le = self.storage_entry_to_ledger_entry(&instance_entry)?;
                     let instance =
-                        self.extract_contract_instance_from_ledger_entry(&instance_entry)?;
+                        self.extract_contract_instance_from_ledger_entry(&le)?;
                     Some(AddressExecutable::from_contract_executable_xdr(
                         &self,
                         &instance.executable,

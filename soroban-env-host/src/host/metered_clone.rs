@@ -577,6 +577,20 @@ impl MeteredClone for crate::storage::StorageKey {
     }
 }
 
+impl MeteredClone for crate::storage::StorageEntry {
+    const IS_SHALLOW: bool = false;
+
+    fn charge_for_substructure(&self, _budget: &Budget) -> Result<(), HostError> {
+        use crate::storage::StorageEntry;
+        match self {
+            // ContractDataVal(Val) is a shallow copy (Val is 8 bytes, no heap).
+            StorageEntry::ContractDataVal(_) => Ok(()),
+            // LedgerEntry(Rc<LedgerEntry>) is a shallow Rc clone (just refcount bump).
+            StorageEntry::LedgerEntry(_) => Ok(()),
+        }
+    }
+}
+
 impl MeteredClone for ContractCodeEntry {
     const IS_SHALLOW: bool = false;
 

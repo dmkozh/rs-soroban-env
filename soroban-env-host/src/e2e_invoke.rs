@@ -1090,7 +1090,7 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             })
             .flatten();
         match fp_key {
-            Some(fk) => storage_entries.push((Rc::clone(fk), Some((le, live_until_ledger)))),
+            Some(fk) => storage_entries.push((Rc::clone(fk), Some((crate::storage::StorageEntry::LedgerEntry(le), live_until_ledger)))),
             None => {
                 return Err(Error::from_type_and_code(
                     ScErrorType::Storage,
@@ -1137,20 +1137,20 @@ impl Host {
     }
 }
 
-/// A snapshot source backed by a BTreeMap of LedgerKey → EntryWithLiveUntil.
+/// A snapshot source backed by a BTreeMap of LedgerKey → LedgerEntryWithLiveUntil.
 /// Built from the initial StorageMap before try_finish consumes the Host.
 struct LedgerKeySnapshotSource {
-    entries: std::collections::BTreeMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>>,
+    entries: std::collections::BTreeMap<Rc<LedgerKey>, Option<crate::storage::LedgerEntryWithLiveUntil>>,
 }
 
 impl SnapshotSource for LedgerKeySnapshotSource {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<crate::storage::LedgerEntryWithLiveUntil>, HostError> {
         Ok(self.entries.get(key).cloned().flatten())
     }
 }
 
 /// Convert a StorageMap to a LedgerKey-based snapshot, using the Host for
-/// StorageKey → LedgerKey conversion.
+/// StorageKey → LedgerKey conversion. Converts StorageEntry → Rc<LedgerEntry>.
 fn build_ledger_key_snapshot(
     host: &Host,
     storage_map: &StorageMap,
@@ -1158,7 +1158,14 @@ fn build_ledger_key_snapshot(
     let mut entries = std::collections::BTreeMap::new();
     for (sk, val) in storage_map.iter(host)? {
         let lk = sk.to_ledger_key(host)?;
-        entries.insert(lk, val.clone());
+        let converted = match val {
+            Some((entry, live_until)) => {
+                let le = host.storage_entry_to_ledger_entry_for_output(sk, entry)?;
+                Some((le, *live_until))
+            }
+            None => None,
+        };
+        entries.insert(lk, converted);
     }
     Ok(LedgerKeySnapshotSource { entries })
 }

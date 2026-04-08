@@ -1,5 +1,5 @@
 use crate::e2e_invoke::ledger_entry_to_ledger_key;
-use crate::storage::EntryWithLiveUntil;
+use crate::storage::LedgerEntryWithLiveUntil;
 use crate::ErrorHandler;
 use crate::{
     budget::Budget,
@@ -136,7 +136,7 @@ impl MockSnapshotSource {
 }
 
 impl SnapshotSource for MockSnapshotSource {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError> {
+    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<LedgerEntryWithLiveUntil>, HostError> {
         if let Some((entry, live_until)) = self.0.get(key) {
             Ok(Some((Rc::clone(entry), *live_until)))
         } else {

@@ -102,8 +102,12 @@ impl ModuleCache {
         for (k, v) in storage.map.iter(host)? {
             if let crate::storage::StorageKey::Other(LedgerKey::ContractCode(_)) = &**k {
                 if let Some((e, _)) = v {
+                    let le = match e {
+                        crate::storage::StorageEntry::LedgerEntry(le) => le,
+                        _ => continue,
+                    };
                     if let LedgerEntryData::ContractCode(ContractCodeEntry { code, hash, ext }) =
-                        &e.data
+                        &le.data
                     {
                         // We allow empty contracts in testing mode; they exist
                         // to exercise as much of the contract-code-storage

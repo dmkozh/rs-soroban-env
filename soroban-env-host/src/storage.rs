@@ -144,10 +144,25 @@ impl StorageKey {
 }
 
 pub type FootprintMap = MeteredOrdMap<Rc<StorageKey>, AccessType, Host>;
-pub type EntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
+/// Storage entry value. For contract data keys, stores just the Val
+/// (avoiding Rc<LedgerEntry> overhead). For other key types, stores
+/// the full LedgerEntry.
+#[derive(Clone, Debug)]
+pub enum StorageEntry {
+    /// Contract data value: just the Val. The key fields (contract, key,
+    /// durability) are in the StorageKey::ContractData variant.
+    ContractDataVal(Val),
+    /// Full ledger entry for non-contract-data types (accounts, trustlines,
+    /// contract code) or contract instance entries.
+    LedgerEntry(Rc<LedgerEntry>),
+}
+
+pub type EntryWithLiveUntil = (StorageEntry, Option<u32>);
+/// The external output format: always uses full LedgerEntry.
+pub type LedgerEntryWithLiveUntil = (Rc<LedgerEntry>, Option<u32>);
 pub type StorageMap = MeteredOrdMap<Rc<StorageKey>, Option<EntryWithLiveUntil>, Host>;
 /// LedgerKey-based maps returned by try_finish for external consumers.
-pub type LedgerKeyEntryMap = MeteredOrdMap<Rc<LedgerKey>, Option<EntryWithLiveUntil>, Budget>;
+pub type LedgerKeyEntryMap = MeteredOrdMap<Rc<LedgerKey>, Option<LedgerEntryWithLiveUntil>, Budget>;
 pub type LedgerKeyFootprintMap = MeteredOrdMap<Rc<LedgerKey>, AccessType, Budget>;
 
 /// The in-memory instance storage of the current running contract. Initially
@@ -210,7 +225,7 @@ pub enum AccessType {
 pub trait SnapshotSource {
     /// Returns the ledger entry for the key and its live_until ledger if entry
     /// exists, or `None` otherwise.
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<EntryWithLiveUntil>, HostError>;
+    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<LedgerEntryWithLiveUntil>, HostError>;
 }
 
 /// Describes the total set of [LedgerKey]s that a given transaction
@@ -300,7 +315,7 @@ pub struct Storage {
 
 /// Helper struct holding common state for TTL extension operations.
 struct TtlExtensionInfo {
-    entry: Rc<LedgerEntry>,
+    entry: StorageEntry,
     old_live_until: u32,
     current_ttl: u32,
     max_live_until: u32,
@@ -408,7 +423,7 @@ impl Storage {
         key: &Rc<StorageKey>,
         host: &Host,
         key_val: Option<Val>,
-    ) -> Result<Rc<LedgerEntry>, HostError> {
+    ) -> Result<StorageEntry, HostError> {
         self.try_get_full(key, host, key_val)?
             .ok_or_else(|| (ScErrorType::Storage, ScErrorCode::MissingValue).into())
             .map(|e| e.0)
@@ -422,7 +437,7 @@ impl Storage {
         key: &Rc<StorageKey>,
         host: &Host,
         key_val: Option<Val>,
-    ) -> Result<Option<Rc<LedgerEntry>>, HostError> {
+    ) -> Result<Option<StorageEntry>, HostError> {
         self.try_get_full(key, host, key_val)
             .map(|ok| ok.map(|pair| pair.0))
     }
@@ -463,7 +478,10 @@ impl Storage {
     ) -> Result<(), HostError> {
         Self::check_supported_storage_key_type(key)?;
         if let Some(le) = &val {
-            Self::check_supported_ledger_entry_type(&le.0)?;
+            if let StorageEntry::LedgerEntry(ref entry) = le.0 {
+                Self::check_supported_ledger_entry_type(entry)?;
+            }
+            // ContractDataVal doesn't need the check — it's always contract data.
         }
         #[cfg(any(test, feature = "recording_mode"))]
         self.handle_maybe_expired_entry(&key, host)?;
@@ -505,7 +523,7 @@ impl Storage {
     pub(crate) fn put(
         &mut self,
         key: &Rc<StorageKey>,
-        val: &Rc<LedgerEntry>,
+        val: &StorageEntry,
         live_until_ledger: Option<u32>,
         host: &Host,
         key_val: Option<Val>,
@@ -836,6 +854,10 @@ impl Storage {
                     // Convert StorageKey to LedgerKey to query the SnapshotSource.
                     let lk = key.to_ledger_key(host)?;
                     let value = src.get(&lk)?;
+                    // Wrap the Rc<LedgerEntry> from the snapshot into StorageEntry::LedgerEntry.
+                    let value = value.map(|(entry, live_until)| {
+                        (StorageEntry::LedgerEntry(entry), live_until)
+                    });
                     self.map = self.map.insert(key.clone(), value, host)?;
                 }
                 self.footprint.record_access(key, ty, host)?;

@@ -25,7 +25,9 @@ fn get_contract_wasm_ref(host: &Host, contract_id: ContractId) -> Hash {
     host.with_mut_storage(|s: &mut Storage| {
         assert!(s.has(&storage_key, &host, None).unwrap());
 
-        match &s.get(&storage_key, host, None).unwrap().data {
+        let entry = s.get(&storage_key, host, None).unwrap();
+        let le = host.storage_entry_to_ledger_entry(&entry).unwrap();
+        match &le.data {
             LedgerEntryData::ContractData(e) => match &e.val {
                 ScVal::ContractInstance(i) => match &i.executable {
                     ContractExecutable::Wasm(h) => Ok(h.clone()),
@@ -44,7 +46,9 @@ fn get_contract_wasm(host: &Host, wasm_hash: Hash) -> Vec<u8> {
     host.with_mut_storage(|s: &mut Storage| {
         assert!(s.has(&storage_key, &host, None).unwrap());
 
-        match &s.get(&storage_key, host, None).unwrap().data {
+        let entry = s.get(&storage_key, host, None).unwrap();
+        let le = host.storage_entry_to_ledger_entry(&entry).unwrap();
+        match &le.data {
             LedgerEntryData::ContractCode(code_entry) => Ok(code_entry.code.to_vec()),
             _ => panic!("expected contract WASM code"),
         }
@@ -772,8 +776,10 @@ mod cap_54_55_56 {
         }
         fn reload(self, host: &Host) -> Result<Self, HostError> {
             host.with_mut_storage(|storage| {
-                let contract_entry = storage.get(&self.contract_key, host, None)?;
-                let wasm_entry = storage.get(&self.wasm_key, host, None)?;
+                let contract_entry = host.storage_entry_to_ledger_entry(
+                    &storage.get(&self.contract_key, host, None)?)?;
+                let wasm_entry = host.storage_entry_to_ledger_entry(
+                    &storage.get(&self.wasm_key, host, None)?)?;
                 Ok(ContractAndWasmEntries {
                     contract_key: self.contract_key,
                     contract_entry,
@@ -788,8 +794,10 @@ mod cap_54_55_56 {
             let wasm_key = host.contract_code_ledger_key(&wasm_hash)?;
 
             host.with_mut_storage(|storage| {
-                let contract_entry = storage.get(&contract_key, host, None)?;
-                let wasm_entry = storage.get(&wasm_key, host, None)?;
+                let contract_entry = host.storage_entry_to_ledger_entry(
+                    &storage.get(&contract_key, host, None)?)?;
+                let wasm_entry = host.storage_entry_to_ledger_entry(
+                    &storage.get(&wasm_key, host, None)?)?;
                 Ok(ContractAndWasmEntries {
                     contract_key,
                     contract_entry,
@@ -820,13 +828,13 @@ mod cap_54_55_56 {
             StorageMap::new()
                 .insert(
                     self.contract_key.clone(),
-                    Some((self.contract_entry.clone(), Some(99999))),
+                    Some((crate::storage::StorageEntry::LedgerEntry(self.contract_entry.clone()), Some(99999))),
                     host,
                 )
                 .unwrap()
                 .insert(
                     self.wasm_key.clone(),
-                    Some((self.wasm_entry.clone(), Some(99999))),
+                    Some((crate::storage::StorageEntry::LedgerEntry(self.wasm_entry.clone()), Some(99999))),
                     host,
                 )
                 .unwrap()
@@ -911,8 +919,9 @@ mod cap_54_55_56 {
             LedgerKey::ContractCode(xdr::LedgerKeyContractCode { hash: wasm_hash }),
         ));
         let mut storage = host.try_borrow_storage_mut()?;
-        let (entry, live_until_ledger) =
+        let (entry_se, live_until_ledger) =
             storage.get_with_live_until_ledger(&code_key, host, None)?;
+        let entry = host.storage_entry_to_ledger_entry(&entry_se)?;
         let LedgerEntryData::ContractCode(code) = &entry.data else {
             panic!("expected ContractCode");
         };
@@ -923,7 +932,7 @@ mod cap_54_55_56 {
             }),
             ..(*entry).clone()
         });
-        storage.put(&code_key, &new_entry, live_until_ledger, &host, None)?;
+        storage.put(&code_key, &crate::storage::StorageEntry::LedgerEntry(new_entry), live_until_ledger, &host, None)?;
         Ok(())
     }
 
@@ -1843,8 +1852,8 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 893871,
-                            mem_bytes: 3470585,
+                            instructions: 892847,
+                            mem_bytes: 3470041,
                             disk_read_entries: 0,
                             memory_read_entries: 6,
                             write_entries: 3,
@@ -1869,8 +1878,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 624531,
-                                    mem_bytes: 2339161,
+                                    instructions: 623507,
+                                    mem_bytes: 2338617,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
                                     write_entries: 2,
@@ -2001,8 +2010,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2398238,
-                            mem_bytes: 5948656,
+                            instructions: 2397214,
+                            mem_bytes: 5948112,
                             disk_read_entries: 0,
                             memory_read_entries: 8,
                             write_entries: 3,
@@ -2027,8 +2036,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 910455,
-                                    mem_bytes: 2387327,
+                                    instructions: 909431,
+                                    mem_bytes: 2386783,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
                                     write_entries: 2,
