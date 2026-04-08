@@ -610,43 +610,6 @@ impl Host {
 
         Ok(())
     }
-}
-
-#[cfg(any(test, feature = "testutils"))]
-use crate::crypto;
-#[cfg(any(test, feature = "testutils"))]
-use crate::storage::{AccessType, EntryWithLiveUntil, Footprint};
-
-#[cfg(any(test, feature = "testutils"))]
-impl Host {
-    /// Writes an arbitrary ledger entry to storage.
-    pub fn add_ledger_entry(
-        &self,
-        key: &Rc<StorageKey>,
-        val: &Rc<soroban_env_common::xdr::LedgerEntry>,
-        live_until_ledger: Option<u32>,
-    ) -> Result<(), HostError> {
-        let storage_entry = crate::storage::StorageEntry::LedgerEntry(val.clone());
-        self.with_mut_storage(|storage| storage.put(key, &storage_entry, live_until_ledger, self, None))
-    }
-
-    /// Reads an arbitrary ledger entry from the storage.
-    ///
-    /// Returns `None` if the entry does not exist.
-    pub fn get_ledger_entry(
-        &self,
-        key: &Rc<StorageKey>,
-    ) -> Result<Option<EntryWithLiveUntil>, HostError> {
-        self.with_mut_storage(|storage| storage.try_get_full(key, self, None))
-    }
-
-    /// Returns all the ledger entries stored in the storage as key-value pairs.
-    #[allow(clippy::type_complexity)]
-    pub fn get_stored_entries(
-        &self,
-    ) -> Result<Vec<(Rc<StorageKey>, Option<EntryWithLiveUntil>)>, HostError> {
-        self.with_mut_storage(|storage| Ok(storage.map.map.clone()))
-    }
 
     /// Helper: unwraps a `StorageEntry` to `Rc<LedgerEntry>`, returning an error
     /// if it's a `ContractDataVal`.
@@ -703,6 +666,41 @@ impl Host {
                 }
             }
         }
+    }
+}
+
+#[cfg(any(test, feature = "testutils"))]
+use crate::crypto;
+#[cfg(any(test, feature = "testutils"))]
+use crate::storage::{AccessType, EntryWithLiveUntil, Footprint};
+
+#[cfg(any(test, feature = "testutils"))]
+impl Host {
+    /// Writes an arbitrary ledger entry to storage.
+    pub fn add_ledger_entry(
+        &self,
+        key: &Rc<StorageKey>,
+        val: &Rc<soroban_env_common::xdr::LedgerEntry>,
+        live_until_ledger: Option<u32>,
+    ) -> Result<(), HostError> {
+        let storage_entry = crate::storage::StorageEntry::LedgerEntry(val.clone());
+        self.with_mut_storage(|storage| storage.put(key, &storage_entry, live_until_ledger, self, None))
+    }
+
+    /// Reads an arbitrary ledger entry from the storage.
+    pub fn get_ledger_entry(
+        &self,
+        key: &Rc<StorageKey>,
+    ) -> Result<Option<EntryWithLiveUntil>, HostError> {
+        self.with_mut_storage(|storage| storage.try_get_full(key, self, None))
+    }
+
+    /// Returns all the ledger entries stored in the storage as key-value pairs.
+    #[allow(clippy::type_complexity)]
+    pub fn get_stored_entries(
+        &self,
+    ) -> Result<Vec<(Rc<StorageKey>, Option<EntryWithLiveUntil>)>, HostError> {
+        self.with_mut_storage(|storage| Ok(storage.map.map.clone()))
     }
 
     // Performs the necessary setup to access the provided ledger key/entry in
