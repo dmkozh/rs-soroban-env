@@ -194,9 +194,7 @@ fn test_internal_diagnostic_event_metering_free() -> Result<(), HostError> {
 /// Logs some diagnostics and returns (budget_snapshot_before_finish, events).
 /// Budget is captured after diagnostics but before try_finish, since try_finish
 /// does real metered work (StorageKey→LedgerKey conversion).
-fn log_some_diagnostics(
-    host: Host,
-) -> Result<(u64, u64, u64, u64, Events), HostError> {
+fn log_some_diagnostics(host: Host) -> Result<(u64, u64, u64, u64, Events), HostError> {
     let args: Vec<_> = (0..1000).map(|u| Val::from_u32(u).to_val()).collect();
     let contract_id = ContractId(Hash([0; 32]));
     host.log_diagnostics("logging some diagnostics", args.as_slice());

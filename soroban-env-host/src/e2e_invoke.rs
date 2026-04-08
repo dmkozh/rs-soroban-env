@@ -21,7 +21,10 @@ use crate::{
         metered_xdr::{metered_from_xdr_with_budget, metered_write_xdr},
         TraceHook,
     },
-    storage::{AccessType, Footprint, FootprintMap, LedgerKeyEntryMap, LedgerKeyFootprintMap, SnapshotSource, Storage, StorageMap},
+    storage::{
+        AccessType, Footprint, FootprintMap, LedgerKeyEntryMap, LedgerKeyFootprintMap,
+        SnapshotSource, Storage, StorageMap,
+    },
     xdr::{
         AccountId, ContractDataDurability, ContractEventType, DiagnosticEvent, HostFunction,
         LedgerEntry, LedgerEntryData, LedgerEntryType, LedgerFootprint, LedgerKey,
@@ -205,7 +208,11 @@ fn get_ledger_changes(
     };
     for (ledger_key_rc, entry_with_live_until_ledger) in lk_map.iter(budget)? {
         let mut entry_change = LedgerEntryChange::default();
-        metered_write_xdr(budget, ledger_key_rc.as_ref(), &mut entry_change.encoded_key)?;
+        metered_write_xdr(
+            budget,
+            ledger_key_rc.as_ref(),
+            &mut entry_change.encoded_key,
+        )?;
         let durability = get_key_durability(ledger_key_rc.as_ref());
 
         if let Some(durability) = durability {
@@ -254,10 +261,9 @@ fn get_ledger_changes(
                 );
             }
         }
-        let maybe_access_type: Option<AccessType> =
-            footprint_map
-                .get::<Rc<LedgerKey>>(&ledger_key_rc, budget)?
-                .copied();
+        let maybe_access_type: Option<AccessType> = footprint_map
+            .get::<Rc<LedgerKey>>(&ledger_key_rc, budget)?
+            .copied();
         match maybe_access_type {
             Some(AccessType::ReadOnly) => {
                 entry_change.read_only = true;
@@ -274,9 +280,7 @@ fn get_ledger_changes(
                     entry_change.encoded_new_value = Some(entry_buf);
 
                     if let Some(restored_keys) = &restored_keys {
-                        if restored_keys
-                            .contains_key::<Rc<LedgerKey>>(&ledger_key_rc, budget)?
-                        {
+                        if restored_keys.contains_key::<Rc<LedgerKey>>(&ledger_key_rc, budget)? {
                             entry_change.old_entry_size_bytes_for_rent = 0;
                             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
                                 ttl_change.old_live_until_ledger = 0;
@@ -494,13 +498,15 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     }
     // Convert init storage map to LedgerKey-based snapshot before try_finish
     // consumes the Host (needed for StorageKey → LedgerKey conversion).
-    let init_storage_snapshot = build_ledger_key_snapshot(&host, &init_storage_map)
-        .unwrap_or_else(|_| LedgerKeySnapshotSource {
-            entries: std::collections::BTreeMap::new(),
+    let init_storage_snapshot =
+        build_ledger_key_snapshot(&host, &init_storage_map).unwrap_or_else(|_| {
+            LedgerKeySnapshotSource {
+                entries: std::collections::BTreeMap::new(),
+            }
         });
-    let (lk_map, footprint_map) = host.get_ledger_key_storage().unwrap_or_else(|_| {
-        (LedgerKeyEntryMap::new(), LedgerKeyFootprintMap::new())
-    });
+    let (lk_map, footprint_map) = host
+        .get_ledger_key_storage()
+        .unwrap_or_else(|_| (LedgerKeyEntryMap::new(), LedgerKeyFootprintMap::new()));
     let events = host.try_finish()?;
     if enable_diagnostics {
         extract_diagnostic_events(&events, diagnostic_events);
@@ -759,9 +765,7 @@ pub fn invoke_host_function_in_recording_mode(
                             if let Some(live_until) = live_until {
                                 // Check if entry has been auto-restored (only persistent entries
                                 // can be auto-restored)
-                                if live_until < ledger_seq
-                                    && is_persistent_key(lk.as_ref())
-                                {
+                                if live_until < ledger_seq && is_persistent_key(lk.as_ref()) {
                                     // Auto-restored entries are expected to be in RW footprint.
                                     if !matches!(*access_type, AccessType::ReadWrite) {
                                         return Err(HostError::from(Error::from_type_and_code(
@@ -996,7 +1000,8 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
     #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
 ) -> Result<(StorageMap, TtlEntryMap), HostError> {
     let budget = host.budget_ref();
-    let mut storage_entries: Vec<(Rc<crate::storage::StorageKey>, Option<EntryWithLiveUntil>)> = Vec::new();
+    let mut storage_entries: Vec<(Rc<crate::storage::StorageKey>, Option<EntryWithLiveUntil>)> =
+        Vec::new();
     let mut ttl_map = TtlEntryMap::new();
 
     if encoded_ledger_entries.len() != encoded_ttl_entries.len() {
@@ -1078,24 +1083,33 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             .get::<crate::storage::StorageKey>(&storage_key, host)?
             .map(|_| {
                 // Find the matching footprint Rc by scanning — the footprint is small.
-                footprint
-                    .0
-                    .keys(host)
-                    .ok()
-                    .and_then(|mut ks| ks.find(|k| {
+                footprint.0.keys(host).ok().and_then(|mut ks| {
+                    ks.find(|k| {
                         <Host as crate::Compare<crate::storage::StorageKey>>::compare(
-                            host, k.as_ref(), storage_key.as_ref(),
-                        ).ok() == Some(std::cmp::Ordering::Equal)
-                    }))
+                            host,
+                            k.as_ref(),
+                            storage_key.as_ref(),
+                        )
+                        .ok()
+                            == Some(std::cmp::Ordering::Equal)
+                    })
+                })
             })
             .flatten();
         match fp_key {
-            Some(fk) => storage_entries.push((Rc::clone(fk), Some((crate::storage::StorageEntry::LedgerEntry(le), live_until_ledger)))),
+            Some(fk) => storage_entries.push((
+                Rc::clone(fk),
+                Some((
+                    crate::storage::StorageEntry::LedgerEntry(le),
+                    live_until_ledger,
+                )),
+            )),
             None => {
                 return Err(Error::from_type_and_code(
                     ScErrorType::Storage,
                     ScErrorCode::InternalError,
-                ).into());
+                )
+                .into());
             }
         }
     }
@@ -1140,11 +1154,15 @@ impl Host {
 /// A snapshot source backed by a BTreeMap of LedgerKey → LedgerEntryWithLiveUntil.
 /// Built from the initial StorageMap before try_finish consumes the Host.
 struct LedgerKeySnapshotSource {
-    entries: std::collections::BTreeMap<Rc<LedgerKey>, Option<crate::storage::LedgerEntryWithLiveUntil>>,
+    entries:
+        std::collections::BTreeMap<Rc<LedgerKey>, Option<crate::storage::LedgerEntryWithLiveUntil>>,
 }
 
 impl SnapshotSource for LedgerKeySnapshotSource {
-    fn get(&self, key: &Rc<LedgerKey>) -> Result<Option<crate::storage::LedgerEntryWithLiveUntil>, HostError> {
+    fn get(
+        &self,
+        key: &Rc<LedgerKey>,
+    ) -> Result<Option<crate::storage::LedgerEntryWithLiveUntil>, HostError> {
         Ok(self.entries.get(key).cloned().flatten())
     }
 }

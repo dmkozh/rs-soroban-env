@@ -84,10 +84,7 @@ impl<T: Clone + DeclaredSizeForMetering> MeteredClone for XdrObject<T> {
 
     fn charge_for_substructure(&self, budget: &Budget) -> Result<(), HostError> {
         // Charge based on cached XDR size instead of walking substructure.
-        budget.charge(
-            ContractCostType::MemAlloc,
-            Some(self.xdr_byte_size as u64),
-        )?;
+        budget.charge(ContractCostType::MemAlloc, Some(self.xdr_byte_size as u64))?;
         budget.charge(ContractCostType::MemCpy, Some(self.xdr_byte_size as u64))
     }
 }

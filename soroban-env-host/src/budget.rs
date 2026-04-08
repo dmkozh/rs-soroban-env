@@ -217,8 +217,7 @@ impl BudgetImpl {
         cpu: &BudgetDimension,
         mem: &BudgetDimension,
     ) -> [model::CombinedCostModel; ContractCostType::variants().len()] {
-        let mut combined =
-            [model::CombinedCostModel::DEFAULT; ContractCostType::variants().len()];
+        let mut combined = [model::CombinedCostModel::DEFAULT; ContractCostType::variants().len()];
         for ct in ContractCostType::variants() {
             let i = ct as usize;
             let cpu_model = cpu.get_cost_model(ct);
@@ -322,14 +321,18 @@ impl BudgetImpl {
         let cm = &self.combined_models[ty as usize];
         let (cpu_charged, mem_charged) = cm.evaluate(iterations, input);
 
-        self.cpu_insns.shadow_total_count =
-            self.cpu_insns.shadow_total_count.saturating_add(cpu_charged);
+        self.cpu_insns.shadow_total_count = self
+            .cpu_insns
+            .shadow_total_count
+            .saturating_add(cpu_charged);
         if self.cpu_insns.shadow_total_count > self.cpu_insns.shadow_limit {
             return Err((ScErrorType::Budget, ScErrorCode::ExceededLimit).into());
         }
 
-        self.mem_bytes.shadow_total_count =
-            self.mem_bytes.shadow_total_count.saturating_add(mem_charged);
+        self.mem_bytes.shadow_total_count = self
+            .mem_bytes
+            .shadow_total_count
+            .saturating_add(mem_charged);
         if self.mem_bytes.shadow_total_count > self.mem_bytes.shadow_limit {
             return Err((ScErrorType::Budget, ScErrorCode::ExceededLimit).into());
         }
@@ -364,7 +367,8 @@ impl Default for BudgetImpl {
         let mut b = Self {
             cpu_insns: BudgetDimension::default(),
             mem_bytes: BudgetDimension::default(),
-            combined_models: [model::CombinedCostModel::DEFAULT; ContractCostType::variants().len()],
+            combined_models: [model::CombinedCostModel::DEFAULT;
+                ContractCostType::variants().len()],
             tracker: Default::default(),
             tracking_enabled: true,
             is_in_shadow_mode: false,
@@ -1345,12 +1349,9 @@ impl Budget {
         cpu_cost_params: ContractCostParams,
         mem_cost_params: ContractCostParams,
     ) -> Result<Self, HostError> {
-        Ok(Self(Rc::new(UnsafeCell::new(BudgetImpl::try_from_configs(
-            cpu_limit,
-            mem_limit,
-            cpu_cost_params,
-            mem_cost_params,
-        )?))))
+        Ok(Self(Rc::new(UnsafeCell::new(
+            BudgetImpl::try_from_configs(cpu_limit, mem_limit, cpu_cost_params, mem_cost_params)?,
+        ))))
     }
 
     /// Initializes the budget from network configuration settings.

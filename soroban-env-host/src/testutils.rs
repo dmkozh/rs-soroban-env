@@ -447,7 +447,10 @@ impl Host {
             // Synthesize empty entries for anything the contract made up (these
             // will be in the footprint but not yet in the map, which is an
             // invariant violation we need to repair here).
-            let mut entries: Vec<(Rc<crate::storage::StorageKey>, Option<crate::storage::EntryWithLiveUntil>)> = Vec::new();
+            let mut entries: Vec<(
+                Rc<crate::storage::StorageKey>,
+                Option<crate::storage::EntryWithLiveUntil>,
+            )> = Vec::new();
             for (k, v) in storage.map.iter(self).unwrap() {
                 entries.push((k.clone(), v.clone()));
             }
@@ -479,11 +482,7 @@ impl Host {
                 )
                 .unwrap()
             });
-            storage.map = MeteredOrdMap::from_exact_iter(
-                entries.into_iter(),
-                self,
-            )
-            .unwrap();
+            storage.map = MeteredOrdMap::from_exact_iter(entries.into_iter(), self).unwrap();
             storage.mode = crate::storage::FootprintMode::Enforcing;
             Ok(())
         })

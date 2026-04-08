@@ -134,6 +134,17 @@ pub trait EnvBase: Sized + Clone {
         x
     }
 
+    /// Perform obj_cmp without going through the Env dispatch layer.
+    /// Used by the blanket `Compare<Val>` impl to avoid redundant
+    /// integrity checks on host-internal comparisons. Default delegates
+    /// to `Env::obj_cmp`; Host overrides to bypass `check_env_arg`.
+    fn obj_cmp_internal(&self, a: Val, b: Val) -> Result<i64, Self::Error>
+    where
+        Self: crate::Env,
+    {
+        <Self as crate::Env>::obj_cmp(self, a, b)
+    }
+
     // Helpers for methods that wish to pass Rust lifetime-qualified _slices_
     // into the environment. These are _not_ done via Env trait methods to avoid
     // the need to convert, and thus trust (or validate) "raw numbers" coming

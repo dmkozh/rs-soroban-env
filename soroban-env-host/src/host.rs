@@ -40,10 +40,10 @@ pub(crate) mod metered_map;
 pub(crate) mod metered_vector;
 pub(crate) mod metered_xdr;
 mod num;
-pub(crate) mod xdr_object;
 pub(crate) mod prng;
 pub(crate) mod trace;
 mod validity;
+pub(crate) mod xdr_object;
 
 pub use error::{ErrorHandler, HostError};
 use frame::CallParams;
@@ -754,11 +754,20 @@ impl Host {
     /// (needed for ContractData Val→ScVal conversion in StorageKey→LedgerKey).
     pub fn get_ledger_key_storage(
         &self,
-    ) -> Result<(crate::storage::LedgerKeyEntryMap, crate::storage::LedgerKeyFootprintMap), HostError> {
+    ) -> Result<
+        (
+            crate::storage::LedgerKeyEntryMap,
+            crate::storage::LedgerKeyFootprintMap,
+        ),
+        HostError,
+    > {
         let budget = self.budget_ref();
         let storage = self.try_borrow_storage()?;
         // Collect entries, converting StorageKey→LedgerKey and StorageEntry→Rc<LedgerEntry>.
-        let mut map_entries: Vec<(Rc<crate::xdr::LedgerKey>, Option<crate::storage::LedgerEntryWithLiveUntil>)> = storage
+        let mut map_entries: Vec<(
+            Rc<crate::xdr::LedgerKey>,
+            Option<crate::storage::LedgerEntryWithLiveUntil>,
+        )> = storage
             .map
             .iter(self)?
             .map(|(sk, val)| {
@@ -890,6 +899,18 @@ impl EnvBase for Host {
                 &[],
             )),
         })
+    }
+
+    fn obj_cmp_internal(&self, a: Val, b: Val) -> Result<i64, Self::Error>
+    where
+        Self: soroban_env_common::Env,
+    {
+        self.augment_err_result(<Host as VmCallerEnv>::obj_cmp(
+            self,
+            &mut VmCaller::none(),
+            a,
+            b,
+        ))
     }
 
     // This function is somewhat subtle.
@@ -1285,8 +1306,7 @@ impl VmCallerEnv for Host {
                     match (r.get(a_idx), r.get(b_idx)) {
                         (Some((a_ho, a_meta)), Some((b_ho, b_meta))) => {
                             // Charge a single MemCmp for the larger object's XDR size.
-                            let charge_size =
-                                a_meta.xdr_byte_size.max(b_meta.xdr_byte_size) as u64;
+                            let charge_size = a_meta.xdr_byte_size.max(b_meta.xdr_byte_size) as u64;
                             self.charge_budget(ContractCostType::MemCmp, Some(charge_size))?;
                             Some(self.compare_host_objects_unmetered(a_ho, b_ho)?)
                         }
@@ -1302,8 +1322,9 @@ impl VmCallerEnv for Host {
                 }
 
                 // Object and non-object: trivial scalar comparison, no metering needed.
-                (Ok(a), Err(_)) => self
-                    .visit_obj_untyped(a, |aobj| aobj.try_compare_to_small_unmetered(b))?,
+                (Ok(a), Err(_)) => {
+                    self.visit_obj_untyped(a, |aobj| aobj.try_compare_to_small_unmetered(b))?
+                }
                 (Err(_), Ok(b)) => self.visit_obj_untyped(b, |bobj| {
                     let ord = bobj.try_compare_to_small_unmetered(a)?;
                     Ok(match ord {
@@ -3824,8 +3845,7 @@ impl VmCallerEnv for Host {
                         .try_get_full(&storage_key, self, None)?;
                 if let Some((instance_entry, _ttl)) = maybe_instance_entry {
                     let le = self.storage_entry_to_ledger_entry(&instance_entry)?;
-                    let instance =
-                        self.extract_contract_instance_from_ledger_entry(&le)?;
+                    let instance = self.extract_contract_instance_from_ledger_entry(&le)?;
                     Some(AddressExecutable::from_contract_executable_xdr(
                         &self,
                         &instance.executable,

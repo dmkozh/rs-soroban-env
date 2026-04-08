@@ -1,7 +1,6 @@
 use crate::{
-    budget::AsBudget,
-    host::metered_clone::MeteredClone, xdr::ContractCostType, ConversionError, ErrorHandler, Host,
-    HostError, TryFromVal, U256Object, U256Small, U256Val, U256,
+    budget::AsBudget, host::metered_clone::MeteredClone, xdr::ContractCostType, ConversionError,
+    ErrorHandler, Host, HostError, TryFromVal, U256Object, U256Small, U256Val, U256,
 };
 use ark_bls12_381::Fr as BlsScalar;
 use ark_bn254::Fr as BnScalar;

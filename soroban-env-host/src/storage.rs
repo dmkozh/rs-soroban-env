@@ -65,7 +65,9 @@ impl StorageKey {
                 let sc_val = host.from_host_val(*key)?;
                 Rc::metered_new(
                     LedgerKey::ContractData(LedgerKeyContractData {
-                        contract: ScAddress::Contract(contract_id.metered_clone(host.as_budget())?.into()),
+                        contract: ScAddress::Contract(
+                            contract_id.metered_clone(host.as_budget())?.into(),
+                        ),
                         key: sc_val,
                         durability: *durability,
                     }),
@@ -74,7 +76,9 @@ impl StorageKey {
             }
             StorageKey::ContractInstance { contract_id } => Rc::metered_new(
                 LedgerKey::ContractData(LedgerKeyContractData {
-                    contract: ScAddress::Contract(contract_id.metered_clone(host.as_budget())?.into()),
+                    contract: ScAddress::Contract(
+                        contract_id.metered_clone(host.as_budget())?.into(),
+                    ),
                     key: ScVal::LedgerKeyContractInstance,
                     durability: ContractDataDurability::Persistent,
                 }),
@@ -109,12 +113,19 @@ impl StorageKey {
                             ScAddress::Contract(id) => Ok(StorageKey::ContractInstance {
                                 contract_id: id.0.metered_clone(host.as_budget())?,
                             }),
-                            _ => Ok(StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?)),
+                            _ => Ok(StorageKey::Other(
+                                crate::host::xdr_object::xdr_object_from_value(
+                                    lk,
+                                    host.as_budget(),
+                                )?,
+                            )),
                         }
                     }
                     // Nonce keys are internal (used for auth) and don't go
                     // through the contract Val path — keep as Other.
-                    ScVal::LedgerKeyNonce(_) => Ok(StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?)),
+                    ScVal::LedgerKeyNonce(_) => Ok(StorageKey::Other(
+                        crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?,
+                    )),
                     _ => {
                         // Regular contract data: convert ScVal to Val.
                         // Uses to_host_val_for_storage which recursively
@@ -128,12 +139,19 @@ impl StorageKey {
                                     durability: cd.durability,
                                 })
                             }
-                            _ => Ok(StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?)),
+                            _ => Ok(StorageKey::Other(
+                                crate::host::xdr_object::xdr_object_from_value(
+                                    lk,
+                                    host.as_budget(),
+                                )?,
+                            )),
                         }
                     }
                 }
             }
-            _ => Ok(StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?)),
+            _ => Ok(StorageKey::Other(
+                crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?,
+            )),
         }
     }
 
@@ -142,7 +160,9 @@ impl StorageKey {
         match self {
             StorageKey::ContractData { durability, .. } => Some(*durability),
             StorageKey::ContractInstance { .. } => Some(ContractDataDurability::Persistent),
-            StorageKey::Other(ref xdr_lk) => crate::ledger_info::get_key_durability(xdr_lk.as_ref()),
+            StorageKey::Other(ref xdr_lk) => {
+                crate::ledger_info::get_key_durability(xdr_lk.as_ref())
+            }
         }
     }
 }
@@ -653,11 +673,9 @@ impl Storage {
         new_live_until: u32,
     ) -> Result<(), HostError> {
         if new_live_until > ttl_ext_info.old_live_until {
-            self.map = self.map.insert(
-                key,
-                Some((ttl_ext_info.entry, Some(new_live_until))),
-                host,
-            )?;
+            self.map =
+                self.map
+                    .insert(key, Some((ttl_ext_info.entry, Some(new_live_until))), host)?;
         }
         Ok(())
     }
@@ -851,17 +869,13 @@ impl Storage {
                 self.footprint.record_access(key, ty, host)?;
                 // In recording mode we treat the map as a cache
                 // that misses read-through to the underlying src.
-                if !self
-                    .map
-                    .contains_key::<Rc<StorageKey>>(key, host)?
-                {
+                if !self.map.contains_key::<Rc<StorageKey>>(key, host)? {
                     // Convert StorageKey to LedgerKey to query the SnapshotSource.
                     let lk = key.to_ledger_key(host)?;
                     let value = src.get(&lk)?;
                     // Wrap the Rc<LedgerEntry> from the snapshot into StorageEntry::LedgerEntry.
-                    let value = value.map(|(entry, live_until)| {
-                        (StorageEntry::LedgerEntry(entry), live_until)
-                    });
+                    let value = value
+                        .map(|(entry, live_until)| (StorageEntry::LedgerEntry(entry), live_until));
                     self.map = self.map.insert(key.clone(), value, host)?;
                 }
                 self.footprint.record_access(key, ty, host)?;
@@ -881,9 +895,7 @@ impl Storage {
         host: &Host,
     ) -> Result<(), HostError> {
         host.with_ledger_info(|li| {
-            if let Some(Some((entry, live_until))) =
-                self.map.get::<Rc<StorageKey>>(key, host)?
-            {
+            if let Some(Some((entry, live_until))) = self.map.get::<Rc<StorageKey>>(key, host)? {
                 if let Some(durability) = key.get_durability() {
                     let live_until = live_until.ok_or_else(|| {
                         host.err(

@@ -444,14 +444,12 @@ impl InvocationResources {
                 for (key, _access_type) in footprint_iter {
                     // Serialize the key to get its size - need LedgerKey for XDR
                     let mut key_buf = Vec::<u8>::new();
-                    let is_contract_data = matches!(
-                        key.as_ref(),
-                        crate::storage::StorageKey::ContractData { .. }
-                            | crate::storage::StorageKey::ContractInstance { .. }
-                    ) || matches!(
-                        key.as_ledger_key(),
-                        Some(LedgerKey::ContractData(_))
-                    );
+                    let is_contract_data =
+                        matches!(
+                            key.as_ref(),
+                            crate::storage::StorageKey::ContractData { .. }
+                                | crate::storage::StorageKey::ContractInstance { .. }
+                        ) || matches!(key.as_ledger_key(), Some(LedgerKey::ContractData(_)));
                     if let Some(lk) = key.as_ledger_key() {
                         if metered_write_xdr(host.budget_ref(), lk, &mut key_buf).is_ok() {
                             let key_size = key_buf.len() as u32;
@@ -475,41 +473,45 @@ impl InvocationResources {
                         if let Some((entry, _)) = maybe_entry {
                             let le = match &entry {
                                 crate::storage::StorageEntry::LedgerEntry(le) => Some(le.clone()),
-                                crate::storage::StorageEntry::ContractDataVal(_) => {
-                                    host.storage_entry_to_ledger_entry_for_output(key, &entry).ok()
-                                }
+                                crate::storage::StorageEntry::ContractDataVal(_) => host
+                                    .storage_entry_to_ledger_entry_for_output(key, &entry)
+                                    .ok(),
                             };
                             if let Some(le) = le {
-                            let mut entry_buf = Vec::<u8>::new();
-                            if metered_write_xdr(host.budget_ref(), le.as_ref(), &mut entry_buf)
-                                .is_ok()
-                            {
-                                let entry_size = entry_buf.len() as u32;
+                                let mut entry_buf = Vec::<u8>::new();
+                                if metered_write_xdr(host.budget_ref(), le.as_ref(), &mut entry_buf)
+                                    .is_ok()
+                                {
+                                    let entry_size = entry_buf.len() as u32;
 
-                                match &le.data {
-                                    LedgerEntryData::ContractData(_) => {
-                                        if entry_size > limits.max_contract_data_entry_size_bytes {
-                                            exceeded.push(format!(
+                                    match &le.data {
+                                        LedgerEntryData::ContractData(_) => {
+                                            if entry_size
+                                                > limits.max_contract_data_entry_size_bytes
+                                            {
+                                                exceeded.push(format!(
                                                 "contract data entry with key '{:?}' size: {} > {}",
                                                 key.as_ref(),
                                                 entry_size,
                                                 limits.max_contract_data_entry_size_bytes
                                             ));
+                                            }
                                         }
-                                    }
-                                    LedgerEntryData::ContractCode(_) => {
-                                        if entry_size > limits.max_contract_code_entry_size_bytes {
-                                            exceeded.push(format!(
+                                        LedgerEntryData::ContractCode(_) => {
+                                            if entry_size
+                                                > limits.max_contract_code_entry_size_bytes
+                                            {
+                                                exceeded.push(format!(
                                                 "contract code entry with key '{:?}' size: {} > {}",
                                                 key.as_ref(),
                                                 entry_size,
                                                 limits.max_contract_code_entry_size_bytes
                                             ));
+                                            }
                                         }
+                                        _ => (),
                                     }
-                                    _ => (),
                                 }
-                            }
                             } // if let Some(le)
                         }
                     }
@@ -990,12 +992,12 @@ impl Host {
                         // If the entry is persistent and it has expired, then
                         // we deal with the autorestore and thus need to mark
                         // the entry as disk read.
-                        is_disk_read =
-                            crate::storage::is_persistent_storage_key(key.as_ref());
+                        is_disk_read = crate::storage::is_persistent_storage_key(key.as_ref());
                     }
                 }
 
-                let init_entry = self.storage_entry_to_ledger_entry_for_output(key, &init_entry_se)?;
+                let init_entry =
+                    self.storage_entry_to_ledger_entry_for_output(key, &init_entry_se)?;
                 let mut buf = Vec::<u8>::new();
                 metered_write_xdr(self.budget_ref(), init_entry.as_ref(), &mut buf)?;
                 if is_disk_read {
@@ -1109,7 +1111,7 @@ mod test {
         // contract), so 2 writes/bumps are expected.
         expect![[r#"
             InvocationResources {
-                instructions: 4199680,
+                instructions: 4199558,
                 mem_bytes: 2863524,
                 disk_read_entries: 0,
                 memory_read_entries: 2,
@@ -1127,7 +1129,7 @@ mod test {
             DetailedInvocationResources {
                 invocation: CreateContractEntryPoint,
                 resources: SubInvocationResources {
-                    instructions: 4199680,
+                    instructions: 4199558,
                     mem_bytes: 2863524,
                     disk_read_entries: 0,
                     memory_read_entries: 2,

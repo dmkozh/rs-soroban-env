@@ -16,8 +16,8 @@ use crate::{
     storage::Storage,
     xdr::{
         AccountEntry, AccountEntryExt, AccountEntryExtensionV1Ext, AccountFlags, AccountId, Asset,
-        LedgerEntry, LedgerEntryData, LedgerEntryExt, ScAddress, ScErrorCode,
-        ScErrorType, SequenceNumber, Thresholds, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
+        LedgerEntry, LedgerEntryData, LedgerEntryExt, ScAddress, ScErrorCode, ScErrorType,
+        SequenceNumber, Thresholds, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
         TrustLineFlags,
     },
     Env, ErrorHandler, Host, HostError, StorageType, TryIntoVal, Val,
@@ -470,7 +470,13 @@ fn transfer_account_balance(
                     ae.balance = new_balance;
                     let updated_le =
                         Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Account(ae))?;
-                    storage.put(&lk, &crate::storage::StorageEntry::LedgerEntry(updated_le), None, host, None)
+                    storage.put(
+                        &lk,
+                        &crate::storage::StorageEntry::LedgerEntry(updated_le),
+                        None,
+                        host,
+                        None,
+                    )
                 } else {
                     Err(err!(
                         host,
@@ -543,7 +549,13 @@ fn transfer_account_balance(
                     host.as_budget(),
                 )?;
 
-                storage.put(&lk, &crate::storage::StorageEntry::LedgerEntry(new_le), None, host, None)
+                storage.put(
+                    &lk,
+                    &crate::storage::StorageEntry::LedgerEntry(new_le),
+                    None,
+                    host,
+                    None,
+                )
             }
         }
     })
@@ -623,7 +635,13 @@ fn transfer_trustline_balance(
         if new_balance >= min_balance && new_balance <= max_balance {
             tl.balance = new_balance;
             le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
-            storage.put(&lk, &crate::storage::StorageEntry::LedgerEntry(le), None, &host, None)
+            storage.put(
+                &lk,
+                &crate::storage::StorageEntry::LedgerEntry(le),
+                None,
+                &host,
+                None,
+            )
         } else {
             Err(err!(
                 host,
@@ -920,7 +938,13 @@ fn set_trustline_authorization(
             tl.flags |= TrustLineFlags::AuthorizedToMaintainLiabilitiesFlag as u32;
         }
         le = Host::modify_ledger_entry_data(host, &le, LedgerEntryData::Trustline(tl))?;
-        storage.put(&lk, &crate::storage::StorageEntry::LedgerEntry(le), None, &host, None)
+        storage.put(
+            &lk,
+            &crate::storage::StorageEntry::LedgerEntry(le),
+            None,
+            &host,
+            None,
+        )
     })
 }
 
@@ -1000,7 +1024,10 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
         ));
     }
 
-    let tl_key = e.to_trustline_key(account_id.metered_clone(e.as_budget())?, asset.metered_clone(e.as_budget())?)?;
+    let tl_key = e.to_trustline_key(
+        account_id.metered_clone(e.as_budget())?,
+        asset.metered_clone(e.as_budget())?,
+    )?;
 
     // Check if trustline already exists - if so, no-op
     let trustline_exists = e.with_mut_storage(|storage| storage.try_get(&tl_key, e, None))?;
@@ -1092,8 +1119,20 @@ pub(crate) fn create_trustline_if_needed(e: &Host, addr: Address) -> Result<(), 
             Host::modify_ledger_entry_data(e, &acc_entry, LedgerEntryData::Account(ae))?;
 
         // Write both entries
-        storage.put(&tl_key, &crate::storage::StorageEntry::LedgerEntry(tl_ledger_entry), None, e, None)?;
-        storage.put(&acc_key, &crate::storage::StorageEntry::LedgerEntry(updated_acc_entry), None, e, None)?;
+        storage.put(
+            &tl_key,
+            &crate::storage::StorageEntry::LedgerEntry(tl_ledger_entry),
+            None,
+            e,
+            None,
+        )?;
+        storage.put(
+            &acc_key,
+            &crate::storage::StorageEntry::LedgerEntry(updated_acc_entry),
+            None,
+            e,
+            None,
+        )?;
 
         Ok(())
     })

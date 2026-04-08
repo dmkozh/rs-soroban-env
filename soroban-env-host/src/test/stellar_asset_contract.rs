@@ -20,10 +20,10 @@ use crate::{
     xdr::{
         self, AccountFlags, AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4,
         ContractEventType, ContractExecutable, ContractId, Hash, InvokeContractArgs,
-        LedgerEntryData, Liabilities, PublicKey, ScAddress, ScContractInstance,
-        ScErrorCode, ScErrorType, ScSymbol, ScVal, SorobanAuthorizedFunction,
-        SorobanAuthorizedInvocation, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
-        TrustLineEntryV1, TrustLineEntryV1Ext, TrustLineFlags,
+        LedgerEntryData, Liabilities, PublicKey, ScAddress, ScContractInstance, ScErrorCode,
+        ScErrorType, ScSymbol, ScVal, SorobanAuthorizedFunction, SorobanAuthorizedInvocation,
+        TrustLineAsset, TrustLineEntry, TrustLineEntryExt, TrustLineEntryV1, TrustLineEntryV1Ext,
+        TrustLineFlags,
     },
     Env, EnvBase, Host, HostError, LedgerInfo, Symbol, TryFromVal, TryIntoVal, Val,
 };
@@ -148,8 +148,10 @@ impl StellarAssetContractTest {
     fn get_trustline_balance(&self, key: &Rc<crate::storage::StorageKey>) -> i64 {
         self.host
             .with_mut_storage(|s| {
-                let le = self.host.storage_entry_to_ledger_entry(
-                    &s.get(key, &self.host, None).unwrap()).unwrap();
+                let le = self
+                    .host
+                    .storage_entry_to_ledger_entry(&s.get(key, &self.host, None).unwrap())
+                    .unwrap();
                 match &le.data {
                     LedgerEntryData::Trustline(trustline) => Ok(trustline.balance),
                     _ => unreachable!(),
@@ -187,8 +189,9 @@ impl StellarAssetContractTest {
     fn update_account_flags(&self, key: &Rc<crate::storage::StorageKey>, new_flags: u32) {
         self.host
             .with_mut_storage(|s| {
-                let entry = self.host.storage_entry_to_ledger_entry(
-                    &s.get(key, &self.host, None)?)?;
+                let entry = self
+                    .host
+                    .storage_entry_to_ledger_entry(&s.get(key, &self.host, None)?)?;
                 match entry.data.clone() {
                     LedgerEntryData::Account(mut account) => {
                         account.flags = new_flags;
@@ -197,7 +200,13 @@ impl StellarAssetContractTest {
                             &entry,
                             LedgerEntryData::Account(account),
                         )?;
-                        s.put(key, &crate::storage::StorageEntry::LedgerEntry(update), None, &self.host, None)
+                        s.put(
+                            key,
+                            &crate::storage::StorageEntry::LedgerEntry(update),
+                            None,
+                            &self.host,
+                            None,
+                        )
                     }
                     _ => unreachable!(),
                 }
@@ -266,8 +275,9 @@ impl StellarAssetContractTest {
     fn update_trustline_flags(&self, key: &Rc<crate::storage::StorageKey>, new_flags: u32) {
         self.host
             .with_mut_storage(|s| {
-                let entry = self.host.storage_entry_to_ledger_entry(
-                    &s.get(key, &self.host, None)?)?;
+                let entry = self
+                    .host
+                    .storage_entry_to_ledger_entry(&s.get(key, &self.host, None)?)?;
                 match entry.data.clone() {
                     LedgerEntryData::Trustline(mut trustline) => {
                         trustline.flags = new_flags;
@@ -276,7 +286,13 @@ impl StellarAssetContractTest {
                             &entry,
                             LedgerEntryData::Trustline(trustline),
                         )?;
-                        s.put(key, &crate::storage::StorageEntry::LedgerEntry(update), None, &self.host, None)
+                        s.put(
+                            key,
+                            &crate::storage::StorageEntry::LedgerEntry(update),
+                            None,
+                            &self.host,
+                            None,
+                        )
                     }
                     _ => unreachable!(),
                 }
@@ -368,8 +384,10 @@ impl StellarAssetContractTest {
 
         self.host
             .with_mut_storage(|s| {
-                let le = self.host.storage_entry_to_ledger_entry(
-                    &s.get(&tl_key, &self.host, None).unwrap()).unwrap();
+                let le = self
+                    .host
+                    .storage_entry_to_ledger_entry(&s.get(&tl_key, &self.host, None).unwrap())
+                    .unwrap();
                 match &le.data {
                     LedgerEntryData::Trustline(tl) => Ok(tl.clone()),
                     _ => panic!("Expected trustline entry"),
@@ -3638,7 +3656,7 @@ fn test_custom_account_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 825244,
+                instructions: 822743,
                 mem_bytes: 1216854,
                 disk_read_entries: 1,
                 memory_read_entries: 5,
@@ -3664,7 +3682,7 @@ fn test_custom_account_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 710708,
+                        instructions: 709976,
                         mem_bytes: 1197348,
                         disk_read_entries: 0,
                         memory_read_entries: 3,

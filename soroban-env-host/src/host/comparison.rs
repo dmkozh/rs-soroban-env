@@ -50,46 +50,46 @@ impl Compare<HostObject> for Host {
         use HostObject::*;
         let _span = tracy_span!("Compare<HostObject>");
         match (a, b) {
-                (U64(a), U64(b)) => self.as_budget().compare(a, b),
-                (I64(a), I64(b)) => self.as_budget().compare(a, b),
-                (TimePoint(a), TimePoint(b)) => self.as_budget().compare(a, b),
-                (Duration(a), Duration(b)) => self.as_budget().compare(a, b),
-                (U128(a), U128(b)) => self.as_budget().compare(a, b),
-                (I128(a), I128(b)) => self.as_budget().compare(a, b),
-                (U256(a), U256(b)) => self.as_budget().compare(a, b),
-                (I256(a), I256(b)) => self.as_budget().compare(a, b),
-                // Depth is enforced at object creation time.
-                (Vec(a), Vec(b)) => self.compare(a, b),
-                (Map(a), Map(b)) => self.compare(a, b),
-                (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (String(a), String(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (Symbol(a), Symbol(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (Address(a), Address(b)) => self.as_budget().compare(a, b),
-                (MuxedAddress(a), MuxedAddress(b)) => self.as_budget().compare(a, b),
+            (U64(a), U64(b)) => self.as_budget().compare(a, b),
+            (I64(a), I64(b)) => self.as_budget().compare(a, b),
+            (TimePoint(a), TimePoint(b)) => self.as_budget().compare(a, b),
+            (Duration(a), Duration(b)) => self.as_budget().compare(a, b),
+            (U128(a), U128(b)) => self.as_budget().compare(a, b),
+            (I128(a), I128(b)) => self.as_budget().compare(a, b),
+            (U256(a), U256(b)) => self.as_budget().compare(a, b),
+            (I256(a), I256(b)) => self.as_budget().compare(a, b),
+            // Depth is enforced at object creation time.
+            (Vec(a), Vec(b)) => self.compare(a, b),
+            (Map(a), Map(b)) => self.compare(a, b),
+            (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
+            (String(a), String(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
+            (Symbol(a), Symbol(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
+            (Address(a), Address(b)) => self.as_budget().compare(a, b),
+            (MuxedAddress(a), MuxedAddress(b)) => self.as_budget().compare(a, b),
 
-                // List out at least one side of all the remaining cases here so
-                // we don't accidentally forget to update this when/if a new
-                // HostObject type is added.
-                (U64(_), _)
-                | (TimePoint(_), _)
-                | (Duration(_), _)
-                | (I64(_), _)
-                | (U128(_), _)
-                | (I128(_), _)
-                | (U256(_), _)
-                | (I256(_), _)
-                | (Vec(_), _)
-                | (Map(_), _)
-                | (Bytes(_), _)
-                | (String(_), _)
-                | (Symbol(_), _)
-                | (Address(_), _)
-                | (MuxedAddress(_), _) => {
-                    let a = host_obj_discriminant(a);
-                    let b = host_obj_discriminant(b);
-                    Ok(a.cmp(&b))
-                }
+            // List out at least one side of all the remaining cases here so
+            // we don't accidentally forget to update this when/if a new
+            // HostObject type is added.
+            (U64(_), _)
+            | (TimePoint(_), _)
+            | (Duration(_), _)
+            | (I64(_), _)
+            | (U128(_), _)
+            | (I128(_), _)
+            | (U256(_), _)
+            | (I256(_), _)
+            | (Vec(_), _)
+            | (Map(_), _)
+            | (Bytes(_), _)
+            | (String(_), _)
+            | (Symbol(_), _)
+            | (Address(_), _)
+            | (MuxedAddress(_), _) => {
+                let a = host_obj_discriminant(a);
+                let b = host_obj_discriminant(b);
+                Ok(a.cmp(&b))
             }
+        }
     }
 }
 
@@ -296,12 +296,8 @@ impl Compare<ScVal> for Budget {
         match (a, b) {
             // Only Vec and Map can recurse into more ScVal, so only they
             // need the depth limit checkpoint.
-            (Vec(Some(a)), Vec(Some(b))) => {
-                self.with_limited_depth(|| self.compare(a, b))
-            }
-            (Map(Some(a)), Map(Some(b))) => {
-                self.with_limited_depth(|| self.compare(a, b))
-            }
+            (Vec(Some(a)), Vec(Some(b))) => self.with_limited_depth(|| self.compare(a, b)),
+            (Map(Some(a)), Map(Some(b))) => self.with_limited_depth(|| self.compare(a, b)),
 
             (Vec(None), _) | (_, Vec(None)) | (Map(None), _) | (_, Map(None)) => {
                 Err((ScErrorType::Value, ScErrorCode::InvalidInput).into())
@@ -528,9 +524,7 @@ impl Compare<StorageKey> for Host {
             (StorageKey::Other(a_lk), StorageKey::Other(b_lk)) => {
                 self.as_budget().compare(a_lk, b_lk)
             }
-            _ => {
-                Ok(storage_key_discriminant(a).cmp(&storage_key_discriminant(b)))
-            }
+            _ => Ok(storage_key_discriminant(a).cmp(&storage_key_discriminant(b))),
         }
     }
 }
@@ -578,12 +572,10 @@ impl Host {
                         (None, None) => return Ok(Ordering::Equal),
                         (None, Some(_)) => return Ok(Ordering::Less),
                         (Some(_), None) => return Ok(Ordering::Greater),
-                        (Some(av), Some(bv)) => {
-                            match self.compare_val_unmetered(*av, *bv)? {
-                                Ordering::Equal => i += 1,
-                                unequal => return Ok(unequal),
-                            }
-                        }
+                        (Some(av), Some(bv)) => match self.compare_val_unmetered(*av, *bv)? {
+                            Ordering::Equal => i += 1,
+                            unequal => return Ok(unequal),
+                        },
                     }
                 }
             }
@@ -598,12 +590,10 @@ impl Host {
                         (Some(_), None) => return Ok(Ordering::Greater),
                         (Some((ak, av)), Some((bk, bv))) => {
                             match self.compare_val_unmetered(*ak, *bk)? {
-                                Ordering::Equal => {
-                                    match self.compare_val_unmetered(*av, *bv)? {
-                                        Ordering::Equal => i += 1,
-                                        unequal => return Ok(unequal),
-                                    }
-                                }
+                                Ordering::Equal => match self.compare_val_unmetered(*av, *bv)? {
+                                    Ordering::Equal => i += 1,
+                                    unequal => return Ok(unequal),
+                                },
                                 unequal => return Ok(unequal),
                             }
                         }
@@ -636,11 +626,7 @@ impl Host {
     /// Compare two Vals without any budget charges.
     /// For inline Vals, uses proper typed comparison via wrapper Ord impls.
     /// For object Vals, looks up HostObjects and recurses.
-    pub(crate) fn compare_val_unmetered(
-        &self,
-        a: Val,
-        b: Val,
-    ) -> Result<Ordering, HostError> {
+    pub(crate) fn compare_val_unmetered(&self, a: Val, b: Val) -> Result<Ordering, HostError> {
         if a.get_payload() == b.get_payload() {
             return Ok(Ordering::Equal);
         }

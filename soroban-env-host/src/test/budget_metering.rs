@@ -250,21 +250,22 @@ fn map_insert_key_vec_obj() -> Result<(), HostError> {
     host.map_put(m, k1.into(), v1)?;
 
     host.with_budget(|budget| {
-        // 17 visit-objs =
+        // 13 visit-objs =
         //    1 to ensure value integrity of key for first map-put
         //  + 1 to get map to do first map-put
         //  + 1 to ensure value integrity of key for second map-put
         //  + 1 to get map to do second map-put
-        //  + 2 to check integrity of k0 and k1 for obj_cmp during lookup
-        //  + 2 for actually doing comparison in obj_cmp
-        //  + 4 more to do same 2+2 visits when validating order of new map
+        //  + 2 for actually doing comparison in obj_cmp during lookup
+        //  + 2 for actually doing comparison in obj_cmp when validating order of new map
         //  + 5 lookups on objects returned from 5 host fn calls to check their integrity
-        // = 17
+        // = 13
+        // (obj_cmp called from Compare<Val> uses obj_cmp_internal which
+        //  bypasses check_env_arg, saving 2 VisitObject charges per call)
         assert_eq!(
             budget
                 .get_tracker(ContractCostType::VisitObject)?
                 .iterations,
-            17
+            13
         );
         // upper bound of number of map-accesses, counting both binary-search, point-access and validate-scan.
         Ok(())
@@ -575,19 +576,13 @@ fn bench_budget_charge_constant() {
     let budget = make_unlimited_budget();
     // Warm up
     for _ in 0..10_000 {
-        budget
-            .charge(ContractCostType::WasmInsnExec, None)
-            .unwrap();
+        budget.charge(ContractCostType::WasmInsnExec, None).unwrap();
     }
 
     let iterations = 10_000_000u64;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
-        std::hint::black_box(
-            budget
-                .charge(ContractCostType::WasmInsnExec, None)
-                .unwrap(),
-        );
+        std::hint::black_box(budget.charge(ContractCostType::WasmInsnExec, None).unwrap());
     }
     let elapsed = start.elapsed();
     eprintln!(
@@ -664,19 +659,13 @@ fn bench_budget_bulk_charge() {
 fn bench_budget_charge_production() {
     let budget = make_production_budget();
     for _ in 0..10_000 {
-        budget
-            .charge(ContractCostType::WasmInsnExec, None)
-            .unwrap();
+        budget.charge(ContractCostType::WasmInsnExec, None).unwrap();
     }
 
     let iterations = 10_000_000u64;
     let start = std::time::Instant::now();
     for _ in 0..iterations {
-        std::hint::black_box(
-            budget
-                .charge(ContractCostType::WasmInsnExec, None)
-                .unwrap(),
-        );
+        std::hint::black_box(budget.charge(ContractCostType::WasmInsnExec, None).unwrap());
     }
     let elapsed = start.elapsed();
     eprintln!(
@@ -811,9 +800,7 @@ fn make_test_scval_map(n_entries: usize) -> ScVal {
 }
 
 fn make_test_scval_vec(n_entries: usize) -> ScVal {
-    let entries: Vec<ScVal> = (0..n_entries)
-        .map(|i| ScVal::U64(i as u64))
-        .collect();
+    let entries: Vec<ScVal> = (0..n_entries).map(|i| ScVal::U64(i as u64)).collect();
     ScVal::Vec(Some(ScVec(entries.try_into().unwrap())))
 }
 
@@ -912,9 +899,7 @@ fn bench_from_host_val_map() {
                 format!("key_{i:03}").try_into().unwrap(),
             )))
             .unwrap();
-        let val = host
-            .to_host_val(&ScVal::U64(i as u64))
-            .unwrap();
+        let val = host.to_host_val(&ScVal::U64(i as u64)).unwrap();
         pairs.push((key, val));
     }
     let map = HostMap::from_map(pairs, &host).unwrap();
@@ -974,7 +959,9 @@ fn bench_storage_has_contract_data() {
 
     struct Noop;
     impl ContractFunctionSet for Noop {
-        fn call(&self, _: &Symbol, _: &Host, _: &[Val]) -> Option<Val> { None }
+        fn call(&self, _: &Symbol, _: &Host, _: &[Val]) -> Option<Val> {
+            None
+        }
     }
     let contract_id = ContractId(Hash([7u8; 32]));
     let address = host
@@ -1033,7 +1020,9 @@ fn bench_storage_get_contract_data() {
 
     struct Noop;
     impl ContractFunctionSet for Noop {
-        fn call(&self, _: &Symbol, _: &Host, _: &[Val]) -> Option<Val> { None }
+        fn call(&self, _: &Symbol, _: &Host, _: &[Val]) -> Option<Val> {
+            None
+        }
     }
     let contract_id = ContractId(Hash([7u8; 32]));
     let address = host
