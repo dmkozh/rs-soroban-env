@@ -1082,3 +1082,56 @@ fn bench_storage_get_contract_data() {
     )
     .unwrap();
 }
+
+use soroban_env_common::xdr::{LedgerKey, LedgerKeyContractCode};
+
+fn make_test_contract_code_key() -> LedgerKey {
+    LedgerKey::ContractCode(LedgerKeyContractCode {
+        hash: soroban_env_common::xdr::Hash([42u8; 32]),
+    })
+}
+
+#[test]
+fn bench_metered_clone_ledger_key() {
+    let budget = Budget::default();
+    budget.reset_unlimited().unwrap();
+    let key = make_test_contract_code_key();
+
+    for _ in 0..1_000 {
+        std::hint::black_box(key.metered_clone(&budget).unwrap());
+    }
+
+    let iterations = 2_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(key.metered_clone(&budget).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "LedgerKey::ContractCode metered_clone: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
+
+#[test]
+fn bench_metered_compare_ledger_key() {
+    let budget = Budget::default();
+    budget.reset_unlimited().unwrap();
+    let key_a = make_test_contract_code_key();
+    let key_b = make_test_contract_code_key();
+
+    for _ in 0..1_000 {
+        std::hint::black_box(budget.compare(&key_a, &key_b).unwrap());
+    }
+
+    let iterations = 2_000_000u64;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        std::hint::black_box(budget.compare(&key_a, &key_b).unwrap());
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "LedgerKey::ContractCode compare: {:.0} ns/call ({iterations} iters, {elapsed:.2?})",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+}
