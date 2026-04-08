@@ -81,6 +81,22 @@ where
             Some(Self::ENTRY_SIZE.saturating_mul(mag.saturating_add(1u32) as u64)),
         )
     }
+
+    /// Charge budget for an N*log2(N) sort over entries of this map's
+    /// key/value size. Covers both the access (MemCpy) and comparison
+    /// (MemCmp) costs proportional to the sort work.
+    pub fn charge_sort(n: usize, b: &impl AsBudget) -> Result<(), HostError> {
+        let mag: u64 = 64u64.saturating_sub((n as u64).leading_zeros() as u64);
+        let n_log_n = (n as u64).saturating_mul(mag.saturating_add(1));
+        b.as_budget().charge(
+            ContractCostType::MemCpy,
+            Some(Self::ENTRY_SIZE.saturating_mul(n_log_n)),
+        )?;
+        b.as_budget().charge(
+            ContractCostType::MemCmp,
+            Some(<K as DeclaredSizeForMetering>::DECLARED_SIZE.saturating_mul(n_log_n)),
+        )
+    }
 }
 
 impl<K, V, Ctx> Default for MeteredOrdMap<K, V, Ctx>

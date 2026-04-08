@@ -770,7 +770,9 @@ impl Host {
             .collect::<Result<Vec<_>, HostError>>()?;
         // Sort by LedgerKey ordering (may differ from StorageKey ordering
         // due to different comparison logic for mixed key variants).
+        crate::storage::LedgerKeyEntryMap::charge_sort(map_entries.len(), budget)?;
         map_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        crate::storage::LedgerKeyFootprintMap::charge_sort(fp_entries.len(), budget)?;
         fp_entries.sort_by(|a, b| a.0.cmp(&b.0));
         let lk_map = crate::storage::LedgerKeyEntryMap::from_map(map_entries, budget)?;
         let lk_fp = crate::storage::LedgerKeyFootprintMap::from_map(fp_entries, budget)?;

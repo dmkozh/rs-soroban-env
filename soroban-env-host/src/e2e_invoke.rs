@@ -996,7 +996,7 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
     #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
 ) -> Result<(StorageMap, TtlEntryMap), HostError> {
     let budget = host.budget_ref();
-    let mut storage_map = StorageMap::new();
+    let mut storage_entries: Vec<(Rc<crate::storage::StorageKey>, Option<EntryWithLiveUntil>)> = Vec::new();
     let mut ttl_map = TtlEntryMap::new();
 
     if encoded_ledger_entries.len() != encoded_ttl_entries.len() {
@@ -1072,25 +1072,55 @@ fn build_storage_map_from_xdr_ledger_entries<T: AsRef<[u8]>, I: ExactSizeIterato
             .into());
         }
 
-        if !footprint
+        // Use footprint key for consistency (same Rc as the footprint map).
+        let fp_key = footprint
             .0
-            .contains_key::<crate::storage::StorageKey>(&storage_key, host)?
-        {
-            return Err(Error::from_type_and_code(
-                ScErrorType::Storage,
-                ScErrorCode::InternalError,
-            )
-            .into());
+            .get::<crate::storage::StorageKey>(&storage_key, host)?
+            .map(|_| {
+                // Find the matching footprint Rc by scanning — the footprint is small.
+                footprint
+                    .0
+                    .keys(host)
+                    .ok()
+                    .and_then(|mut ks| ks.find(|k| {
+                        <Host as crate::Compare<crate::storage::StorageKey>>::compare(
+                            host, k.as_ref(), storage_key.as_ref(),
+                        ).ok() == Some(std::cmp::Ordering::Equal)
+                    }))
+            })
+            .flatten();
+        match fp_key {
+            Some(fk) => storage_entries.push((Rc::clone(fk), Some((le, live_until_ledger)))),
+            None => {
+                return Err(Error::from_type_and_code(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                ).into());
+            }
         }
-        storage_map = storage_map.insert(storage_key, Some((le, live_until_ledger)), host)?;
     }
 
     // Add non-existing entries from the footprint to the storage.
-    for k in footprint.0.keys(host)? {
-        if !storage_map.contains_key::<crate::storage::StorageKey>(k, host)? {
-            storage_map = storage_map.insert(Rc::clone(k), None, host)?;
+    // The footprint is already sorted, so we can iterate it directly.
+    for (k, _) in footprint.0.iter(host)? {
+        let already_has = storage_entries.iter().any(|(sk, _)| Rc::ptr_eq(sk, k));
+        if !already_has {
+            storage_entries.push((Rc::clone(k), None));
         }
     }
+
+    // Storage entries now use footprint Rc keys, so they sort in footprint order.
+    // Charge for the sort and build the sorted storage map.
+    StorageMap::charge_sort(storage_entries.len(), host.budget_ref())?;
+    storage_entries.sort_by(|a, b| {
+        <Host as crate::Compare<crate::storage::StorageKey>>::compare(
+            host,
+            a.0.as_ref(),
+            b.0.as_ref(),
+        )
+        .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let storage_map = StorageMap::from_map(storage_entries, host)?;
     Ok((storage_map, ttl_map))
 }
 
