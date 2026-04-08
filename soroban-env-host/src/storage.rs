@@ -46,7 +46,8 @@ pub enum StorageKey {
     /// Contract instance: just needs contract_id.
     ContractInstance { contract_id: Hash },
     /// Everything else (Account, Trustline, ContractCode, or external ContractData).
-    Other(LedgerKey),
+    /// Wrapped in XdrObject for O(1) metered clone/compare.
+    Other(crate::host::xdr_object::XdrObject<LedgerKey>),
 }
 
 impl StorageKey {
@@ -79,7 +80,10 @@ impl StorageKey {
                 }),
                 host.as_budget(),
             ),
-            StorageKey::Other(lk) => Rc::metered_new(lk.metered_clone(host.as_budget())?, host.as_budget()),
+            StorageKey::Other(ref xdr_lk) => {
+                let lk: &LedgerKey = xdr_lk;
+                Rc::metered_new(lk.metered_clone(host.as_budget())?, host.as_budget())
+            }
         }
     }
 
@@ -87,7 +91,7 @@ impl StorageKey {
     /// Returns `None` for `ContractData` and `ContractInstance` variants.
     pub fn as_ledger_key(&self) -> Option<&LedgerKey> {
         match self {
-            StorageKey::Other(lk) => Some(lk),
+            StorageKey::Other(ref xdr_lk) => Some(xdr_lk.as_ref()),
             _ => None,
         }
     }
@@ -105,12 +109,12 @@ impl StorageKey {
                             ScAddress::Contract(id) => Ok(StorageKey::ContractInstance {
                                 contract_id: id.0.metered_clone(host.as_budget())?,
                             }),
-                            _ => Ok(StorageKey::Other(lk)),
+                            _ => Ok(StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?)),
                         }
                     }
                     // Nonce keys are internal (used for auth) and don't go
                     // through the contract Val path — keep as Other.
-                    ScVal::LedgerKeyNonce(_) => Ok(StorageKey::Other(lk)),
+                    ScVal::LedgerKeyNonce(_) => Ok(StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?)),
                     _ => {
                         // Regular contract data: convert ScVal to Val.
                         // Uses to_host_val_for_storage which recursively
@@ -124,12 +128,12 @@ impl StorageKey {
                                     durability: cd.durability,
                                 })
                             }
-                            _ => Ok(StorageKey::Other(lk)),
+                            _ => Ok(StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?)),
                         }
                     }
                 }
             }
-            _ => Ok(StorageKey::Other(lk)),
+            _ => Ok(StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(lk, host.as_budget())?)),
         }
     }
 
@@ -138,7 +142,7 @@ impl StorageKey {
         match self {
             StorageKey::ContractData { durability, .. } => Some(*durability),
             StorageKey::ContractInstance { .. } => Some(ContractDataDurability::Persistent),
-            StorageKey::Other(lk) => crate::ledger_info::get_key_durability(lk),
+            StorageKey::Other(ref xdr_lk) => crate::ledger_info::get_key_durability(xdr_lk.as_ref()),
         }
     }
 }
@@ -363,7 +367,7 @@ impl Storage {
     pub fn check_supported_storage_key_type(sk: &StorageKey) -> Result<(), HostError> {
         match sk {
             StorageKey::ContractData { .. } | StorageKey::ContractInstance { .. } => Ok(()),
-            StorageKey::Other(lk) => Self::check_supported_ledger_key_type(lk),
+            StorageKey::Other(ref xdr_lk) => Self::check_supported_ledger_key_type(xdr_lk.as_ref()),
         }
     }
 
@@ -931,7 +935,7 @@ fn get_storage_key_type_string_for_error(sk: &StorageKey) -> &str {
     match sk {
         StorageKey::ContractData { .. } => "contract data key",
         StorageKey::ContractInstance { .. } => "contract instance",
-        StorageKey::Other(lk) => match lk {
+        StorageKey::Other(ref xdr_lk) => match xdr_lk.as_ref() {
             LedgerKey::ContractData(cd) => match cd.key {
                 ScVal::LedgerKeyContractInstance => "contract instance",
                 ScVal::LedgerKeyNonce(_) => "nonce",
@@ -1024,8 +1028,8 @@ impl Host {
                     res.push(address_val);
                 }
             }
-            StorageKey::Other(lk) => {
-                return self.get_args_for_error(lk, key_val, can_create_new_objects);
+            StorageKey::Other(ref xdr_lk) => {
+                return self.get_args_for_error(xdr_lk.as_ref(), key_val, can_create_new_objects);
             }
         }
         Ok(res)
@@ -1086,7 +1090,7 @@ pub(crate) fn is_persistent_storage_key(key: &StorageKey) -> bool {
             matches!(durability, ContractDataDurability::Persistent)
         }
         StorageKey::ContractInstance { .. } => true,
-        StorageKey::Other(lk) => match lk {
+        StorageKey::Other(ref xdr_lk) => match xdr_lk.as_ref() {
             LedgerKey::ContractData(k) => {
                 matches!(k.durability, ContractDataDurability::Persistent)
             }

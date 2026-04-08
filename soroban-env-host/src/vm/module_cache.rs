@@ -100,7 +100,7 @@ impl ModuleCache {
         use crate::xdr::{ContractCodeEntry, ContractCodeEntryExt, LedgerEntryData, LedgerKey};
         let storage = host.try_borrow_storage()?;
         for (k, v) in storage.map.iter(host)? {
-            if let crate::storage::StorageKey::Other(LedgerKey::ContractCode(_)) = &**k {
+            if let Some(LedgerKey::ContractCode(_)) = k.as_ledger_key() {
                 if let Some((e, _)) = v {
                     let le = match e {
                         crate::storage::StorageEntry::LedgerEntry(le) => le,

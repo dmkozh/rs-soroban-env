@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::budget::AsBudget;
+use crate::host::xdr_object::xdr_object_from_value;
 use crate::host_object::MuxedScAddress;
 use crate::storage::{AccessType, Footprint, Storage, StorageKey};
 use crate::xdr::{
@@ -17,13 +18,13 @@ fn footprint_record_access() -> Result<(), HostError> {
     host.as_budget().reset_unlimited()?;
     let mut fp = Footprint::default();
     // record when key not exist
-    let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+    let key = Rc::new(StorageKey::Other(xdr_object_from_value(LedgerKey::ContractData(
         LedgerKeyContractData {
             contract: ScAddress::Contract(ContractId([0; 32].into())),
             key: ScVal::I32(0),
             durability: ContractDataDurability::Persistent,
         },
-    )));
+    ), host.as_budget()).unwrap()));
     fp.record_access(&key, AccessType::ReadOnly, &host)?;
     assert_eq!(fp.0.contains_key::<StorageKey>(&key, &host)?, true);
     assert_eq!(
@@ -47,22 +48,22 @@ fn footprint_record_access() -> Result<(), HostError> {
 #[test]
 fn footprint_enforce_access() -> Result<(), HostError> {
     let host = Host::test_host_with_recording_footprint();
-    let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+    let key = Rc::new(StorageKey::Other(xdr_object_from_value(LedgerKey::ContractData(
         LedgerKeyContractData {
             contract: ScAddress::Contract(ContractId([0; 32].into())),
             key: ScVal::I32(0),
             durability: ContractDataDurability::Persistent,
         },
-    )));
+    ), host.as_budget()).unwrap()));
 
     // Key not in footprint. Only difference is type_
-    let key2 = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+    let key2 = Rc::new(StorageKey::Other(xdr_object_from_value(LedgerKey::ContractData(
         LedgerKeyContractData {
             contract: ScAddress::Contract(ContractId([0; 32].into())),
             key: ScVal::I32(0),
             durability: ContractDataDurability::Temporary,
         },
-    )));
+    ), host.as_budget()).unwrap()));
 
     let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
     let mom = MeteredOrdMap::from_map(om, &host)?;
@@ -82,13 +83,13 @@ fn footprint_enforce_access() -> Result<(), HostError> {
 fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
     let host = Host::test_host_with_recording_footprint();
     let mut fp = Footprint::default();
-    let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+    let key = Rc::new(StorageKey::Other(xdr_object_from_value(LedgerKey::ContractData(
         LedgerKeyContractData {
             contract: ScAddress::Contract(ContractId([0; 32].into())),
             key: ScVal::I32(0),
             durability: ContractDataDurability::Persistent,
         },
-    )));
+    ), host.as_budget()).unwrap()));
     let res = fp.enforce_access(&key, AccessType::ReadOnly, &host);
     assert!(HostError::result_matches_err(
         res,
@@ -100,13 +101,13 @@ fn footprint_enforce_access_not_exist() -> Result<(), HostError> {
 #[test]
 fn footprint_attempt_to_write_readonly_entry() -> Result<(), HostError> {
     let host = Host::test_host_with_recording_footprint();
-    let key = Rc::new(StorageKey::Other(LedgerKey::ContractData(
+    let key = Rc::new(StorageKey::Other(xdr_object_from_value(LedgerKey::ContractData(
         LedgerKeyContractData {
             contract: ScAddress::Contract(ContractId([0; 32].into())),
             key: ScVal::I32(0),
             durability: ContractDataDurability::Persistent,
         },
-    )));
+    ), host.as_budget()).unwrap()));
     let om = [(Rc::clone(&key), AccessType::ReadOnly)].into();
     let mom = MeteredOrdMap::from_map(om, &host)?;
     let mut fp = Footprint(mom);

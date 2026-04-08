@@ -419,14 +419,14 @@ impl Host {
                     .map(|(k, accesstype)| {
                         let mut accesstype = *accesstype;
                         match k.as_ref() {
-                            crate::storage::StorageKey::Other(
-                                crate::xdr::LedgerKey::ContractData(cd),
-                            ) => {
-                                if let Some((_, ro)) = data_keys.get(&cd.key) {
-                                    if *ro {
-                                        accesstype = crate::storage::AccessType::ReadOnly;
-                                    } else {
-                                        accesstype = crate::storage::AccessType::ReadWrite;
+                            crate::storage::StorageKey::Other(ref xdr_lk) => {
+                                if let crate::xdr::LedgerKey::ContractData(cd) = xdr_lk.as_ref() {
+                                    if let Some((_, ro)) = data_keys.get(&cd.key) {
+                                        if *ro {
+                                            accesstype = crate::storage::AccessType::ReadOnly;
+                                        } else {
+                                            accesstype = crate::storage::AccessType::ReadWrite;
+                                        }
                                     }
                                 }
                             }
@@ -459,10 +459,10 @@ impl Host {
             }
             // Reset any nonces so they can be consumed.
             for (_k, v) in entries.iter_mut() {
-                let is_nonce = match _k.as_ref() {
-                    crate::storage::StorageKey::Other(
-                        crate::xdr::LedgerKey::ContractData(cd),
-                    ) => matches!(&cd.key, ScVal::LedgerKeyNonce(_)),
+                let is_nonce = match _k.as_ledger_key() {
+                    Some(crate::xdr::LedgerKey::ContractData(cd)) => {
+                        matches!(&cd.key, ScVal::LedgerKeyNonce(_))
+                    }
                     _ => false,
                 };
                 if is_nonce {

@@ -573,8 +573,8 @@ fn read_trustline_entry(
     let entry = storage.try_get(&lk, &host, None)?.ok_or_else(|| {
         // Extract the LedgerKey for error reporting if possible.
         let account_address = match lk.as_ref() {
-            crate::storage::StorageKey::Other(ledger_key) => {
-                host.account_address_from_key(ledger_key)
+            crate::storage::StorageKey::Other(ref xdr_lk) => {
+                host.account_address_from_key(xdr_lk.as_ref())
             }
             _ => Ok(Val::VOID.into()),
         };

@@ -130,11 +130,16 @@ impl Host {
         &self,
         wasm_hash: &Hash,
     ) -> Result<Rc<StorageKey>, HostError> {
+        use crate::host::xdr_object::XdrObject;
         let wasm_hash = wasm_hash.metered_clone(self.as_budget())?;
+        // LedgerKey::ContractCode XDR: 4 (discriminant) + 32 (hash) = 36 bytes
         Rc::metered_new(
-            StorageKey::Other(LedgerKey::ContractCode(LedgerKeyContractCode {
-                hash: wasm_hash,
-            })),
+            StorageKey::Other(XdrObject::new(
+                LedgerKey::ContractCode(LedgerKeyContractCode {
+                    hash: wasm_hash,
+                }),
+                36,
+            )),
             self.as_budget(),
         )
     }
@@ -404,8 +409,13 @@ impl Host {
     }
 
     pub(crate) fn to_account_key(&self, account_id: AccountId) -> Result<Rc<StorageKey>, HostError> {
+        use crate::host::xdr_object::XdrObject;
+        // LedgerKey::Account XDR: 4 (discriminant) + 4 (pk discriminant) + 32 (ed25519) = 40 bytes
         Rc::metered_new(
-            StorageKey::Other(LedgerKey::Account(LedgerKeyAccount { account_id })),
+            StorageKey::Other(XdrObject::new(
+                LedgerKey::Account(LedgerKeyAccount { account_id }),
+                40,
+            )),
             self.as_budget(),
         )
     }
@@ -432,10 +442,13 @@ impl Host {
         asset: TrustLineAsset,
     ) -> Result<Rc<StorageKey>, HostError> {
         Rc::metered_new(
-            StorageKey::Other(LedgerKey::Trustline(LedgerKeyTrustLine {
-                account_id,
-                asset,
-            })),
+            StorageKey::Other(crate::host::xdr_object::xdr_object_from_value(
+                LedgerKey::Trustline(LedgerKeyTrustLine {
+                    account_id,
+                    asset,
+                }),
+                self.as_budget(),
+            )?),
             self.as_budget(),
         )
     }

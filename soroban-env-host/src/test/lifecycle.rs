@@ -916,7 +916,10 @@ mod cap_54_55_56 {
             panic!("expected Wasm executable");
         };
         let code_key = Rc::new(crate::storage::StorageKey::Other(
-            LedgerKey::ContractCode(xdr::LedgerKeyContractCode { hash: wasm_hash }),
+            crate::host::xdr_object::xdr_object_from_value(
+                LedgerKey::ContractCode(xdr::LedgerKeyContractCode { hash: wasm_hash }),
+                host.as_budget(),
+            ).unwrap(),
         ));
         let mut storage = host.try_borrow_storage_mut()?;
         let (entry_se, live_until_ledger) =
@@ -1852,8 +1855,8 @@ mod cap_58_constructor {
                     DetailedInvocationResources {
                         invocation: CreateContractEntryPoint,
                         resources: SubInvocationResources {
-                            instructions: 892847,
-                            mem_bytes: 3470041,
+                            instructions: 892861,
+                            mem_bytes: 3470153,
                             disk_read_entries: 0,
                             memory_read_entries: 6,
                             write_entries: 3,
@@ -1878,8 +1881,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 623507,
-                                    mem_bytes: 2338617,
+                                    instructions: 623516,
+                                    mem_bytes: 2338689,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
                                     write_entries: 2,
@@ -1904,8 +1907,8 @@ mod cap_58_constructor {
                                             ),
                                         ),
                                         resources: SubInvocationResources {
-                                            instructions: 348252,
-                                            mem_bytes: 1207475,
+                                            instructions: 348255,
+                                            mem_bytes: 1207499,
                                             disk_read_entries: 0,
                                             memory_read_entries: 2,
                                             write_entries: 0,
@@ -2010,8 +2013,8 @@ mod cap_58_constructor {
                             ),
                         ),
                         resources: SubInvocationResources {
-                            instructions: 2397214,
-                            mem_bytes: 5948112,
+                            instructions: 2397241,
+                            mem_bytes: 5948328,
                             disk_read_entries: 0,
                             memory_read_entries: 8,
                             write_entries: 3,
@@ -2036,8 +2039,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 909431,
-                                    mem_bytes: 2386783,
+                                    instructions: 909441,
+                                    mem_bytes: 2386863,
                                     disk_read_entries: 0,
                                     memory_read_entries: 4,
                                     write_entries: 2,
@@ -2062,8 +2065,8 @@ mod cap_58_constructor {
                                             ),
                                         ),
                                         resources: SubInvocationResources {
-                                            instructions: 349826,
-                                            mem_bytes: 1207735,
+                                            instructions: 349829,
+                                            mem_bytes: 1207759,
                                             disk_read_entries: 0,
                                             memory_read_entries: 2,
                                             write_entries: 0,
@@ -2091,8 +2094,8 @@ mod cap_58_constructor {
                                     ),
                                 ),
                                 resources: SubInvocationResources {
-                                    instructions: 543512,
-                                    mem_bytes: 1175064,
+                                    instructions: 543520,
+                                    mem_bytes: 1175128,
                                     disk_read_entries: 0,
                                     memory_read_entries: 0,
                                     write_entries: 0,

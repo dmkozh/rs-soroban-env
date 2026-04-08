@@ -297,7 +297,10 @@ pub(crate) fn create_account(
 ) {
     let key = host.to_account_key(account_id.clone()).unwrap();
     let account_id = match key.as_ref() {
-        crate::storage::StorageKey::Other(LedgerKey::Account(acc)) => acc.account_id.clone(),
+        crate::storage::StorageKey::Other(ref xdr_lk) => match xdr_lk.as_ref() {
+            LedgerKey::Account(acc) => acc.account_id.clone(),
+            _ => unreachable!(),
+        },
         _ => unreachable!(),
     };
     let mut acc_signers = vec![];

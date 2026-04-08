@@ -184,10 +184,10 @@ impl_declared_size_type!(InvokeContractArgs, 96);
 impl_declared_size_type!(ContractIdPreimage, 80);
 impl_declared_size_type!(ContractDataDurability, 4);
 
-// StorageKey: largest variant is Other(LedgerKey) = 120, but ContractData has
-// Hash(32) + Val(8) + ContractDataDurability(4) + discriminant(4) = 48.
-// We use 120 to cover the Other(LedgerKey) case.
-impl_declared_size_type!(crate::storage::StorageKey, 120);
+// StorageKey: largest variant is Other(XdrObject<LedgerKey>) = 120 + 4 = 124.
+// ContractData has Hash(32) + Val(8) + ContractDataDurability(4) + discriminant(4) = 48.
+// We use 128 to cover the Other(XdrObject<LedgerKey>) case with padding.
+impl_declared_size_type!(crate::storage::StorageKey, 128);
 
 // StorageEntry: max of ContractDataVal(Val=8) and LedgerEntry(Rc=8) + discriminant(8) = 16.
 impl_declared_size_type!(crate::storage::StorageEntry, 16);

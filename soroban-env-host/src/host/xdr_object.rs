@@ -115,6 +115,22 @@ impl<T: Ord + DeclaredSizeForMetering> Compare<XdrObject<T>> for Host {
 // Rc<XdrObject<T>> comparison delegates to XdrObject<T> comparison.
 // (The blanket impl in soroban-env-common handles this for Compare<Rc<T>>.)
 
+/// Create XdrObject by computing XDR size via serialization.
+/// Use this when building from Rust-side values (not from XDR bytes).
+pub fn xdr_object_from_value<T>(value: T, budget: &Budget) -> Result<XdrObject<T>, HostError>
+where
+    T: soroban_env_common::xdr::WriteXdr,
+{
+    use crate::DEFAULT_XDR_RW_LIMITS;
+    // Compute size without metering (this is infrastructure overhead).
+    let size = value
+        .to_xdr(DEFAULT_XDR_RW_LIMITS)
+        .map(|v| v.len() as u32)
+        .unwrap_or(0);
+    let _ = budget; // budget available if needed for future metering
+    Ok(XdrObject::new(value, size))
+}
+
 /// Helper to create XdrObject from metered XDR deserialization.
 #[allow(dead_code)]
 pub fn metered_from_xdr_to_xdr_object<T>(
@@ -122,7 +138,7 @@ pub fn metered_from_xdr_to_xdr_object<T>(
     budget: &Budget,
 ) -> Result<XdrObject<T>, HostError>
 where
-    T: stellar_xdr::curr::ReadXdr,
+    T: soroban_env_common::xdr::ReadXdr,
 {
     let inner = crate::host::metered_xdr::metered_from_xdr_with_budget::<T>(bytes, budget)?;
     Ok(XdrObject::new(inner, bytes.len() as u32))

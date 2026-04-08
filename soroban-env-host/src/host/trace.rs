@@ -17,7 +17,10 @@ fn metered_hash_storage_key(
     budget: &Budget,
 ) -> Result<(), HostError> {
     match sk {
-        StorageKey::Other(lk) => lk.metered_hash_xdr(hasher, budget),
+        StorageKey::Other(ref xdr_lk) => {
+            let lk: &crate::xdr::LedgerKey = xdr_lk.as_ref();
+            lk.metered_hash_xdr(hasher, budget)
+        }
         StorageKey::ContractData {
             contract_id,
             key,
