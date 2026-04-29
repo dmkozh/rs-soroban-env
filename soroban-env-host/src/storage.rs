@@ -7,6 +7,7 @@
 //!   - [Env::put_contract_data](crate::Env::put_contract_data)
 //!   - [Env::del_contract_data](crate::Env::del_contract_data)
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::budget::AsBudget;
@@ -180,6 +181,17 @@ pub struct Storage {
     pub footprint: Footprint,
     pub(crate) mode: FootprintMode,
     pub map: StorageMap,
+    /// PoC H002: side index from `LedgerKey` to its position in
+    /// `footprint.0.map`. Built only by `with_enforcing_footprint_and_map`;
+    /// `None` for recording-mode or test-constructed `Storage`s, which use
+    /// the legacy binary-search lookup path.
+    pub(crate) enforce_footprint_idx: Option<Rc<HashMap<LedgerKey, usize>>>,
+    /// PoC H002: side index from `LedgerKey` to its position in `map.map`.
+    /// Built only by `with_enforcing_footprint_and_map`. The storage map's
+    /// key set is fixed at construction (declared by the footprint) and only
+    /// values change in enforcing mode, so positions remain valid across
+    /// in-place replaces.
+    pub(crate) enforce_storage_idx: Option<Rc<HashMap<LedgerKey, usize>>>,
 }
 
 /// Helper struct holding common state for TTL extension operations.
@@ -231,10 +243,27 @@ impl Storage {
     /// given [Footprint] and a storage map populated with all the keys
     /// listed in the [Footprint].
     pub fn with_enforcing_footprint_and_map(footprint: Footprint, map: StorageMap) -> Self {
+        // PoC H002: precompute side indices that map each LedgerKey to its
+        // position in the underlying sorted vector. The footprint and storage
+        // maps are immutable in their key set during enforcing-mode execution
+        // (the storage map is preinitialized with all footprint keys, and
+        // writes only replace existing entries), so these indices remain valid
+        // for the lifetime of this Storage.
+        let mut fp_idx: HashMap<LedgerKey, usize> =
+            HashMap::with_capacity(footprint.0.map.len());
+        for (i, (k, _)) in footprint.0.map.iter().enumerate() {
+            fp_idx.insert((**k).clone(), i);
+        }
+        let mut st_idx: HashMap<LedgerKey, usize> = HashMap::with_capacity(map.map.len());
+        for (i, (k, _)) in map.map.iter().enumerate() {
+            st_idx.insert((**k).clone(), i);
+        }
         Self {
             mode: FootprintMode::Enforcing,
             footprint,
             map,
+            enforce_footprint_idx: Some(Rc::new(fp_idx)),
+            enforce_storage_idx: Some(Rc::new(st_idx)),
         }
     }
 
@@ -246,7 +275,49 @@ impl Storage {
             mode: FootprintMode::Recording(src),
             footprint: Footprint::default(),
             map: Default::default(),
+            enforce_footprint_idx: None,
+            enforce_storage_idx: None,
         }
+    }
+
+    // PoC H002: enforcing-mode footprint access check using the precomputed
+    // side index when available. Falls back to the legacy
+    // `Footprint::enforce_access` (full binary search) when the index is
+    // missing or the underlying map size has changed (e.g., a test directly
+    // mutated `storage.footprint.0`).
+    fn enforce_access_indexed(
+        &mut self,
+        key: &Rc<LedgerKey>,
+        ty: AccessType,
+        budget: &Budget,
+    ) -> Result<(), HostError> {
+        if let Some(idx) = &self.enforce_footprint_idx {
+            if idx.len() == self.footprint.0.map.len() {
+                if let Some(&pos) = idx.get(key.as_ref()) {
+                    if let Some(existing) =
+                        self.footprint.0.get_at_known_position(pos, budget)?
+                    {
+                        return match (existing, ty) {
+                            (AccessType::ReadOnly, AccessType::ReadOnly) => Ok(()),
+                            (AccessType::ReadOnly, AccessType::ReadWrite) => Err((
+                                ScErrorType::Storage,
+                                ScErrorCode::ExceededLimit,
+                            )
+                                .into()),
+                            (AccessType::ReadWrite, AccessType::ReadOnly) => Ok(()),
+                            (AccessType::ReadWrite, AccessType::ReadWrite) => Ok(()),
+                        };
+                    }
+                    return Err((ScErrorType::Storage, ScErrorCode::InternalError).into());
+                } else {
+                    // Match the legacy "key missing" budget profile: a single
+                    // `find` call's `charge_binsearch`, no access charge.
+                    self.footprint.0.charge_lookup(budget)?;
+                    return Err((ScErrorType::Storage, ScErrorCode::ExceededLimit).into());
+                }
+            }
+        }
+        self.footprint.enforce_access(key, ty, budget)
     }
 
     // Helper function the next 3 `get`-variants funnel into.
@@ -258,6 +329,21 @@ impl Storage {
         let _span = tracy_span!("storage get");
         Self::check_supported_ledger_key_type(key)?;
         self.prepare_read_only_access(key, host)?;
+        // PoC H002: indexed fast path for the storage map lookup.
+        if let Some(idx) = &self.enforce_storage_idx {
+            if idx.len() == self.map.map.len() {
+                if let Some(&pos) = idx.get(key.as_ref()) {
+                    return match self.map.get_at_known_position(pos, host.budget_ref())? {
+                        None => Err((ScErrorType::Storage, ScErrorCode::InternalError).into()),
+                        Some(pair_option) => Ok(pair_option.clone()),
+                    };
+                }
+                // Index says key is absent; matches legacy `find` -> `Ok(None)`
+                // budget profile (single `charge_binsearch`, no access charge).
+                self.map.charge_lookup(host.budget_ref())?;
+                return Err((ScErrorType::Storage, ScErrorCode::InternalError).into());
+            }
+        }
         match self.map.get::<Rc<LedgerKey>>(key, host.budget_ref())? {
             // Key has to be in the storage map at this point due to
             // `prepare_read_only_access`.
@@ -350,9 +436,23 @@ impl Storage {
                 self.footprint.record_access(key, ty, host.budget_ref())?;
             }
             FootprintMode::Enforcing => {
-                self.footprint.enforce_access(key, ty, host.budget_ref())?;
+                self.enforce_access_indexed(key, ty, host.budget_ref())?;
             }
         };
+        // PoC H002: indexed fast path for the storage map replace.
+        if let Some(idx) = self.enforce_storage_idx.clone() {
+            if idx.len() == self.map.map.len() {
+                if let Some(&pos) = idx.get(key.as_ref()) {
+                    self.map = self.map.insert_at_known_position(
+                        pos,
+                        Rc::clone(key),
+                        val,
+                        host.budget_ref(),
+                    )?;
+                    return Ok(());
+                }
+            }
+        }
         self.map = self.map.insert(Rc::clone(key), val, host.budget_ref())?;
         Ok(())
     }
@@ -506,6 +606,20 @@ impl Storage {
         new_live_until: u32,
     ) -> Result<(), HostError> {
         if new_live_until > ttl_ext_info.old_live_until {
+            // PoC H002: indexed fast path for the storage map replace.
+            if let Some(idx) = self.enforce_storage_idx.clone() {
+                if idx.len() == self.map.map.len() {
+                    if let Some(&pos) = idx.get(key.as_ref()) {
+                        self.map = self.map.insert_at_known_position(
+                            pos,
+                            key,
+                            Some((ttl_ext_info.entry, Some(new_live_until))),
+                            host.budget_ref(),
+                        )?;
+                        return Ok(());
+                    }
+                }
+            }
             self.map = self.map.insert(
                 key,
                 Some((ttl_ext_info.entry, Some(new_live_until))),
@@ -713,7 +827,7 @@ impl Storage {
                 self.handle_maybe_expired_entry(key, host)?;
             }
             FootprintMode::Enforcing => {
-                self.footprint.enforce_access(key, ty, host.budget_ref())?;
+                self.enforce_access_indexed(key, ty, host.budget_ref())?;
             }
         };
         Ok(())

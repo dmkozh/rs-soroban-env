@@ -313,6 +313,76 @@ where
         self.charge_scan(ctx)?;
         Ok(self.map.iter())
     }
+
+    // PoC H002: side-index-aware fast path for storage / footprint maps.
+    //
+    // `get_at_known_position` returns the value at `pos` and charges the same
+    // `charge_binsearch` + `charge_access(1)` budget that a successful
+    // `get` lookup would charge, but skips the binary search itself and the
+    // per-comparison MemCmp charges. Intended only for callers that have
+    // independently verified the key matches at `pos` via a side index built
+    // from the same key set.
+    pub(crate) fn get_at_known_position(
+        &self,
+        pos: usize,
+        ctx: &Ctx,
+    ) -> Result<Option<&V>, HostError> {
+        let _span = tracy_span!("map lookup indexed");
+        self.charge_binsearch(ctx)?;
+        match self.map.get(pos) {
+            Some((_, v)) => {
+                self.charge_access(1, ctx)?;
+                Ok(Some(v))
+            }
+            None => Ok(None),
+        }
+    }
+
+    // PoC H002: charge a binary-search lookup cost without performing one.
+    // Used by indexed fast paths when the side index has already determined
+    // that a key is missing, to keep the budget consistent with a real
+    // `find` that returned `Err(insertion_pos)` and fell through to a
+    // `Ok(None)` / error result without charging access.
+    pub(crate) fn charge_lookup<B: AsBudget>(&self, b: &B) -> Result<(), HostError> {
+        self.charge_binsearch(b)
+    }
+
+    // PoC H002: indexed-fast-path replacement insert. Mirrors `insert`'s
+    // budget profile when `find` would have returned `Ok(replace_pos)`,
+    // but skips both the binary search comparisons and the post-build
+    // sort-order verification comparisons. The caller must guarantee
+    // that the key already exists at `pos` (the resulting map preserves
+    // the existing key set and sort order).
+    pub(crate) fn insert_at_known_position(
+        &self,
+        pos: usize,
+        key: K,
+        value: V,
+        ctx: &Ctx,
+    ) -> Result<Self, HostError> {
+        if pos >= self.map.len() {
+            return Err((ScErrorType::Object, ScErrorCode::InternalError).into());
+        }
+        // Match `insert`'s top-level access charge.
+        self.charge_access(1, ctx)?;
+        // Match the `find` binsearch charge that `insert` would have paid.
+        self.charge_binsearch(ctx)?;
+        // Build the new vector (replace at `pos`).
+        let init = self.map.iter().take(pos).cloned();
+        let fini = self.map.iter().skip(pos.saturating_add(1)).cloned();
+        let new_vec: Vec<(K, V)> = init.chain([(key, value)]).chain(fini).collect();
+        // Match `from_exact_iter` deep-clone charge.
+        new_vec.charge_deep_clone(ctx.as_budget())?;
+        let m = MeteredOrdMap {
+            map: new_vec,
+            ctx: Default::default(),
+        };
+        // Match `from_map`'s scan charge. We deliberately skip the per-window
+        // sort verification, because the new map's sort order is preserved
+        // by construction (replace at known position).
+        m.charge_scan(ctx)?;
+        Ok(m)
+    }
 }
 
 impl<K, V> MeteredOrdMap<K, V, Host>
