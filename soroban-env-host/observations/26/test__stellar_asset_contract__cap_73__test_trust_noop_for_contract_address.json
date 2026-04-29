@@ -108,11 +108,7 @@
   " 106 call get_ledger_sequence()": "cpu:293642, mem:24007, store:-/-, foot:-",
   " 107 ret get_ledger_sequence -> Ok(U32(123))": "",
   " 108 ret extend_current_contract_instance_and_code_ttl -> Ok(Void)": "cpu:304049, mem:25756, store:-/2@c62bb3b8, foot:2@5e043e1b",
-  " 109 call vec_new_from_slice(2)": "cpu:304158",
-  " 110 ret vec_new_from_slice -> Ok(Vec(obj#51))": "cpu:305186, mem:25868, objs:-/26@83ca6e6b",
-  " 111 call has_contract_data(Vec(obj#51), Persistent)": "",
-  " 112 ret has_contract_data -> Ok(False)": "cpu:309392, mem:26459, store:-/3@9ab66ae1, foot:3@c12c8028",
-  " 113 pop SAC:2e378f80:balance -> Ok(I128(0))": "",
-  " 114 ret call -> Ok(I128(0))": " stk:-, auth:-/-",
-  " 115 end": "cpu:309392, mem:26459, prngs:-/9b4a753, objs:-/26@83ca6e6b, vm:-/-, evt:-, store:-/3@9ab66ae1, foot:3@c12c8028, stk:-, auth:-/-"
+  " 109 pop SAC:2e378f80:balance -> Ok(I128(0))": "cpu:308133, mem:26347, store:-/3@9ab66ae1, foot:3@c12c8028",
+  " 110 ret call -> Ok(I128(0))": " stk:-, auth:-/-",
+  " 111 end": "cpu:308133, mem:26347, prngs:-/9b4a753, objs:-/25@4171d475, vm:-/-, evt:-, store:-/3@9ab66ae1, foot:3@c12c8028, stk:-, auth:-/-"
 }

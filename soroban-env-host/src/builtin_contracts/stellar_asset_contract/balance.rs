@@ -7,19 +7,19 @@ use crate::{
         stellar_asset_contract::{
             asset_info::{read_asset, read_asset_info},
             public_types::AssetInfo,
-            storage_types::DataKey,
         },
     },
     err,
-    host::metered_clone::{MeteredAlloc, MeteredClone},
+    host::metered_clone::{MeteredAlloc, MeteredClone, MeteredContainer},
     storage::Storage,
     xdr::{
-        AccountEntry, AccountEntryExt, AccountEntryExtensionV1Ext, AccountFlags, AccountId, Asset,
+        int128_helpers, AccountEntry, AccountEntryExt, AccountEntryExtensionV1Ext, AccountFlags,
+        AccountId, Asset, ContractDataDurability, ContractDataEntry, ExtensionPoint, Int128Parts,
         LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, ScAddress, ScErrorCode,
-        ScErrorType, SequenceNumber, Thresholds, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
-        TrustLineFlags,
+        ScErrorType, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec, SequenceNumber, Thresholds,
+        TrustLineAsset, TrustLineEntry, TrustLineEntryExt, TrustLineFlags,
     },
-    Env, ErrorHandler, Host, HostError, StorageType, TryIntoVal,
+    ErrorHandler, Host, HostError,
 };
 
 use super::storage_types::{BalanceValue, BALANCE_EXTEND_AMOUNT, BALANCE_TTL_THRESHOLD};
@@ -29,6 +29,153 @@ use super::storage_types::{BalanceValue, BALANCE_EXTEND_AMOUNT, BALANCE_TTL_THRE
 /// changing it, it should be safe to just re-define it here instead of doing
 /// plumbing to get it from Core.
 const MAX_ACCOUNT_SUBENTRIES: u32 = 1000;
+
+fn symbol_scval(e: &Host, s: &str) -> Result<ScVal, HostError> {
+    Ok(ScVal::Symbol(ScSymbol(s.try_into().map_err(|_| {
+        e.err(
+            ScErrorType::Value,
+            ScErrorCode::InvalidInput,
+            "unexpected SAC balance symbol",
+            &[],
+        )
+    })?)))
+}
+
+fn contract_balance_key_scval(e: &Host, addr: ScAddress) -> Result<ScVal, HostError> {
+    let mut key = Vec::<ScVal>::with_metered_capacity(2, e)?;
+    key.push(symbol_scval(e, "Balance")?);
+    key.push(ScVal::Address(addr));
+    Ok(ScVal::Vec(Some(ScVec(e.map_err(key.try_into())?))))
+}
+
+fn contract_balance_ledger_key(e: &Host, addr: ScAddress) -> Result<Rc<LedgerKey>, HostError> {
+    e.storage_key_from_scval(
+        contract_balance_key_scval(e, addr)?,
+        ContractDataDurability::Persistent,
+    )
+}
+
+fn balance_value_scval(e: &Host, balance: &BalanceValue) -> Result<ScVal, HostError> {
+    let mut fields = Vec::<ScMapEntry>::with_metered_capacity(3, e)?;
+    fields.push(ScMapEntry {
+        key: symbol_scval(e, "amount")?,
+        val: ScVal::I128(Int128Parts {
+            hi: int128_helpers::i128_hi(balance.amount),
+            lo: int128_helpers::i128_lo(balance.amount),
+        }),
+    });
+    fields.push(ScMapEntry {
+        key: symbol_scval(e, "authorized")?,
+        val: ScVal::Bool(balance.authorized),
+    });
+    fields.push(ScMapEntry {
+        key: symbol_scval(e, "clawback")?,
+        val: ScVal::Bool(balance.clawback),
+    });
+    Ok(ScVal::Map(Some(ScMap(e.map_err(fields.try_into())?))))
+}
+
+fn symbol_matches(scv: &ScVal, s: &str) -> bool {
+    matches!(scv, ScVal::Symbol(sym) if sym.0.as_slice() == s.as_bytes())
+}
+
+fn balance_value_from_scval(e: &Host, scv: &ScVal) -> Result<BalanceValue, HostError> {
+    let ScVal::Map(Some(fields)) = scv else {
+        return Err(e.err(
+            ScErrorType::Value,
+            ScErrorCode::InvalidInput,
+            "unexpected SAC balance value",
+            &[],
+        ));
+    };
+    if fields.len() != 3 {
+        return Err(e.err(
+            ScErrorType::Object,
+            ScErrorCode::UnexpectedSize,
+            "unexpected SAC balance value field count",
+            &[],
+        ));
+    }
+    let [amount, authorized, clawback]: &[ScMapEntry; 3] =
+        fields.as_slice().try_into().map_err(|_| {
+            e.err(
+                ScErrorType::Object,
+                ScErrorCode::UnexpectedSize,
+                "unexpected SAC balance value field count",
+                &[],
+            )
+        })?;
+    if !symbol_matches(&amount.key, "amount")
+        || !symbol_matches(&authorized.key, "authorized")
+        || !symbol_matches(&clawback.key, "clawback")
+    {
+        return Err(e.err(
+            ScErrorType::Value,
+            ScErrorCode::InvalidInput,
+            "unexpected SAC balance value fields",
+            &[],
+        ));
+    }
+    let ScVal::I128(amount) = &amount.val else {
+        return Err(e.err(
+            ScErrorType::Value,
+            ScErrorCode::InvalidInput,
+            "unexpected SAC balance amount",
+            &[],
+        ));
+    };
+    let ScVal::Bool(authorized) = &authorized.val else {
+        return Err(e.err(
+            ScErrorType::Value,
+            ScErrorCode::InvalidInput,
+            "unexpected SAC balance authorized flag",
+            &[],
+        ));
+    };
+    let ScVal::Bool(clawback) = &clawback.val else {
+        return Err(e.err(
+            ScErrorType::Value,
+            ScErrorCode::InvalidInput,
+            "unexpected SAC balance clawback flag",
+            &[],
+        ));
+    };
+    Ok(BalanceValue {
+        amount: amount.into(),
+        authorized: *authorized,
+        clawback: *clawback,
+    })
+}
+
+fn read_contract_balance(
+    e: &Host,
+    key: &Rc<LedgerKey>,
+) -> Result<Option<BalanceValue>, HostError> {
+    let entry = {
+        let mut storage = e.try_borrow_storage_mut()?;
+        storage.try_get(key, e, None)?
+    };
+    match entry.as_ref().map(|entry| &entry.data) {
+        Some(LedgerEntryData::ContractData(data)) => Ok(Some(balance_value_from_scval(e, &data.val)?)),
+        Some(_) => Err(e.err(
+            ScErrorType::Storage,
+            ScErrorCode::InternalError,
+            "expected contract data ledger entry",
+            &[],
+        )),
+        None => Ok(None),
+    }
+}
+
+fn extend_contract_balance_ttl(e: &Host, key: Rc<LedgerKey>) -> Result<(), HostError> {
+    e.try_borrow_storage_mut()?.extend_ttl(
+        e,
+        key,
+        BALANCE_TTL_THRESHOLD,
+        BALANCE_EXTEND_AMOUNT,
+        None,
+    )
+}
 
 /// This module handles all balance and authorization related logic for both
 /// Accounts and non-Accounts. For Accounts, a trustline is expected (unless this
@@ -44,18 +191,10 @@ const MAX_ACCOUNT_SUBENTRIES: u32 = 1000;
 pub(crate) fn read_balance(e: &Host, addr: Address) -> Result<i128, HostError> {
     match addr.to_sc_address()? {
         ScAddress::Account(acc_id) => Ok(get_classic_balance(e, acc_id, &addr)?.into()),
-        ScAddress::Contract(_) => {
-            let key = DataKey::Balance(addr);
-            if let Some(raw_balance) =
-                e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
-            {
-                e.extend_contract_data_ttl(
-                    key.try_into_val(e)?,
-                    StorageType::Persistent,
-                    BALANCE_TTL_THRESHOLD.into(),
-                    BALANCE_EXTEND_AMOUNT.into(),
-                )?;
-                let balance: BalanceValue = raw_balance.try_into_val(e)?;
+        ScAddress::Contract(id) => {
+            let key = contract_balance_ledger_key(e, ScAddress::Contract(id))?;
+            if let Some(balance) = read_contract_balance(e, &key)? {
+                extend_contract_balance_ttl(e, key)?;
                 Ok(balance.amount)
             } else {
                 Ok(0)
@@ -73,26 +212,68 @@ pub(crate) fn read_balance(e: &Host, addr: Address) -> Result<i128, HostError> {
 // Metering: covered by components.
 fn write_contract_balance(
     e: &Host,
-    addr: Address,
+    _addr: Address,
     balance: BalanceValue,
     // We take an unused reference to a "witness" contract-id Hash here, to help
     // ensure this function is only called from a context where `addr` has been
     // matched as an ScAddress::Contract(hash) rather than ScAddress::Account(_)
     _witness_addr_contract_id: &crate::xdr::ContractId,
 ) -> Result<(), HostError> {
-    let key = DataKey::Balance(addr);
-    e.put_contract_data(
-        key.try_into_val(e)?,
-        balance.try_into_val(e)?,
-        StorageType::Persistent,
+    let key_scval = contract_balance_key_scval(
+        e,
+        ScAddress::Contract(_witness_addr_contract_id.metered_clone(e)?),
     )?;
+    let key = e.storage_key_from_scval(
+        key_scval.metered_clone(e)?,
+        ContractDataDurability::Persistent,
+    )?;
+    let val = balance_value_scval(e, &balance)?;
 
-    e.extend_contract_data_ttl(
-        key.try_into_val(e)?,
-        StorageType::Persistent,
-        BALANCE_TTL_THRESHOLD.into(),
-        BALANCE_EXTEND_AMOUNT.into(),
-    )?;
+    let current_entry = {
+        let mut storage = e.try_borrow_storage_mut()?;
+        storage.try_get_full(&key, e, None)?
+    };
+
+    if let Some((current, live_until_ledger)) = current_entry {
+        let mut current = (*current).metered_clone(e)?;
+        match current.data {
+            LedgerEntryData::ContractData(ref mut entry) => {
+                entry.val = val;
+            }
+            _ => {
+                return Err(e.err(
+                    ScErrorType::Storage,
+                    ScErrorCode::InternalError,
+                    "expected DataEntry",
+                    &[],
+                ));
+            }
+        }
+        e.try_borrow_storage_mut()?.put(
+            &key,
+            &Rc::metered_new(current, e)?,
+            live_until_ledger,
+            e,
+            None,
+        )?;
+    } else {
+        let data = ContractDataEntry {
+            contract: ScAddress::Contract(e.get_current_contract_id_internal()?),
+            key: key_scval,
+            val,
+            durability: ContractDataDurability::Persistent,
+            ext: ExtensionPoint::V0,
+        };
+        e.try_borrow_storage_mut()?.put(
+            &key,
+            &Host::new_contract_data(e, data)?,
+            Some(e.get_min_live_until_ledger(ContractDataDurability::Persistent)?),
+            e,
+            None,
+        )?;
+    }
+
+    extend_contract_balance_ttl(e, key)?;
     Ok(())
 }
 
@@ -118,11 +299,9 @@ pub(crate) fn receive_balance(e: &Host, addr: Address, amount: i128) -> Result<(
             Ok(transfer_classic_balance(e, acc_id, i64_amount, &addr)?)
         }
         ScAddress::Contract(id) => {
-            let key = DataKey::Balance(addr.metered_clone(e)?);
-            let mut balance = if let Some(raw_balance) =
-                e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
-            {
-                raw_balance.try_into_val(e)?
+            let key = contract_balance_ledger_key(e, ScAddress::Contract(id.metered_clone(e)?))?;
+            let mut balance = if let Some(balance) = read_contract_balance(e, &key)? {
+                balance
             } else {
                 // balance passed the authorization check at the top of this function, so write true.
                 BalanceValue {
@@ -172,11 +351,8 @@ pub(crate) fn spend_balance_no_authorization_check(
         ScAddress::Contract(id) => {
             // If a balance exists, calculate new amount and write the existing authorized state as is because
             // this can be used to clawback when deauthorized.
-            let key = DataKey::Balance(addr.metered_clone(e)?);
-            if let Some(raw_balance) =
-                e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
-            {
-                let mut balance: BalanceValue = raw_balance.try_into_val(e)?;
+            let key = contract_balance_ledger_key(e, ScAddress::Contract(id.metered_clone(e)?))?;
+            if let Some(mut balance) = read_contract_balance(e, &key)? {
                 if balance.amount < amount {
                     return Err(err!(
                         e,
@@ -233,12 +409,9 @@ pub(crate) fn spend_balance(e: &Host, addr: Address, amount: i128) -> Result<(),
 pub(crate) fn is_authorized(e: &Host, addr: Address) -> Result<bool, HostError> {
     match addr.to_sc_address()? {
         ScAddress::Account(acc_id) => is_account_authorized(e, acc_id),
-        ScAddress::Contract(_) => {
-            let key = DataKey::Balance(addr);
-            if let Some(raw_balance) =
-                e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
-            {
-                let balance: BalanceValue = raw_balance.try_into_val(e)?;
+        ScAddress::Contract(id) => {
+            let key = contract_balance_ledger_key(e, ScAddress::Contract(id))?;
+            if let Some(balance) = read_contract_balance(e, &key)? {
                 Ok(balance.authorized)
             } else {
                 Ok(!is_asset_auth_required(e)?)
@@ -270,11 +443,8 @@ pub(crate) fn write_authorization(
     match addr.to_sc_address()? {
         ScAddress::Account(acc_id) => set_authorization(e, acc_id, authorize),
         ScAddress::Contract(id) => {
-            let key = DataKey::Balance(addr.metered_clone(e)?);
-            if let Some(raw_balance) =
-                e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
-            {
-                let mut balance: BalanceValue = raw_balance.try_into_val(e)?;
+            let key = contract_balance_ledger_key(e, ScAddress::Contract(id.metered_clone(e)?))?;
+            if let Some(mut balance) = read_contract_balance(e, &key)? {
                 balance.authorized = authorize;
                 write_contract_balance(e, addr, balance, &id)
             } else {
@@ -337,12 +507,9 @@ pub(crate) fn check_clawbackable(e: &Host, addr: Address) -> Result<(), HostErro
                 validate_trustline(tlasset, issuer, acc_id)
             }
         },
-        ScAddress::Contract(_) => {
-            let key = DataKey::Balance(addr);
-            if let Some(raw_balance) =
-                e.try_get_contract_data(key.try_into_val(e)?, StorageType::Persistent)?
-            {
-                let balance: BalanceValue = raw_balance.try_into_val(e)?;
+        ScAddress::Contract(id) => {
+            let key = contract_balance_ledger_key(e, ScAddress::Contract(id))?;
+            if let Some(balance) = read_contract_balance(e, &key)? {
                 if !balance.clawback {
                     return Err(e.error(
                         ContractError::BalanceError.into(),
