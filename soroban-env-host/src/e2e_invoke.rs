@@ -108,6 +108,13 @@ pub struct LedgerEntryChange {
     /// New value of the ledger entry encoded as `LedgerEntry` XDR.
     /// Only set for non-removed, non-readonly values, otherwise `None`.
     pub encoded_new_value: Option<Vec<u8>>,
+    /// Typed new value of the ledger entry, kept alongside `encoded_new_value`
+    /// when the host already had it on hand. Lets typed-FFI consumers skip
+    /// the redundant XDR decode of `encoded_new_value` when they want the
+    /// typed shape (e.g. to mutate an in-memory state map). The host has to
+    /// own this entry as `Rc<LedgerEntry>` since it comes straight off the
+    /// host's storage map.
+    pub typed_new_value: Option<Rc<LedgerEntry>>,
     /// Size of the 'new' entry to use in the rent computations.
     /// This is the size of the encoded entry XDR (i.e. length of `encoded_new_value`)
     /// for all of the entries besides contract code, for which the module
@@ -270,6 +277,7 @@ fn get_ledger_changes(
                         saturating_usize_to_u32(entry_buf.len()),
                     )?;
                     entry_change.encoded_new_value = Some(entry_buf);
+                    entry_change.typed_new_value = Some(entry.clone());
 
                     if let Some(restored_keys) = &restored_keys {
                         if restored_keys.contains_key::<LedgerKey>(key, budget)? {
