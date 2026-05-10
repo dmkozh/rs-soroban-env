@@ -194,6 +194,14 @@ fn get_ledger_changes(
     init_ttl_entries: TtlEntryMap,
     min_live_until_ledger: u32,
     restored_keys: &Option<RestoredKeySet>,
+    // Optional pre-computed xdr_size lookup for input entries. When
+    // provided, `get_ledger_changes` skips the per-entry
+    // `metered_write_xdr(old_entry, ...)` round-trip it otherwise
+    // needs to fill `old_entry_size_bytes_for_rent` — for ContractCode
+    // reads this saves ~50us per entry. Embedders that have the size
+    // precomputed (typed-input path) pass `Some`; the bytes-input
+    // path passes `None` and falls back to encoding the old entry.
+    init_xdr_sizes: Option<&std::collections::BTreeMap<Rc<LedgerKey>, u32>>,
     #[cfg(any(test, feature = "recording_mode"))] current_ledger_seq: u32,
 ) -> Result<Vec<LedgerEntryChange>, HostError> {
     // Skip allocation metering for this for the sake of simplicity - the
@@ -231,11 +239,24 @@ fn get_ledger_changes(
         }
         let entry_with_live_until = init_storage_snapshot.get(key)?;
         if let Some((old_entry, old_live_until_ledger)) = entry_with_live_until {
-            let mut buf = vec![];
-            metered_write_xdr(budget, old_entry.as_ref(), &mut buf)?;
+            // Use the embedder-supplied xdr_size if it's available for
+            // this key; that avoids re-encoding the old entry purely
+            // to count its bytes for `entry_size_for_rent`. Falls back
+            // to the encode round-trip when no cache is provided
+            // (bytes-input path) or when the key isn't in the cache
+            // (e.g. the key is in the footprint but not in input
+            // entries — those carry no init bytes anyway).
+            let cached_old_xdr_size = init_xdr_sizes.and_then(|m| m.get(key).copied());
+            let old_xdr_size = if let Some(sz) = cached_old_xdr_size {
+                sz
+            } else {
+                let mut buf = vec![];
+                metered_write_xdr(budget, old_entry.as_ref(), &mut buf)?;
+                saturating_usize_to_u32(buf.len())
+            };
 
             entry_change.old_entry_size_bytes_for_rent =
-                entry_size_for_rent(budget, &old_entry, saturating_usize_to_u32(buf.len()))?;
+                entry_size_for_rent(budget, &old_entry, old_xdr_size)?;
 
             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
                 ttl_change.old_live_until_ledger =
@@ -434,7 +455,7 @@ pub fn invoke_host_function_typed(
     source_account: AccountId,
     auth_entries: Vec<SorobanAuthorizationEntry>,
     ledger_info: LedgerInfo,
-    ledger_entries: &[(LedgerEntry, Option<TtlEntry>)],
+    ledger_entries: Vec<(Rc<LedgerEntry>, Option<TtlEntry>, u32)>,
     base_prng_seed: [u8; 32],
     diagnostic_events: &mut Vec<DiagnosticEvent>,
     trace_hook: Option<TraceHook>,
@@ -453,12 +474,13 @@ pub fn invoke_host_function_typed(
                 ScErrorCode::InternalError,
             ))
         })?;
-    let (storage_map, init_ttl_map) = build_storage_map_from_typed_ledger_entries(
-        &budget,
-        &footprint,
-        ledger_entries,
-        current_ledger_seq,
-    )?;
+    let (storage_map, init_ttl_map, init_xdr_sizes_typed) =
+        build_storage_map_from_typed_ledger_entries(
+            &budget,
+            &footprint,
+            ledger_entries,
+            current_ledger_seq,
+        )?;
 
     let init_storage_map = storage_map.metered_clone(budget)?;
 
@@ -505,6 +527,7 @@ pub fn invoke_host_function_typed(
             init_ttl_map,
             min_live_until_ledger,
             &restored_keys,
+            Some(&init_xdr_sizes_typed),
             #[cfg(any(test, feature = "recording_mode"))]
             current_ledger_seq,
         )?;
@@ -524,24 +547,54 @@ pub fn invoke_host_function_typed(
 }
 
 /// Typed-input version of `build_storage_map_from_xdr_ledger_entries`.
-/// Inputs are already-decoded `(LedgerEntry, Option<TtlEntry>)` pairs;
-/// the function only allocates the `Rc`s and inserts into the
-/// `StorageMap` / `TtlEntryMap` (no per-entry XDR parse).
+/// Inputs are already-decoded `(LedgerEntry, Option<TtlEntry>, u32)`
+/// triples (the trailing u32 is the entry's pre-computed XDR size,
+/// supplied by the embedder so the host can skip a re-encode in
+/// `get_ledger_changes`); the function only allocates the `Rc`s and
+/// inserts into the `StorageMap` / `TtlEntryMap` (no per-entry XDR
+/// parse).
+///
+/// Consumes `entries` by value and moves each `LedgerEntry` /
+/// `TtlEntry` into its `Rc` directly — no `metered_clone` of the
+/// caller-supplied owned values, which can be sizable for
+/// CONTRACT_CODE WASM. The caller is responsible for any prior
+/// metering / cloning that's protocol-relevant.
 fn build_storage_map_from_typed_ledger_entries(
     budget: &Budget,
     footprint: &Footprint,
-    entries: &[(LedgerEntry, Option<TtlEntry>)],
+    entries: Vec<(Rc<LedgerEntry>, Option<TtlEntry>, u32)>,
     ledger_num: u32,
-) -> Result<(StorageMap, TtlEntryMap), HostError> {
+) -> Result<
+    (
+        StorageMap,
+        TtlEntryMap,
+        std::collections::BTreeMap<Rc<LedgerKey>, u32>,
+    ),
+    HostError,
+> {
     let mut storage_map = StorageMap::new();
     let mut ttl_map = TtlEntryMap::new();
+    // Per-key cache of the input entry's xdr_size — embedder-supplied
+    // so get_ledger_changes can skip the per-entry write_xdr round-trip
+    // it otherwise needs to fill `old_entry_size_bytes_for_rent`.
+    let mut init_xdr_sizes: std::collections::BTreeMap<Rc<LedgerKey>, u32> =
+        std::collections::BTreeMap::new();
 
-    for (le_in, ttl_in) in entries {
+    for (le_in, ttl_in, xdr_size) in entries {
         let mut live_until_ledger: Option<u32> = None;
-        let le = Rc::metered_new(le_in.metered_clone(budget)?, budget)?;
+        // Embedder hands us an Rc directly; reuse it without
+        // metered_new (no fresh alloc, no LedgerEntry deep clone).
+        // Charge the budget for the LedgerEntry tree size to keep
+        // metering equivalent to the legacy `Rc::metered_new(le_in, ...)`
+        // path (which charged inside Rc::new).
+        budget.charge(
+            crate::xdr::ContractCostType::MemAlloc,
+            Some(std::mem::size_of::<LedgerEntry>() as u64),
+        )?;
+        let le = le_in;
         let key = Rc::metered_new(ledger_entry_to_ledger_key(&le, budget)?, budget)?;
         if let Some(ttl_entry_in) = ttl_in {
-            let ttl_entry = Rc::metered_new(ttl_entry_in.clone(), budget)?;
+            let ttl_entry = Rc::metered_new(ttl_entry_in, budget)?;
             #[cfg(not(any(test, feature = "recording_mode")))]
             if ttl_entry.live_until_ledger_seq < ledger_num {
                 return Err(Error::from_type_and_code(
@@ -573,6 +626,7 @@ fn build_storage_map_from_typed_ledger_entries(
             )
             .into());
         }
+        init_xdr_sizes.insert(key.clone(), xdr_size);
         storage_map = storage_map.insert(key, Some((le, live_until_ledger)), budget)?;
     }
 
@@ -582,7 +636,7 @@ fn build_storage_map_from_typed_ledger_entries(
             storage_map = storage_map.insert(Rc::clone(k), None, budget)?;
         }
     }
-    Ok((storage_map, ttl_map))
+    Ok((storage_map, ttl_map, init_xdr_sizes))
 }
 
 pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
@@ -682,6 +736,7 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
             init_ttl_map,
             min_live_until_ledger,
             &restored_keys,
+            None,
             #[cfg(any(test, feature = "recording_mode"))]
             current_ledger_seq,
         )?;
@@ -1004,6 +1059,7 @@ pub fn invoke_host_function_in_recording_mode(
             init_ttl_map,
             min_live_until_ledger,
             &restored_keys,
+            None,
             ledger_seq,
         )?;
         // Add the keys that only exist in the footprint, but not in the
