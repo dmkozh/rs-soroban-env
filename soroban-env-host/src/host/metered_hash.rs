@@ -73,7 +73,10 @@ impl<T: WriteXdr> MeteredHashXdr for T {
         hasher: &mut CountingHasher,
         budget: &Budget,
     ) -> Result<(), HostError> {
-        let mut buf = Vec::default();
+        // Pre-size: the only callers in the apply hot path hash
+        // SorobanAuthorizedInvocation / HashIdPreimageContractId etc.,
+        // which fit easily in 256B.
+        let mut buf = Vec::with_capacity(256);
         metered_write_xdr(budget, self, &mut buf)?;
         buf.metered_hash(hasher, budget)?;
         budget.charge(HASH_COST_TYPE, Some(hasher.count as u64))

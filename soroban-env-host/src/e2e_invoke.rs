@@ -220,6 +220,11 @@ fn get_ledger_changes(
     };
     for (key, entry_with_live_until_ledger) in storage.map.iter(budget)? {
         let mut entry_change = LedgerEntryChange::default();
+        // Pre-size encoded_key to avoid the Vec-growth churn that
+        // `metered_write_xdr` would otherwise pay from the empty Vec<u8>
+        // default-initialised inside LedgerEntryChange::default().
+        // 256B comfortably covers every LedgerKey shape we encode here.
+        entry_change.encoded_key.reserve(256);
         metered_write_xdr(budget, key.as_ref(), &mut entry_change.encoded_key)?;
         let durability = get_key_durability(key);
 
@@ -250,7 +255,9 @@ fn get_ledger_changes(
             let old_xdr_size = if let Some(sz) = cached_old_xdr_size {
                 sz
             } else {
-                let mut buf = vec![];
+                // 512B starting buffer fits typical ContractData entries
+                // and is well below LedgerEntry's 64KiB header limit.
+                let mut buf = Vec::with_capacity(512);
                 metered_write_xdr(budget, old_entry.as_ref(), &mut buf)?;
                 saturating_usize_to_u32(buf.len())
             };
@@ -290,7 +297,10 @@ fn get_ledger_changes(
             }
             Some(AccessType::ReadWrite) => {
                 if let Some((entry, _)) = entry_with_live_until_ledger {
-                    let mut entry_buf = vec![];
+                    // 512B fits typical ContractData / Ttl / small classic
+                    // entries; bigger payloads (e.g. CONTRACT_CODE) reallocate
+                    // on demand the same way they did before.
+                    let mut entry_buf = Vec::with_capacity(512);
                     metered_write_xdr(budget, entry.as_ref(), &mut entry_buf)?;
                     entry_change.new_entry_size_bytes_for_rent = entry_size_for_rent(
                         budget,
@@ -512,7 +522,7 @@ pub fn invoke_host_function_typed(
         extract_diagnostic_events(&events, diagnostic_events);
     }
     let encoded_invoke_result = result.and_then(|res| {
-        let mut encoded_result_sc_val = vec![];
+        let mut encoded_result_sc_val = Vec::with_capacity(128);
         metered_write_xdr(&budget, &res, &mut encoded_result_sc_val).map(|_| encoded_result_sc_val)
     });
     if encoded_invoke_result.is_ok() {
@@ -721,7 +731,7 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         extract_diagnostic_events(&events, diagnostic_events);
     }
     let encoded_invoke_result = result.and_then(|res| {
-        let mut encoded_result_sc_val = vec![];
+        let mut encoded_result_sc_val = Vec::with_capacity(128);
         metered_write_xdr(&budget, &res, &mut encoded_result_sc_val).map(|_| encoded_result_sc_val)
     });
     if encoded_invoke_result.is_ok() {
@@ -925,7 +935,7 @@ pub fn invoke_host_function_in_recording_mode(
     let invoke_result = host.invoke_function(host_function);
     let mut contract_events_and_return_value_size = 0_u32;
     if let Ok(res) = &invoke_result {
-        let mut encoded_result_sc_val = vec![];
+        let mut encoded_result_sc_val = Vec::with_capacity(128);
         metered_write_xdr(&budget, res, &mut encoded_result_sc_val)?;
         contract_events_and_return_value_size = contract_events_and_return_value_size
             .saturating_add(saturating_usize_to_u32(encoded_result_sc_val.len()));
@@ -1114,7 +1124,7 @@ pub fn encode_contract_events(budget: &Budget, events: &Events) -> Result<Vec<Ve
         .iter()
         .filter(|e| !e.failed_call && e.event.type_ != ContractEventType::Diagnostic)
         .map(|e| {
-            let mut buf = vec![];
+            let mut buf = Vec::with_capacity(256);
             metered_write_xdr(budget, &e.event, &mut buf)?;
             Ok(buf)
         })

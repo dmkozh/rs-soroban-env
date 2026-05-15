@@ -32,7 +32,9 @@ where
 impl Host {
     pub fn metered_hash_xdr(&self, obj: &impl WriteXdr) -> Result<[u8; 32], HostError> {
         let _span = tracy_span!("hash xdr");
-        let mut buf = vec![];
+        // 256B easily covers the preimages this hashes in the apply
+        // path (HashIdPreimage variants for auth/contract id, etc.)
+        let mut buf = Vec::with_capacity(256);
         metered_write_xdr(self.budget_ref(), obj, &mut buf)?;
         sha256_hash_from_bytes_raw(&buf, self)
     }
