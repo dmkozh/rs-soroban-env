@@ -797,7 +797,7 @@ impl Host {
                         self,
                         contract_id,
                         parsed_module,
-                        &cache.wasmi_linker,
+                        &*cache.wasmi_linker,
                     );
                 }
             }

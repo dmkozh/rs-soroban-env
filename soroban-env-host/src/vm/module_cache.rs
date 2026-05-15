@@ -20,7 +20,11 @@ use std::{
 #[derive(Clone, Default)]
 pub struct ModuleCache {
     pub(crate) wasmi_engine: wasmi::Engine,
-    pub(crate) wasmi_linker: wasmi::Linker<Host>,
+    // Wrap in Arc so cloning the ModuleCache is shallow. wasmi::Linker has
+    // ~50 host-function `Definition`s in a BTreeMap and a string interner
+    // also backed by a BTreeMap; cloning those per-TX showed up as ~3.6%
+    // self time in apply_load perf profiles.
+    pub(crate) wasmi_linker: Arc<wasmi::Linker<Host>>,
     modules: ModuleCacheMap,
 }
 
@@ -87,7 +91,7 @@ impl ModuleCache {
         let wasmi_config = get_wasmi_config(context.as_budget())?;
         let wasmi_engine = wasmi::Engine::new(&wasmi_config);
         let modules = ModuleCacheMap::default();
-        let wasmi_linker = Host::make_maximal_wasmi_linker(context, &wasmi_engine)?;
+        let wasmi_linker = Arc::new(Host::make_maximal_wasmi_linker(context, &wasmi_engine)?);
         Ok(Self {
             wasmi_engine,
             modules,
