@@ -201,7 +201,7 @@ fn get_ledger_changes(
     // reads this saves ~50us per entry. Embedders that have the size
     // precomputed (typed-input path) pass `Some`; the bytes-input
     // path passes `None` and falls back to encoding the old entry.
-    init_xdr_sizes: Option<&std::collections::BTreeMap<Rc<LedgerKey>, u32>>,
+    init_xdr_sizes: Option<&std::collections::HashMap<Rc<LedgerKey>, u32>>,
     #[cfg(any(test, feature = "recording_mode"))] current_ledger_seq: u32,
 ) -> Result<Vec<LedgerEntryChange>, HostError> {
     // Skip allocation metering for this for the sake of simplicity - the
@@ -568,7 +568,7 @@ fn build_storage_map_from_typed_ledger_entries(
     (
         StorageMap,
         TtlEntryMap,
-        std::collections::BTreeMap<Rc<LedgerKey>, u32>,
+        std::collections::HashMap<Rc<LedgerKey>, u32>,
     ),
     HostError,
 > {
@@ -577,8 +577,8 @@ fn build_storage_map_from_typed_ledger_entries(
     // Per-key cache of the input entry's xdr_size — embedder-supplied
     // so get_ledger_changes can skip the per-entry write_xdr round-trip
     // it otherwise needs to fill `old_entry_size_bytes_for_rent`.
-    let mut init_xdr_sizes: std::collections::BTreeMap<Rc<LedgerKey>, u32> =
-        std::collections::BTreeMap::new();
+    let mut init_xdr_sizes: std::collections::HashMap<Rc<LedgerKey>, u32> =
+        std::collections::HashMap::new();
 
     for (le_in, ttl_in, xdr_size) in entries {
         let mut live_until_ledger: Option<u32> = None;
