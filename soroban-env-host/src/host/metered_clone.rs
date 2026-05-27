@@ -516,7 +516,12 @@ impl<const C: u32> MeteredClone for BytesM<C> {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        <Self as AsRef<Vec<u8>>>::as_ref(self).charge_for_substructure(budget)
+        // These XDR byte types now wrap a (possibly zero-copy, `Rc`-backed)
+        // `RcBytes` rather than a `Vec<u8>`. We keep charging as if the bytes
+        // were copied so that budget accounting is unchanged from the
+        // `Vec<u8>`-backed representation.
+        let bytes: &[u8] = <Self as AsRef<[u8]>>::as_ref(self);
+        charge_shallow_copy::<u8>(bytes.len() as u64, budget)
     }
 }
 
@@ -524,7 +529,12 @@ impl<const C: u32> MeteredClone for StringM<C> {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        <Self as AsRef<Vec<u8>>>::as_ref(self).charge_for_substructure(budget)
+        // These XDR byte types now wrap a (possibly zero-copy, `Rc`-backed)
+        // `RcBytes` rather than a `Vec<u8>`. We keep charging as if the bytes
+        // were copied so that budget accounting is unchanged from the
+        // `Vec<u8>`-backed representation.
+        let bytes: &[u8] = <Self as AsRef<[u8]>>::as_ref(self);
+        charge_shallow_copy::<u8>(bytes.len() as u64, budget)
     }
 }
 
@@ -532,7 +542,12 @@ impl MeteredClone for ScBytes {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        <Self as AsRef<Vec<u8>>>::as_ref(self).charge_for_substructure(budget)
+        // These XDR byte types now wrap a (possibly zero-copy, `Rc`-backed)
+        // `RcBytes` rather than a `Vec<u8>`. We keep charging as if the bytes
+        // were copied so that budget accounting is unchanged from the
+        // `Vec<u8>`-backed representation.
+        let bytes: &[u8] = <Self as AsRef<[u8]>>::as_ref(self);
+        charge_shallow_copy::<u8>(bytes.len() as u64, budget)
     }
 }
 
@@ -540,7 +555,12 @@ impl MeteredClone for ScString {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        <Self as AsRef<Vec<u8>>>::as_ref(self).charge_for_substructure(budget)
+        // These XDR byte types now wrap a (possibly zero-copy, `Rc`-backed)
+        // `RcBytes` rather than a `Vec<u8>`. We keep charging as if the bytes
+        // were copied so that budget accounting is unchanged from the
+        // `Vec<u8>`-backed representation.
+        let bytes: &[u8] = <Self as AsRef<[u8]>>::as_ref(self);
+        charge_shallow_copy::<u8>(bytes.len() as u64, budget)
     }
 }
 
@@ -548,7 +568,12 @@ impl MeteredClone for ScSymbol {
     const IS_SHALLOW: bool = false;
 
     fn charge_for_substructure(&self, budget: impl AsBudget) -> Result<(), HostError> {
-        <Self as AsRef<Vec<u8>>>::as_ref(self).charge_for_substructure(budget)
+        // These XDR byte types now wrap a (possibly zero-copy, `Rc`-backed)
+        // `RcBytes` rather than a `Vec<u8>`. We keep charging as if the bytes
+        // were copied so that budget accounting is unchanged from the
+        // `Vec<u8>`-backed representation.
+        let bytes: &[u8] = <Self as AsRef<[u8]>>::as_ref(self);
+        charge_shallow_copy::<u8>(bytes.len() as u64, budget)
     }
 }
 

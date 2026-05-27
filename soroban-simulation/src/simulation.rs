@@ -1,3 +1,4 @@
+use crate::host_err::MapHostError;
 use crate::network_config::NetworkConfig;
 use crate::resources::{
     compute_adjusted_transaction_resources, compute_resource_fee, simulate_extend_ttl_op_resources,
@@ -16,7 +17,7 @@ use soroban_env_host::{
         OperationBody, ScVal, SorobanAuthorizationEntry, SorobanResources, SorobanTransactionData,
         SorobanTransactionDataExt,
     },
-    xdr::{ExtendFootprintTtlOp, ExtensionPoint, LedgerEntry, ReadXdr, RestoreFootprintOp},
+    xdr::{ExtendFootprintTtlOp, ExtensionPoint, LedgerEntry, ReadXdrRc, RestoreFootprintOp},
     HostError, LedgerInfo, DEFAULT_XDR_RW_LIMITS,
 };
 use std::rc::Rc;
@@ -154,8 +155,8 @@ pub fn simulate_invoke_host_function_op(
         // Don't distinguish between the errors that happen during invocation vs
         // during setup as that seems too granular.
         invoke_result,
-        simulated_instructions: budget.get_cpu_insns_consumed()?.try_into()?,
-        simulated_memory: budget.get_mem_bytes_consumed()?.try_into()?,
+        simulated_instructions: budget.get_cpu_insns_consumed().map_host_err()?.try_into()?,
+        simulated_memory: budget.get_mem_bytes_consumed().map_host_err()?.try_into()?,
         diagnostic_events,
         // Fields that should only be populated for successful invocations.
         auth: vec![],
@@ -380,9 +381,11 @@ fn extract_modified_entries(
         if c.read_only {
             continue;
         }
-        let key = LedgerKey::from_xdr(c.encoded_key.clone(), DEFAULT_XDR_RW_LIMITS)?;
+        let key = LedgerKey::from_xdr_with_buffer(c.encoded_key.clone(), DEFAULT_XDR_RW_LIMITS)?;
         let state_before =
-            if let Some((entry_before, live_until_before)) = snapshot.get(&Rc::new(key))? {
+            if let Some((entry_before, live_until_before)) =
+                snapshot.get(&Rc::new(key)).map_host_err()?
+            {
                 let mut state_before = Some(entry_before.as_ref().clone());
                 if let Some(live_until_before) = live_until_before {
                     if live_until_before < ledger_info.sequence_number {
@@ -395,7 +398,10 @@ fn extract_modified_entries(
             };
 
         let state_after = match &c.encoded_new_value {
-            Some(v) => Some(LedgerEntry::from_xdr(v.clone(), DEFAULT_XDR_RW_LIMITS)?),
+            Some(v) => Some(LedgerEntry::from_xdr_with_buffer(
+                v.clone(),
+                DEFAULT_XDR_RW_LIMITS,
+            )?),
             None => None,
         };
         diffs.push(LedgerEntryDiff {

@@ -5,6 +5,8 @@ mod network_config;
 mod snapshot_source;
 
 mod resources;
+
+pub(crate) mod host_err;
 #[cfg(test)]
 mod test;
 #[cfg(any(test, feature = "testutils"))]

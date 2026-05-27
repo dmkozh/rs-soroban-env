@@ -192,7 +192,12 @@ impl TryFrom<&HostError> for ScError {
 
 impl From<HostError> for std::io::Error {
     fn from(e: HostError) -> Self {
-        std::io::Error::new(std::io::ErrorKind::Other, e)
+        // `HostError` embeds (zero-copy, `Rc`-backed) XDR and is therefore
+        // `!Send + !Sync`, whereas `io::Error` payloads must be `Send + Sync`.
+        // The only consumer of this conversion (metered XDR writing) discards
+        // the payload and re-derives a budget error, so carrying a debug-
+        // formatted string of the lightweight error code is sufficient.
+        std::io::Error::new(std::io::ErrorKind::Other, format!("{:?}", e.error))
     }
 }
 

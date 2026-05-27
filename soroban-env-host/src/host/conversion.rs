@@ -116,14 +116,14 @@ impl Host {
         T: From<[u8; N]>,
     {
         self.visit_obj(obj, |bytes: &ScBytes| {
-            self.fixed_length_bytes_from_slice(name, bytes.as_slice())
+            self.fixed_length_bytes_from_slice(name, bytes.as_ref())
         })
     }
 
     pub(crate) fn account_id_from_bytesobj(&self, k: BytesObject) -> Result<AccountId, HostError> {
         self.visit_obj(k, |bytes: &ScBytes| {
             Ok(AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
-                self.fixed_length_bytes_from_slice("account_id", bytes.as_slice())?,
+                self.fixed_length_bytes_from_slice("account_id", bytes.as_ref())?,
             )))
         })
     }
@@ -738,9 +738,9 @@ impl Host {
         })?;
 
         self.visit_obj_untyped(strkey_obj, |key_obj: &HostObject| {
-            let key = match key_obj {
-                HostObject::Bytes(b) => b.as_slice(),
-                HostObject::String(s) => s.as_slice(),
+            let key: &[u8] = match key_obj {
+                HostObject::Bytes(b) => b.as_ref(),
+                HostObject::String(s) => s.as_ref(),
                 _ => {
                     return Err(self.err(
                         ScErrorType::Value,

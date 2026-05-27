@@ -62,9 +62,18 @@ impl Compare<HostObject> for Host {
                 (I256(a), I256(b)) => self.as_budget().compare(a, b),
                 (Vec(a), Vec(b)) => self.compare(a, b),
                 (Map(a), Map(b)) => self.compare(a, b),
-                (Bytes(a), Bytes(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (String(a), String(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
-                (Symbol(a), Symbol(b)) => self.as_budget().compare(&a.as_slice(), &b.as_slice()),
+                (Bytes(a), Bytes(b)) => {
+                    let (a, b): (&[u8], &[u8]) = (a.as_ref(), b.as_ref());
+                    self.as_budget().compare(&a, &b)
+                }
+                (String(a), String(b)) => {
+                    let (a, b): (&[u8], &[u8]) = (a.as_ref(), b.as_ref());
+                    self.as_budget().compare(&a, &b)
+                }
+                (Symbol(a), Symbol(b)) => {
+                    let (a, b): (&[u8], &[u8]) = (a.as_ref(), b.as_ref());
+                    self.as_budget().compare(&a, &b)
+                }
                 (Address(a), Address(b)) => self.as_budget().compare(a, b),
                 (MuxedAddress(a), MuxedAddress(b)) => self.as_budget().compare(a, b),
 
@@ -305,15 +314,15 @@ impl Compare<ScVal> for Budget {
             }
 
             (Bytes(a), Bytes(b)) => {
-                <Self as Compare<&[u8]>>::compare(self, &a.as_slice(), &b.as_slice())
+                <Self as Compare<&[u8]>>::compare(self, &a.as_ref(), &b.as_ref())
             }
 
             (String(a), String(b)) => {
-                <Self as Compare<&[u8]>>::compare(self, &a.as_slice(), &b.as_slice())
+                <Self as Compare<&[u8]>>::compare(self, &a.as_ref(), &b.as_ref())
             }
 
             (Symbol(a), Symbol(b)) => {
-                <Self as Compare<&[u8]>>::compare(self, &a.as_slice(), &b.as_slice())
+                <Self as Compare<&[u8]>>::compare(self, &a.as_ref(), &b.as_ref())
             }
 
             (ContractInstance(a), ContractInstance(b)) => self.compare(&a, &b),

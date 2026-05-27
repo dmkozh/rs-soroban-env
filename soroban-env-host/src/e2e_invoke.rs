@@ -8,7 +8,9 @@ use std::{cmp::max, rc::Rc};
 use crate::{
     auth::RecordedAuthPayload,
     storage::is_persistent_key,
-    xdr::{ContractEvent, ReadXdr, ScVal, SorobanAddressCredentials, SorobanCredentials, WriteXdr},
+    xdr::{
+        ContractEvent, ReadXdrRc, ScVal, SorobanAddressCredentials, SorobanCredentials, WriteXdr,
+    },
     DEFAULT_XDR_RW_LIMITS,
 };
 use crate::{
@@ -535,7 +537,7 @@ impl Host {
 
     fn xdr_roundtrip<T>(&self, v: &T) -> Result<T, HostError>
     where
-        T: WriteXdr + ReadXdr,
+        T: WriteXdr + ReadXdrRc,
     {
         self.metered_from_xdr(self.to_xdr_non_metered(v)?.as_slice())
     }

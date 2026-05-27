@@ -1014,7 +1014,7 @@ fn test_two_authorized_trees() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 3567903,
+                instructions: 3567043,
                 mem_bytes: 8487330,
                 disk_read_entries: 1,
                 memory_read_entries: 8,
@@ -1040,7 +1040,7 @@ fn test_two_authorized_trees() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1589984,
+                        instructions: 1589554,
                         mem_bytes: 3638984,
                         disk_read_entries: 1,
                         memory_read_entries: 4,
@@ -1122,7 +1122,7 @@ fn test_two_authorized_trees() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1591504,
+                        instructions: 1591074,
                         mem_bytes: 3639151,
                         disk_read_entries: 0,
                         memory_read_entries: 2,
@@ -2496,8 +2496,8 @@ fn test_require_auth_within_check_auth() {
                 ),
             ),
             resources: SubInvocationResources {
-                instructions: 1439217,
-                mem_bytes: 3622540,
+                instructions: 1437047,
+                mem_bytes: 3622404,
                 disk_read_entries: 1,
                 memory_read_entries: 10,
                 write_entries: 3,
@@ -2522,8 +2522,8 @@ fn test_require_auth_within_check_auth() {
                         ),
                     ),
                     resources: SubInvocationResources {
-                        instructions: 1055557,
-                        mem_bytes: 2406573,
+                        instructions: 1053386,
+                        mem_bytes: 2406429,
                         disk_read_entries: 1,
                         memory_read_entries: 7,
                         write_entries: 2,
@@ -2548,8 +2548,8 @@ fn test_require_auth_within_check_auth() {
                                 ),
                             ),
                             resources: SubInvocationResources {
-                                instructions: 738616,
-                                mem_bytes: 1203352,
+                                instructions: 737315,
+                                mem_bytes: 1203276,
                                 disk_read_entries: 1,
                                 memory_read_entries: 3,
                                 write_entries: 1,

@@ -422,7 +422,7 @@ impl Host {
             let sobj: SymbolObject = sym.try_into()?;
             self.visit_obj(sobj, |scsym: &ScSymbol| {
                 self.as_budget()
-                    .compare(&scsym.as_slice(), &s)
+                    .compare(&scsym.as_ref(), &s)
                     .map(|c| c == Ordering::Equal)
             })
         }

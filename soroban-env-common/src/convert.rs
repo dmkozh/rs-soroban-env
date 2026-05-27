@@ -582,7 +582,7 @@ where
             ScVal::Symbol(bytes) => {
                 // NB: Long symbols are objects and should have been
                 // handled before reaching this point.
-                SymbolSmall::try_from_bytes(bytes.as_slice())?.into()
+                SymbolSmall::try_from_bytes(bytes.as_ref())?.into()
             }
 
             // These should all have been classified as ScValObjRef above, or are

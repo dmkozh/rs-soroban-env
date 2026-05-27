@@ -1439,7 +1439,7 @@ impl VmCallerEnv for Host {
         let num = self.visit_obj(bytes, |b: &ScBytes| {
             Ok(U256::from_be_bytes(self.fixed_length_bytes_from_slice(
                 "U256 bytes",
-                b.as_slice(),
+                b.as_ref(),
             )?))
         })?;
         self.map_err(U256Val::try_from_val(self, &num))
@@ -1522,7 +1522,7 @@ impl VmCallerEnv for Host {
         let num = self.visit_obj(bytes, |b: &ScBytes| {
             Ok(I256::from_be_bytes(self.fixed_length_bytes_from_slice(
                 "I256 bytes",
-                b.as_slice(),
+                b.as_ref(),
             )?))
         })?;
         I256Val::try_from_val(self, &num).map_err(|_| ConversionError.into())
@@ -2539,7 +2539,7 @@ impl VmCallerEnv for Host {
         );
 
         let wasm_vec =
-            self.visit_obj(wasm, |bytes: &ScBytes| bytes.as_vec().metered_clone(self))?;
+            self.visit_obj(wasm, |bytes: &ScBytes| self.metered_slice_to_vec(bytes.as_ref()))?;
         self.upload_contract_wasm(wasm_vec)
     }
 
@@ -2694,7 +2694,7 @@ impl VmCallerEnv for Host {
         b: BytesObject,
     ) -> Result<Val, HostError> {
         let scv = self.visit_obj(b, |hv: &ScBytes| {
-            self.metered_from_xdr::<ScVal>(hv.as_slice())
+            self.metered_from_xdr::<ScVal>(hv.as_ref())
         })?;
         // Metering bug: the representation check is not metered,
         // so if the value is not valid, we won't charge anything for
@@ -2943,7 +2943,7 @@ impl VmCallerEnv for Host {
             // will not trigger a reallocation, causing data to be cloned twice.
             let len = self.validate_usize_sum_fits_in_u32(hv.len(), 1)?;
             let mut vnew = Vec::<u8>::with_metered_capacity(len, self)?;
-            vnew.extend_from_slice(hv.as_slice());
+            vnew.extend_from_slice(hv.as_ref());
             vnew.push(u);
             Ok(ScBytes(vnew.try_into()?))
         })?;
@@ -3028,7 +3028,7 @@ impl VmCallerEnv for Host {
             // will not trigger a reallocation, causing data to be cloned twice.
             let len = self.validate_usize_sum_fits_in_u32(hv.len(), 1)?;
             let mut vnew = Vec::<u8>::with_metered_capacity(len, self)?;
-            vnew.extend_from_slice(hv.as_slice());
+            vnew.extend_from_slice(hv.as_ref());
             vnew.insert(i as usize, u);
             Ok(ScBytes(vnew.try_into()?))
         })?;
@@ -3047,8 +3047,8 @@ impl VmCallerEnv for Host {
                 // allocation only happens once, and charge for it upfront.
                 let len = self.validate_usize_sum_fits_in_u32(sb1.len(), sb2.len())?;
                 let mut vnew = Vec::<u8>::with_metered_capacity(len, self)?;
-                vnew.extend_from_slice(sb1.as_slice());
-                vnew.extend_from_slice(sb2.as_slice());
+                vnew.extend_from_slice(sb1.as_ref());
+                vnew.extend_from_slice(sb2.as_ref());
                 Ok(vnew)
             })
         })?;
@@ -3066,9 +3066,9 @@ impl VmCallerEnv for Host {
         let end: u32 = end.into();
         let vnew = self.visit_obj(b, |hv: &ScBytes| {
             let range = self.valid_range_from_start_end_bound(start, end, hv.len())?;
+            let hv: &[u8] = hv.as_ref();
             self.metered_slice_to_vec(
-                &hv.as_slice()
-                    .get(range)
+                hv.get(range)
                     .ok_or_else(|| self.err_oob_object_index(None))?,
             )
         })?;
@@ -3080,7 +3080,7 @@ impl VmCallerEnv for Host {
         _vmcaller: &mut VmCaller<Host>,
         str: StringObject,
     ) -> Result<BytesObject, HostError> {
-        let scb = self.visit_obj(str, |s: &ScString| self.scbytes_from_slice(s.as_slice()))?;
+        let scb = self.visit_obj(str, |s: &ScString| self.scbytes_from_slice(s.as_ref()))?;
         self.add_host_object(scb)
     }
 
@@ -3089,7 +3089,7 @@ impl VmCallerEnv for Host {
         _vmcaller: &mut VmCaller<Host>,
         bytes: BytesObject,
     ) -> Result<StringObject, HostError> {
-        let bytes = self.visit_obj(bytes, |b: &ScBytes| self.metered_slice_to_vec(b.as_slice()))?;
+        let bytes = self.visit_obj(bytes, |b: &ScBytes| self.metered_slice_to_vec(b.as_ref()))?;
         self.add_host_object(ScString(bytes.try_into()?))
     }
 
@@ -3127,7 +3127,7 @@ impl VmCallerEnv for Host {
         let verifying_key = self.ed25519_pub_key_from_bytesobj_input(k)?;
         let sig = self.ed25519_signature_from_bytesobj_input("sig", s)?;
         let res = self.visit_obj(x, |payload: &ScBytes| {
-            self.verify_sig_ed25519_internal(payload.as_slice(), &verifying_key, &sig)
+            self.verify_sig_ed25519_internal(payload.as_ref(), &verifying_key, &sig)
         });
         Ok(res?.into())
     }
@@ -3228,8 +3228,8 @@ impl VmCallerEnv for Host {
         let g1 = self.visit_obj(mo, |msg: &ScBytes| {
             self.visit_obj(dst, |dst: &ScBytes| {
                 self.hash_to_curve(
-                    dst.as_slice(),
-                    msg.as_slice(),
+                    dst.as_ref(),
+                    msg.as_ref(),
                     &ContractCostType::Bls12381HashToG1,
                 )
             })
@@ -3305,8 +3305,8 @@ impl VmCallerEnv for Host {
         let g2 = self.visit_obj(msg, |msg: &ScBytes| {
             self.visit_obj(dst, |dst: &ScBytes| {
                 self.hash_to_curve(
-                    dst.as_slice(),
-                    msg.as_slice(),
+                    dst.as_ref(),
+                    msg.as_ref(),
                     &ContractCostType::Bls12381HashToG2,
                 )
             })

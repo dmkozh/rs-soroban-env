@@ -263,7 +263,7 @@ impl Host {
         // but really "instantiating a VM" is mostly just "parsing the module
         // and doing those checks" anyway. Revisit in the future if you want to
         // try to split these costs up some.
-        if cfg!(any(test, feature = "testutils")) && wasm_bytes_m.as_slice().is_empty() {
+        if cfg!(any(test, feature = "testutils")) && wasm_bytes_m.as_ref().is_empty() {
             // Allow a zero-byte contract when testing, as this is used to make
             // native test contracts behave like wasm. They will never be
             // instantiated, this is just to exercise their storage logic.
@@ -271,7 +271,7 @@ impl Host {
             let _check_vm = Vm::new(
                 self,
                 ContractId(Hash(hash_bytes.metered_clone(self)?)),
-                wasm_bytes_m.as_slice(),
+                wasm_bytes_m.as_ref(),
             )?;
             // At this point we do a secondary parse on what we've checked to be a valid
             // module in order to extract a refined cost model, which we'll store in the
@@ -281,7 +281,7 @@ impl Host {
                 ext: ExtensionPoint::V0,
                 cost_inputs: crate::vm::ParsedModule::extract_refined_contract_cost_inputs(
                     self,
-                    wasm_bytes_m.as_slice(),
+                    wasm_bytes_m.as_ref(),
                 )?,
             });
         }

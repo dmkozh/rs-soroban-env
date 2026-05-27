@@ -71,7 +71,7 @@ impl Host {
         k: BytesObject,
     ) -> Result<ed25519_dalek::VerifyingKey, HostError> {
         self.visit_obj(k, |bytes: &ScBytes| {
-            self.ed25519_pub_key_from_bytes(bytes.as_slice())
+            self.ed25519_pub_key_from_bytes(bytes.as_ref())
         })
     }
 
@@ -160,7 +160,7 @@ impl Host {
         k: BytesObject,
     ) -> Result<p256::ecdsa::VerifyingKey, HostError> {
         self.visit_obj(k, |bytes: &ScBytes| {
-            self.secp256r1_decode_sec1_uncompressed_pubkey(bytes.as_slice())
+            self.secp256r1_decode_sec1_uncompressed_pubkey(bytes.as_ref())
         })
     }
 
@@ -203,7 +203,7 @@ impl Host {
         SignatureSize<C>: ArrayLength<u8>,
     {
         self.visit_obj(k, |bytes: &ScBytes| {
-            self.ecdsa_signature_from_bytes(bytes.as_slice())
+            self.ecdsa_signature_from_bytes(bytes.as_ref())
         })
     }
 
@@ -267,7 +267,7 @@ impl Host {
         x: BytesObject,
     ) -> Result<Vec<u8>, HostError> {
         self.visit_obj(x, |bytes: &ScBytes| {
-            let hash = sha256_hash_from_bytes(bytes.as_slice(), self)?;
+            let hash = sha256_hash_from_bytes(bytes.as_ref(), self)?;
             if hash.len() != 32 {
                 return Err(err!(
                     self,
@@ -304,7 +304,7 @@ impl Host {
         x: BytesObject,
     ) -> Result<Vec<u8>, HostError> {
         self.visit_obj(x, |bytes: &ScBytes| {
-            let hash = self.keccak256_hash_from_bytes(bytes.as_slice())?;
+            let hash = self.keccak256_hash_from_bytes(bytes.as_ref())?;
             if hash.len() != 32 {
                 return Err(err!(
                     self,

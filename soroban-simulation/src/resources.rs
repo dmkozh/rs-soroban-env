@@ -1,3 +1,4 @@
+use crate::host_err::MapHostError;
 use crate::network_config::NetworkConfig;
 use crate::simulation::{SimulationAdjustmentConfig, SimulationAdjustmentFactor};
 use anyhow::{anyhow, ensure, Context, Result};
@@ -138,7 +139,8 @@ pub(crate) fn simulate_extend_ttl_op_resources(
     let new_live_until_ledger = current_ledger_seq + extend_to;
     for key in keys_to_extend {
         let durability = get_key_durability(key).ok_or_else(|| anyhow!("Can't extend TTL for ledger entry with key `{:?}`. Only entries with TTL (contract data or code entries) can have it extended", key))?;
-        let entry_with_live_until = snapshot.get(&Rc::new(key.clone()))?;
+        let entry_with_live_until = snapshot.get(&Rc::new(key.clone()))
+            .map_host_err()?;
         let Some((entry, live_until)) = entry_with_live_until else {
             continue;
         };
@@ -155,7 +157,7 @@ pub(crate) fn simulate_extend_ttl_op_resources(
         );
         extended_keys.push(key.clone());
         let entry_xdr_size = entry.to_xdr(DEFAULT_XDR_RW_LIMITS)?.len().try_into()?;
-        let entry_size: u32 = entry_size_for_rent(&budget, &entry, entry_xdr_size)?;
+        let entry_size: u32 = entry_size_for_rent(&budget, &entry, entry_xdr_size).map_host_err()?;
         rent_changes.push(LedgerEntryRentChange {
             is_persistent: durability == ContractDataDurability::Persistent,
             is_code_entry: matches!(key.discriminant(), LedgerEntryType::ContractCode),
@@ -201,7 +203,8 @@ pub(crate) fn simulate_restore_op_resources(
             "Can't restore a ledger entry with key: {key:?}. Only persistent ledger entries with TTL can be restored."
         );
         let entry_with_live_until = snapshot_source
-            .get(&Rc::new(key.clone()))?
+            .get(&Rc::new(key.clone()))
+            .map_host_err()?
             .ok_or_else(|| anyhow!("Missing entry to restore for key {key:?}"))?;
         let (entry, live_until) = entry_with_live_until;
 
@@ -215,7 +218,7 @@ pub(crate) fn simulate_restore_op_resources(
         restored_keys.push(key.clone());
 
         let entry_xdr_size: u32 = entry.to_xdr(DEFAULT_XDR_RW_LIMITS)?.len().try_into()?;
-        let entry_rent_size: u32 = entry_size_for_rent(&budget, &entry, entry_xdr_size)?;
+        let entry_rent_size: u32 = entry_size_for_rent(&budget, &entry, entry_xdr_size).map_host_err()?;
         restored_bytes = restored_bytes.saturating_add(entry_xdr_size);
         rent_changes.push(LedgerEntryRentChange {
             is_persistent: true,

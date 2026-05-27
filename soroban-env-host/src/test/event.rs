@@ -333,7 +333,11 @@ fn too_big_event_topic() -> Result<(), HostError> {
     budget.reset_unlimited()?;
     let bytes = host.bytes_new_from_slice(&[0; 0x0FFFFFFF])?;
     let topics = host.vec_new_from_slice(&[bytes.to_val()])?;
-    budget.reset_default()?;
+    // Zero-copy byte payloads make emitting the event cheap; the
+    // data-proportional cost is paid when the event is externalized to XDR
+    // (which still copies the payload). Tighten the budget so externalizing this
+    // oversized event reliably exhausts it.
+    budget.reset_limits(1_000_000, 40 * 1024 * 1024)?;
     host.contract_event(topics, Val::from_u32(0).to_val())?;
     assert_le!(budget.get_cpu_insns_consumed()?, 5000);
     assert_le!(budget.get_mem_bytes_consumed()?, 500);
@@ -353,7 +357,11 @@ fn too_big_event_data() -> Result<(), HostError> {
     budget.reset_unlimited()?;
     let bytes = host.bytes_new_from_slice(&[0; 0x0FFFFFFF])?;
     let topics = host.vec_new_from_slice(&[Val::from_u32(0).to_val()])?;
-    budget.reset_default()?;
+    // Zero-copy byte payloads make emitting the event cheap; the
+    // data-proportional cost is paid when the event is externalized to XDR
+    // (which still copies the payload). Tighten the budget so externalizing this
+    // oversized event reliably exhausts it.
+    budget.reset_limits(1_000_000, 40 * 1024 * 1024)?;
     host.contract_event(topics, bytes.to_val())?;
     assert_le!(budget.get_cpu_insns_consumed()?, 5000);
     assert_le!(budget.get_mem_bytes_consumed()?, 500);

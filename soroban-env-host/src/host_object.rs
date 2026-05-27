@@ -132,7 +132,7 @@ impl HostObject {
                 };
                 let small: SymbolStr = small.into();
                 let rhs: &[u8] = small.as_ref();
-                Some(budget.compare(&s.as_vec().as_slice(), &rhs)?)
+                Some(budget.compare(&s.as_ref(), &rhs)?)
             }
 
             HostObject::Vec(_)
@@ -192,7 +192,7 @@ macro_rules! declare_mem_host_object_type {
             }
 
             fn as_byte_slice(&self) -> &[u8] {
-                self.as_slice()
+                self.as_ref()
             }
         }
     };

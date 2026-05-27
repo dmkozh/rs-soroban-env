@@ -43,7 +43,36 @@ pub use parsed_module::{
 use crate::VmCaller;
 use wasmi::{Caller, StoreContextMut};
 
-impl wasmi::core::HostError for HostError {}
+/// A lightweight, `Send + Sync` error payload carried inside wasmi [`Trap`]s.
+///
+/// `HostError` embeds [`crate::events::Events`] (XDR), which — since the
+/// zero-copy XDR decoding optimization — are backed by `Rc<[u8]>` and therefore
+/// `!Send + !Sync`. wasmi requires the error type stored inside a `Trap` to be
+/// `Send + Sync` (via `DowncastSync`), so only the lightweight, `Copy`
+/// [`crate::Error`] code crosses the VM boundary. The full `HostError` (with its
+/// debug info and events) is reconstructed from host state when the trap is
+/// caught (see [`Vm::invoke_function_raw`]).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WasmiHostError(pub crate::Error);
+
+impl core::fmt::Display for WasmiHostError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
+impl wasmi::core::HostError for WasmiHostError {}
+
+// `HostError` itself is no longer `Send + Sync`, so it cannot be stored in a
+// `Trap` directly. We keep the ergonomic `HostError -> Trap` conversion (relied
+// on pervasively by the `?` operator in host-function dispatch) but route it
+// through the lightweight `WasmiHostError`, dropping the (non-`Send`) debug info
+// at the boundary.
+impl From<HostError> for wasmi::core::Trap {
+    fn from(he: HostError) -> Self {
+        wasmi::core::Trap::from(WasmiHostError(he.error))
+    }
+}
 
 const WASM_STD_MEM_PAGE_SIZE_IN_BYTES: u32 = 0x10000;
 
@@ -361,12 +390,17 @@ impl Vm {
                         });
                         return Err(host.error(err, &msg, &[func_sym.to_val()]));
                     }
-                    if let Some(he) = trap.downcast::<HostError>() {
-                        host.log_diagnostics(
+                    if let Some(we) = trap.downcast::<WasmiHostError>() {
+                        // Only the lightweight `Error` code crossed the VM
+                        // boundary; rebuild a full `HostError` (re-capturing the
+                        // event log / debug info from current host state). This
+                        // also records the "trapped with HostError" diagnostic.
+                        let err = we.0;
+                        return Err(host.error(
+                            err,
                             "VM call trapped with HostError",
-                            &[func_sym.to_val(), he.error.to_val()],
-                        );
-                        return Err(he);
+                            &[func_sym.to_val(), err.to_val()],
+                        ));
                     }
                     return Err(host.err(
                         ScErrorType::WasmVm,

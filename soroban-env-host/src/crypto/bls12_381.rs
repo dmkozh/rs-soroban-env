@@ -211,7 +211,7 @@ impl Host {
             // to get `X: Fp`. The Y however, does not have the top bits masked off
             // so it is possible for Y to exceed 381 bits. Internally `Fp` deserialization
             // makes sure any value >= prime modulus results in an error.
-            self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(bytes.as_slice(), tag)
+            self.deserialize_uncompressed_no_validate::<EXPECTED_SIZE, _>(bytes.as_ref(), tag)
         })?;
 
         let check_on_curve = matches!(

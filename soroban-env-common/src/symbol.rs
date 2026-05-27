@@ -205,7 +205,7 @@ impl<const N: u32> TryFrom<StringM<N>> for SymbolSmall {
     type Error = SymbolError;
 
     fn try_from(v: StringM<N>) -> Result<Self, Self::Error> {
-        v.as_slice().try_into()
+        v.as_ref().try_into()
     }
 }
 #[cfg(feature = "std")]
@@ -213,7 +213,7 @@ impl<const N: u32> TryFrom<&StringM<N>> for SymbolSmall {
     type Error = SymbolError;
 
     fn try_from(v: &StringM<N>) -> Result<Self, Self::Error> {
-        v.as_slice().try_into()
+        v.as_ref().try_into()
     }
 }
 
@@ -506,7 +506,7 @@ impl<E: Env> TryFromVal<E, ScSymbol> for Symbol {
 impl<E: Env> TryFromVal<E, &ScSymbol> for Symbol {
     type Error = crate::Error;
     fn try_from_val(env: &E, v: &&ScSymbol) -> Result<Self, Self::Error> {
-        Symbol::try_from_val(env, &v.0.as_slice())
+        Symbol::try_from_val(env, &v.0.as_ref())
     }
 }
 

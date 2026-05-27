@@ -1,7 +1,7 @@
 use crate::{
     budget::Budget,
     crypto::sha256_hash_from_bytes_raw,
-    xdr::{ContractCostType, Limited, ReadXdr, ScBytes, ScErrorCode, ScErrorType, WriteXdr},
+    xdr::{ContractCostType, Limited, ReadXdrRc, ScBytes, ScErrorCode, ScErrorType, WriteXdr},
     BytesObject, Host, HostError, DEFAULT_XDR_RW_LIMITS,
 };
 use std::io::Write;
@@ -37,19 +37,22 @@ impl Host {
         sha256_hash_from_bytes_raw(&buf, self)
     }
 
-    pub fn metered_from_xdr<T: ReadXdr>(&self, bytes: &[u8]) -> Result<T, HostError> {
+    pub fn metered_from_xdr<T: ReadXdrRc>(&self, bytes: &[u8]) -> Result<T, HostError> {
         let _span = tracy_span!("read xdr");
         self.charge_budget(ContractCostType::ValDeser, Some(bytes.len() as u64))?;
         let mut limits = DEFAULT_XDR_RW_LIMITS;
         limits.len = bytes.len();
-        self.map_err(T::from_xdr(bytes, limits))
+        // Decode via the buffer-based (`read_xdr_with_buffer`) path, which
+        // copies the input into a shared `Rc<[u8]>` once and then decodes large
+        // `opaque<>`/`string<>` leaves as zero-copy views into that buffer.
+        self.map_err(T::from_xdr_with_buffer(bytes, limits))
     }
 
-    pub(crate) fn metered_from_xdr_obj<T: ReadXdr>(
+    pub(crate) fn metered_from_xdr_obj<T: ReadXdrRc>(
         &self,
         bytes: BytesObject,
     ) -> Result<T, HostError> {
-        self.visit_obj(bytes, |hv: &ScBytes| self.metered_from_xdr(hv.as_slice()))
+        self.visit_obj(bytes, |hv: &ScBytes| self.metered_from_xdr(hv.as_ref()))
     }
 }
 
@@ -70,7 +73,7 @@ pub fn metered_write_xdr(
 // Host-less metered XDR decoding.
 // Prefer using `metered_from_xdr` when host is available for better error
 // reporting.
-pub fn metered_from_xdr_with_budget<T: ReadXdr>(
+pub fn metered_from_xdr_with_budget<T: ReadXdrRc>(
     bytes: &[u8],
     budget: &Budget,
 ) -> Result<T, HostError> {
@@ -78,5 +81,5 @@ pub fn metered_from_xdr_with_budget<T: ReadXdr>(
     budget.charge(ContractCostType::ValDeser, Some(bytes.len() as u64))?;
     let mut limits = DEFAULT_XDR_RW_LIMITS;
     limits.len = bytes.len();
-    T::from_xdr(bytes, limits).map_err(|e| e.into())
+    T::from_xdr_with_buffer(bytes, limits).map_err(|e| e.into())
 }

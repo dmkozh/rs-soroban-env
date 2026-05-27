@@ -849,7 +849,7 @@ impl Host {
                             ParsedModule::extract_refined_contract_cost_inputs(self, &code)?;
                         let parsed_module = ParsedModule::new_with_isolated_engine(
                             self,
-                            code.as_slice(),
+                            code.as_ref(),
                             VersionedContractCodeCostInputs::V1(cost_inputs),
                         )?;
                         let wasmi_linker = parsed_module.make_wasmi_linker(self)?;
@@ -869,7 +869,7 @@ impl Host {
         }
 
         let (code, costs) = self.retrieve_wasm_from_storage(&wasm_hash)?;
-        Vm::new_with_cost_inputs(self, contract_id, code.as_slice(), costs)
+        Vm::new_with_cost_inputs(self, contract_id, code.as_ref(), costs)
     }
 
     pub(crate) fn get_contract_protocol_version(

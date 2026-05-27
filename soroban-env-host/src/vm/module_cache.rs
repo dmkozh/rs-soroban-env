@@ -111,7 +111,7 @@ impl ModuleCache {
                         // the actual execution into a `ContractFunctionSet`.
                         // They should never be called, so we do not have to go
                         // as far as making a fake `ParsedModule` for them.
-                        if code.as_slice().is_empty() {
+                        if code.is_empty() {
                             continue;
                         }
 

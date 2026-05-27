@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+use crate::host_err::MapHostError;
 use soroban_env_host::budget::Budget;
 use soroban_env_host::fees::{
     compute_rent_write_fee_per_1kb, FeeConfiguration, RentFeeConfiguration,
@@ -40,7 +41,8 @@ fn load_configuration_setting(
         config_setting_id: setting_id,
     }));
     let (entry, _) = snapshot
-        .get(&key)?
+        .get(&key)
+        .map_host_err()?
         .ok_or_else(|| anyhow!("setting {setting_id:?} is not present in the snapshot"))?;
     if let LedgerEntry {
         data: LedgerEntryData::ConfigSetting(cs),
@@ -162,6 +164,7 @@ impl NetworkConfig {
             self.cpu_cost_params.clone(),
             self.memory_cost_params.clone(),
         )
+        .map_host_err()
         .context("cannot create budget from network configuration")
     }
 }

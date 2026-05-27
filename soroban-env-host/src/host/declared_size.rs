@@ -163,29 +163,29 @@ impl_declared_size_type!(ScNonceKey, 33);
 impl_declared_size_type!(PublicKey, 32);
 impl_declared_size_type!(Asset, 45);
 impl_declared_size_type!(TrustLineAsset, 45);
-impl_declared_size_type!(Signer, 72);
+impl_declared_size_type!(Signer, 80);
 impl_declared_size_type!(LedgerKeyAccount, 32);
 impl_declared_size_type!(LedgerKeyTrustLine, 77);
 impl_declared_size_type!(LedgerKeyContractCode, 36);
 impl_declared_size_type!(LedgerEntryExt, 33);
-impl_declared_size_type!(AccountEntry, 216);
+impl_declared_size_type!(AccountEntry, 224);
 impl_declared_size_type!(TrustLineEntry, 128);
 impl_declared_size_type!(ContractCodeCostInputs, 40);
-impl_declared_size_type!(ContractCodeEntry, 64);
+impl_declared_size_type!(ContractCodeEntry, 72);
 impl_declared_size_type!(ContractCodeEntryV1, 40);
 // TtlEntry must be declared as it's used in e2e to build
 // The TtlEntryMap, but is not otherwise cloned anywhere.
 impl_declared_size_type!(TtlEntry, 36);
 impl_declared_size_type!(LedgerKey, 120);
-impl_declared_size_type!(LedgerEntry, 256);
+impl_declared_size_type!(LedgerEntry, 264);
 impl_declared_size_type!(ContractEvent, 128);
-impl_declared_size_type!(ScBytes, 24);
-impl_declared_size_type!(ScString, 24);
-impl_declared_size_type!(ScSymbol, 24);
+impl_declared_size_type!(ScBytes, 32);
+impl_declared_size_type!(ScString, 32);
+impl_declared_size_type!(ScSymbol, 32);
 impl_declared_size_type!(ScError, 8);
 impl_declared_size_type!(CreateContractArgs, 120);
 impl_declared_size_type!(CreateContractArgsV2, 144);
-impl_declared_size_type!(InvokeContractArgs, 96);
+impl_declared_size_type!(InvokeContractArgs, 104);
 impl_declared_size_type!(ContractIdPreimage, 80);
 impl_declared_size_type!(ContractDataDurability, 4);
 
@@ -312,12 +312,15 @@ impl<C: DeclaredSizeForMetering, const N: usize> DeclaredSizeForMetering for [C;
     const DECLARED_SIZE: u64 = C::DECLARED_SIZE.saturating_mul(N as u64);
 }
 
+// NB: since the zero-copy XDR decoding optimization, `BytesM`/`StringM` wrap an
+// `RcBytes` (a shared `Rc<[u8]>` view: fat pointer + start + len = 32 bytes)
+// rather than a `Vec<u8>` (24 bytes), hence the larger declared size.
 impl<const C: u32> DeclaredSizeForMetering for BytesM<C> {
-    const DECLARED_SIZE: u64 = 24;
+    const DECLARED_SIZE: u64 = 32;
 }
 
 impl<const C: u32> DeclaredSizeForMetering for StringM<C> {
-    const DECLARED_SIZE: u64 = 24;
+    const DECLARED_SIZE: u64 = 32;
 }
 
 impl<C> DeclaredSizeForMetering for Vec<C> {
@@ -533,13 +536,13 @@ mod test {
         expect!["77"].assert_eq(size_of::<LedgerKeyTrustLine>().to_string().as_str());
         expect!["32"].assert_eq(size_of::<LedgerKeyContractCode>().to_string().as_str());
         expect!["33"].assert_eq(size_of::<LedgerEntryExt>().to_string().as_str());
-        expect!["216"].assert_eq(size_of::<AccountEntry>().to_string().as_str());
+        expect!["224"].assert_eq(size_of::<AccountEntry>().to_string().as_str());
         expect!["128"].assert_eq(size_of::<TrustLineEntry>().to_string().as_str());
         expect!["40"].assert_eq(size_of::<ContractCodeCostInputs>().to_string().as_str());
         // ContractCodeEntry had an ExtensionPoint added to it and is now 40
         // bytes larger than its original size (and for some reason its declared
         // size was 64 bytes, even though its original size wasonly 56 bytes)
-        expect!["104"].assert_eq(size_of::<ContractCodeEntry>().to_string().as_str());
+        expect!["112"].assert_eq(size_of::<ContractCodeEntry>().to_string().as_str());
         expect!["40"].assert_eq(size_of::<ContractCodeEntryV1>().to_string().as_str());
         expect!["36"].assert_eq(size_of::<TtlEntry>().to_string().as_str());
 
@@ -552,21 +555,21 @@ mod test {
         }
         #[rustversion::since(1.76)]
         fn check_sizes_that_changed_at_rust_1_76() {
-            expect!["64"].assert_eq(size_of::<Signer>().to_string().as_str());
+            expect!["80"].assert_eq(size_of::<Signer>().to_string().as_str());
             expect!["120"].assert_eq(size_of::<LedgerKey>().to_string().as_str());
         }
 
         check_sizes_that_changed_at_rust_1_76();
 
-        expect!["256"].assert_eq(size_of::<LedgerEntry>().to_string().as_str());
+        expect!["264"].assert_eq(size_of::<LedgerEntry>().to_string().as_str());
         expect!["128"].assert_eq(size_of::<ContractEvent>().to_string().as_str());
-        expect!["24"].assert_eq(size_of::<ScBytes>().to_string().as_str());
-        expect!["24"].assert_eq(size_of::<ScString>().to_string().as_str());
-        expect!["24"].assert_eq(size_of::<ScSymbol>().to_string().as_str());
+        expect!["32"].assert_eq(size_of::<ScBytes>().to_string().as_str());
+        expect!["32"].assert_eq(size_of::<ScString>().to_string().as_str());
+        expect!["32"].assert_eq(size_of::<ScSymbol>().to_string().as_str());
         expect!["8"].assert_eq(size_of::<ScError>().to_string().as_str());
         expect!["120"].assert_eq(size_of::<CreateContractArgs>().to_string().as_str());
         expect!["144"].assert_eq(size_of::<CreateContractArgsV2>().to_string().as_str());
-        expect!["96"].assert_eq(size_of::<InvokeContractArgs>().to_string().as_str());
+        expect!["104"].assert_eq(size_of::<InvokeContractArgs>().to_string().as_str());
         expect!["80"].assert_eq(size_of::<ContractIdPreimage>().to_string().as_str());
         expect!["4"].assert_eq(size_of::<ContractDataDurability>().to_string().as_str());
         expect!["0"].assert_eq(size_of::<ExtensionPoint>().to_string().as_str());
@@ -585,8 +588,8 @@ mod test {
         expect!["16"].assert_eq(size_of::<&[ScVal]>().to_string().as_str());
         expect!["72"].assert_eq(size_of::<(Val, ScVal)>().to_string().as_str());
         expect!["320"].assert_eq(size_of::<[ScVal; 5]>().to_string().as_str());
-        expect!["24"].assert_eq(size_of::<BytesM<10000>>().to_string().as_str());
-        expect!["24"].assert_eq(size_of::<StringM<10000>>().to_string().as_str());
+        expect!["32"].assert_eq(size_of::<BytesM<10000>>().to_string().as_str());
+        expect!["32"].assert_eq(size_of::<StringM<10000>>().to_string().as_str());
         expect!["24"].assert_eq(size_of::<Vec<ScVal>>().to_string().as_str());
         expect!["8"].assert_eq(size_of::<Box<ScVal>>().to_string().as_str());
         expect!["64"].assert_eq(size_of::<Option<ScVal>>().to_string().as_str());

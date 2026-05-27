@@ -167,7 +167,7 @@ impl core::fmt::Display for HostEvent {
 
                     if i == 0 {
                         if let ScVal::Symbol(first_topic_str) = topic {
-                            if first_topic_str.0.as_slice() == "fn_call".as_bytes() {
+                            if first_topic_str.0.as_ref() == "fn_call".as_bytes() {
                                 is_fn_call = true;
                             }
                         }

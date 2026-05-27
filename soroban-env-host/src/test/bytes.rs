@@ -23,7 +23,7 @@ fn bytes_suite_of_tests() -> Result<(), HostError> {
         obj = host.bytes_push(obj, (i as u32).into())?;
     }
     if let ScVal::Bytes(b) = host.from_host_val(obj.into())? {
-        assert_eq!((0..32).collect::<Vec<u8>>().as_slice(), b.as_slice());
+        assert_eq!((0..32).collect::<Vec<u8>>().as_slice(), AsRef::<[u8]>::as_ref(&b));
     } else {
         return Err(
             Error::from_type_and_code(ScErrorType::Object, ScErrorCode::UnexpectedType).into(),
@@ -46,7 +46,7 @@ fn bytes_suite_of_tests() -> Result<(), HostError> {
     obj = host.bytes_insert(obj, 5_u32.into(), 5_u32.into())?; // [0,1,2,3,4,5,6,7]
     let obj0 = host.bytes_slice(obj, 0_u32.into(), 3_u32.into())?; // [0,1,2]
     if let ScVal::Bytes(b) = host.from_host_val(obj0.into())? {
-        assert_eq!((0..3).collect::<Vec<u8>>().as_slice(), b.as_slice());
+        assert_eq!((0..3).collect::<Vec<u8>>().as_slice(), AsRef::<[u8]>::as_ref(&b));
     } else {
         return Err(
             Error::from_type_and_code(ScErrorType::Object, ScErrorCode::InternalError).into(),
@@ -54,7 +54,7 @@ fn bytes_suite_of_tests() -> Result<(), HostError> {
     }
     let obj1 = host.bytes_slice(obj, 3_u32.into(), 8_u32.into())?; // [3,4,5,6,7]
     if let ScVal::Bytes(b) = host.from_host_val(obj1.into())? {
-        assert_eq!((3..8).collect::<Vec<u8>>().as_slice(), b.as_slice());
+        assert_eq!((3..8).collect::<Vec<u8>>().as_slice(), AsRef::<[u8]>::as_ref(&b));
     } else {
         return Err(
             Error::from_type_and_code(ScErrorType::Object, ScErrorCode::InternalError).into(),
@@ -525,14 +525,11 @@ fn instantiate_oversized_bytes_from_linear_memory() -> Result<(), HostError> {
     );
     // This currently won't pass VmInstantiation, in the future if VmInstantiation cost goes down, we need
     // to adjust the maximum length.
-    // Here we check the mem inputs match expectation.
-    assert_ge!(
-        host.budget_ref()
-            .get_tracker(ContractCostType::MemAlloc)?
-            .inputs
-            .unwrap(),
-        480000
-    );
+    // Here we check the mem inputs match expectation. Since the zero-copy XDR
+    // optimization the contract Wasm is decoded without copying, so the large
+    // data segment is no longer accounted as `MemAlloc`; the data-proportional
+    // work is now reflected by `MemCpy` (copying the data segment during
+    // parsing) instead.
     assert_ge!(
         host.budget_ref()
             .get_tracker(ContractCostType::MemCpy)?

@@ -453,6 +453,11 @@ fn initialization_invalid() -> Result<(), HostError> {
     let keys = ["a", "b", "c", "d", "e"];
 
     let map = host.map_new_from_slices(&keys, &vals.as_slice())?;
+    // Since the zero-copy XDR optimization, byte payloads are shared rather than
+    // copied, so materializing them is much cheaper than before. Tighten the
+    // budget so converting these 5x7MB payloads back to an `ScVal` (which still
+    // does data-proportional `MemCpy` work) reliably exhausts the budget.
+    host.budget_ref().reset_limits(1_000_000, 40 * 1024 * 1024)?;
     let res = host.from_host_val(map.to_val());
     assert!(HostError::result_matches_err(
         res,

@@ -259,7 +259,9 @@ fn fish_host_error_from_wasm_trap(
             .unwrap()
     })
     .map_err(|e| match e {
-        wasmi::Error::Trap(t) => t.downcast().unwrap(),
+        wasmi::Error::Trap(t) => {
+            HostError::from(t.downcast::<crate::vm::WasmiHostError>().unwrap().0)
+        }
         _ => panic!(),
     })
 }

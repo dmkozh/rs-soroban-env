@@ -424,6 +424,11 @@ fn instantiate_oversized_vec_from_slice() -> Result<(), HostError> {
 
     let vals = vec![bytes_val; 5];
     let vec = host.vec_new_from_slice(&vals.as_slice())?;
+    // Since the zero-copy XDR optimization, byte payloads are shared rather than
+    // copied, so materializing them is much cheaper than before. Tighten the
+    // budget so converting these 5x7MB payloads back to an `ScVal` (which still
+    // does data-proportional `MemCpy` work) reliably exhausts the budget.
+    host.budget_ref().reset_limits(1_000_000, 40 * 1024 * 1024)?;
     let res = host.from_host_val(vec.to_val());
     assert!(HostError::result_matches_err(
         res,
