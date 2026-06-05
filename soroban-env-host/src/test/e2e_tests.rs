@@ -339,7 +339,7 @@ fn invoke_host_function_helper_with_restored_entries(
         prng_seed.to_vec(),
         &mut diagnostic_events,
         None,
-        Some(module_cache),
+        &mut Some(module_cache),
     )?;
     Ok(InvokeHostFunctionHelperResult {
         invoke_result: res
