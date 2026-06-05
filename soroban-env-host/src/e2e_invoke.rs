@@ -2,7 +2,59 @@
 /// environments using a clean host instance.
 /// Also contains helpers for processing the ledger changes caused by these
 /// host functions.
-use std::{cmp::max, rc::Rc};
+use std::{cell::RefCell, cmp::max, rc::Rc};
+
+thread_local! {
+    // Reusable scratch buffer for measuring an entry's XDR-encoded size while
+    // building ledger changes. The encoded bytes are only used to obtain a
+    // length, so a single per-thread buffer is reused across entries and
+    // transactions instead of allocating a fresh Vec for every entry. (The
+    // analogous input-side buffers on the C++ caller are pooled the same way.)
+    static XDR_SIZE_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+// Returns the XDR-encoded size of `obj` (in bytes), metered against `budget`,
+// without permanently allocating: the encoding is written into a reused
+// thread-local scratch buffer and only its length is returned.
+fn metered_encoded_size(
+    budget: &Budget,
+    obj: &impl crate::xdr::WriteXdr,
+) -> Result<u32, HostError> {
+    XDR_SIZE_SCRATCH.with(|scratch| {
+        let mut buf = scratch.borrow_mut();
+        buf.clear();
+        metered_write_xdr(budget, obj, &mut buf)?;
+        Ok(saturating_usize_to_u32(buf.len()))
+    })
+}
+
+thread_local! {
+    // Pool of reusable byte buffers backing the encoded outputs returned to the
+    // embedder (ledger-entry changes, contract events, the result value). Unlike
+    // the size scratch above, these buffers are moved out across the FFI to C++,
+    // so they cannot be reused until C++ hands them back: `recycle_output_buffer`
+    // returns them here once the embedder has consumed the invocation output.
+    // Drawing from this pool keeps the per-invocation output encoding
+    // allocation-free once warm.
+    static OUTPUT_BUF_POOL: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+}
+
+// Draws a cleared byte buffer from the output pool, allocating only if empty.
+pub fn take_output_buffer() -> Vec<u8> {
+    OUTPUT_BUF_POOL.with(|pool| match pool.borrow_mut().pop() {
+        Some(mut buf) => {
+            buf.clear();
+            buf
+        }
+        None => Vec::new(),
+    })
+}
+
+// Returns a buffer to the output pool for reuse by a later invocation. Called
+// by the embedder (through the bridge) after it has consumed the output.
+pub fn recycle_output_buffer(buf: Vec<u8>) {
+    OUTPUT_BUF_POOL.with(|pool| pool.borrow_mut().push(buf));
+}
 
 #[cfg(any(test, feature = "recording_mode"))]
 use crate::{
@@ -224,11 +276,11 @@ fn get_ledger_changes(
         }
         let entry_with_live_until = init_storage_snapshot.get(key)?;
         if let Some((old_entry, old_live_until_ledger)) = entry_with_live_until {
-            let mut buf = vec![];
-            metered_write_xdr(budget, old_entry.as_ref(), &mut buf)?;
-
-            entry_change.old_entry_size_bytes_for_rent =
-                entry_size_for_rent(budget, &old_entry, saturating_usize_to_u32(buf.len()))?;
+            entry_change.old_entry_size_bytes_for_rent = entry_size_for_rent(
+                budget,
+                &old_entry,
+                metered_encoded_size(budget, old_entry.as_ref())?,
+            )?;
 
             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
                 ttl_change.old_live_until_ledger =
@@ -262,7 +314,7 @@ fn get_ledger_changes(
             }
             Some(AccessType::ReadWrite) => {
                 if let Some((entry, _)) = entry_with_live_until_ledger {
-                    let mut entry_buf = vec![];
+                    let mut entry_buf = take_output_buffer();
                     metered_write_xdr(budget, entry.as_ref(), &mut entry_buf)?;
                     entry_change.new_entry_size_bytes_for_rent = entry_size_for_rent(
                         budget,
@@ -499,7 +551,7 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         extract_diagnostic_events(&events, diagnostic_events);
     }
     let encoded_invoke_result = result.and_then(|res| {
-        let mut encoded_result_sc_val = vec![];
+        let mut encoded_result_sc_val = take_output_buffer();
         metered_write_xdr(&budget, &res, &mut encoded_result_sc_val).map(|_| encoded_result_sc_val)
     });
     if encoded_invoke_result.is_ok() {
@@ -890,7 +942,7 @@ pub fn encode_contract_events(budget: &Budget, events: &Events) -> Result<Vec<Ve
         .iter()
         .filter(|e| !e.failed_call && e.event.type_ != ContractEventType::Diagnostic)
         .map(|e| {
-            let mut buf = vec![];
+            let mut buf = take_output_buffer();
             metered_write_xdr(budget, &e.event, &mut buf)?;
             Ok(buf)
         })
