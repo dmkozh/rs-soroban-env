@@ -36,6 +36,6 @@ fn main() {
         base_prng_seed,
         &mut diagnostic_events,
         None,
-        None,
+        &mut None,
     );
 }

@@ -419,7 +419,12 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     base_prng_seed: T,
     diagnostic_events: &mut Vec<DiagnosticEvent>,
     trace_hook: Option<TraceHook>,
-    module_cache: Option<ModuleCache>,
+    // Taken by `&mut` (rather than by value) so the caller can hand the host a
+    // reusable, owned `ModuleCache` handle and have it moved back out after the
+    // invocation completes. This avoids cloning the (cross-thread-shared)
+    // module-cache `Arc`s on every call, whose refcount traffic otherwise
+    // serialized parallel apply. `None` means "no module cache" as before.
+    module_cache: &mut Option<ModuleCache>,
 ) -> Result<InvokeHostFunctionResult, HostError> {
     let _span0 = tracy_span!("invoke_host_function");
 
@@ -472,13 +477,20 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
     if enable_diagnostics {
         host.set_diagnostic_level(DiagnosticLevel::Debug)?;
     }
-    if let Some(module_cache) = module_cache {
+    if let Some(module_cache) = module_cache.take() {
         host.set_module_cache(module_cache)?;
     }
     let result = {
         let _span1 = tracy_span!("Host::invoke_function");
         host.invoke_function(host_function)
     };
+    // Move the (shared) module-cache handle back out to the caller's slot so it
+    // can be reused on the next invocation without re-cloning its `Arc`s. The
+    // host only ever reads its module cache during the invocation (it never
+    // takes or clears it), so it is still present here. Done before
+    // `try_finish`/host drop, which would otherwise drop the handle and
+    // decrement the shared refcounts.
+    *module_cache = host.take_module_cache().ok();
     if have_trace_hook {
         host.set_trace_hook(None)?;
     }
