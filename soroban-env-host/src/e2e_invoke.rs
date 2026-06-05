@@ -2,7 +2,59 @@
 /// environments using a clean host instance.
 /// Also contains helpers for processing the ledger changes caused by these
 /// host functions.
-use std::{cmp::max, rc::Rc};
+use std::{cell::RefCell, cmp::max, rc::Rc};
+
+thread_local! {
+    // Reusable scratch buffer for measuring an entry's XDR-encoded size while
+    // building ledger changes. The encoded bytes are only used to obtain a
+    // length, so a single per-thread buffer is reused across entries and
+    // transactions instead of allocating a fresh Vec for every entry. (The
+    // analogous input-side buffers on the C++ caller are pooled the same way.)
+    static XDR_SIZE_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+// Returns the XDR-encoded size of `obj` (in bytes), metered against `budget`,
+// without permanently allocating: the encoding is written into a reused
+// thread-local scratch buffer and only its length is returned.
+fn metered_encoded_size(
+    budget: &Budget,
+    obj: &impl crate::xdr::WriteXdr,
+) -> Result<u32, HostError> {
+    XDR_SIZE_SCRATCH.with(|scratch| {
+        let mut buf = scratch.borrow_mut();
+        buf.clear();
+        metered_write_xdr(budget, obj, &mut buf)?;
+        Ok(saturating_usize_to_u32(buf.len()))
+    })
+}
+
+thread_local! {
+    // Pool of reusable byte buffers backing the encoded outputs returned to the
+    // embedder (ledger-entry changes, contract events, the result value). Unlike
+    // the size scratch above, these buffers are moved out across the FFI to C++,
+    // so they cannot be reused until C++ hands them back: `recycle_output_buffer`
+    // returns them here once the embedder has consumed the invocation output.
+    // Drawing from this pool keeps the per-invocation output encoding
+    // allocation-free once warm.
+    static OUTPUT_BUF_POOL: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+}
+
+// Draws a cleared byte buffer from the output pool, allocating only if empty.
+pub fn take_output_buffer() -> Vec<u8> {
+    OUTPUT_BUF_POOL.with(|pool| match pool.borrow_mut().pop() {
+        Some(mut buf) => {
+            buf.clear();
+            buf
+        }
+        None => Vec::new(),
+    })
+}
+
+// Returns a buffer to the output pool for reuse by a later invocation. Called
+// by the embedder (through the bridge) after it has consumed the output.
+pub fn recycle_output_buffer(buf: Vec<u8>) {
+    OUTPUT_BUF_POOL.with(|pool| pool.borrow_mut().push(buf));
+}
 
 #[cfg(any(test, feature = "recording_mode"))]
 use crate::storage::SnapshotSource;
@@ -226,7 +278,7 @@ fn get_ledger_changes(
             Some(None) => None,
             // Every footprint key must be in the storage map.
             None => return Err(internal_error()),
-        };
+            };
 
         if let Some(durability) = durability {
             let key_hash = sha256_hash_from_bytes(entry_change.encoded_key.as_slice(), budget)?;
@@ -248,11 +300,11 @@ fn get_ledger_changes(
                 Some(None) | None => None,
             };
         if let Some((old_entry, old_live_until_ledger)) = init_entry_with_live_until {
-            let mut buf = vec![];
-            metered_write_xdr(budget, old_entry.as_ref(), &mut buf)?;
-
-            entry_change.old_entry_size_bytes_for_rent =
-                entry_size_for_rent(budget, &old_entry, saturating_usize_to_u32(buf.len()))?;
+            entry_change.old_entry_size_bytes_for_rent = entry_size_for_rent(
+                budget,
+                &old_entry,
+                metered_encoded_size(budget, old_entry.as_ref())?,
+            )?;
 
             if let Some(ref mut ttl_change) = &mut entry_change.ttl_change {
                 ttl_change.old_live_until_ledger =
@@ -284,7 +336,7 @@ fn get_ledger_changes(
             }
             AccessType::ReadWrite => {
                 if let Some((entry, _)) = &entry_with_live_until_ledger {
-                    let mut entry_buf = vec![];
+                    let mut entry_buf = take_output_buffer();
                     metered_write_xdr(budget, entry.as_ref(), &mut entry_buf)?;
                     entry_change.new_entry_size_bytes_for_rent = entry_size_for_rent(
                         budget,
@@ -443,11 +495,11 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         host.populate_storage_from_xdr(
             &mut storage.map,
             &footprint_key_order,
-            encoded_ledger_entries,
-            encoded_ttl_entries,
-            current_ledger_seq,
-            #[cfg(any(test, feature = "recording_mode"))]
-            false,
+        encoded_ledger_entries,
+        encoded_ttl_entries,
+        current_ledger_seq,
+        #[cfg(any(test, feature = "recording_mode"))]
+        false,
         )
     })?;
 
@@ -498,7 +550,7 @@ pub fn invoke_host_function<T: AsRef<[u8]>, I: ExactSizeIterator<Item = T>>(
         extract_diagnostic_events(&events, diagnostic_events);
     }
     let encoded_invoke_result = result.and_then(|res| {
-        let mut encoded_result_sc_val = vec![];
+        let mut encoded_result_sc_val = take_output_buffer();
         metered_write_xdr(&budget, &res, &mut encoded_result_sc_val).map(|_| encoded_result_sc_val)
     });
     if encoded_invoke_result.is_ok() {
@@ -735,69 +787,69 @@ pub fn invoke_host_function_in_recording_mode(
 
         let mut encoded_ledger_entries = Vec::with_capacity(footprint_key_order.len());
         let mut encoded_ttl_entries = Vec::with_capacity(footprint_key_order.len());
-        let mut disk_read_bytes = 0_u32;
-        let mut current_rw_id = 0;
-        let mut restored_rw_entry_ids = vec![];
-        let mut restored_keys = RestoredKeySet::default();
+            let mut disk_read_bytes = 0_u32;
+            let mut current_rw_id = 0;
+            let mut restored_rw_entry_ids = vec![];
+            let mut restored_keys = RestoredKeySet::default();
 
         for (lk, access_type) in &footprint_key_order {
-            let entry_with_live_until = ledger_snapshot.get(lk)?;
-            if let Some((le, live_until)) = entry_with_live_until {
-                let encoded_le = host.to_xdr_non_metered(&*le)?;
-                match &le.data {
-                    LedgerEntryData::ContractData(_) | LedgerEntryData::ContractCode(_) => {
-                        if let Some(live_until) = live_until {
-                            // Check if entry has been auto-restored (only persistent entries
-                            // can be auto-restored)
-                            if live_until < ledger_seq && is_persistent_key(lk.as_ref()) {
-                                // Auto-restored entries are expected to be in RW footprint.
-                                if !matches!(*access_type, AccessType::ReadWrite) {
+                let entry_with_live_until = ledger_snapshot.get(lk)?;
+                if let Some((le, live_until)) = entry_with_live_until {
+                    let encoded_le = host.to_xdr_non_metered(&*le)?;
+                    match &le.data {
+                        LedgerEntryData::ContractData(_) | LedgerEntryData::ContractCode(_) => {
+                            if let Some(live_until) = live_until {
+                                // Check if entry has been auto-restored (only persistent entries
+                                // can be auto-restored)
+                                if live_until < ledger_seq && is_persistent_key(lk.as_ref()) {
+                                    // Auto-restored entries are expected to be in RW footprint.
+                                    if !matches!(*access_type, AccessType::ReadWrite) {
                                     return Err(host.err(
-                                        ScErrorType::Storage,
-                                        ScErrorCode::InternalError,
+                                            ScErrorType::Storage,
+                                            ScErrorCode::InternalError,
                                         "auto-restored entry is not in read-write footprint",
                                         &[],
                                     ));
-                                }
-                                // Auto-restored entries are counted towards disk read bytes.
-                                disk_read_bytes = disk_read_bytes
-                                    .saturating_add(saturating_usize_to_u32(encoded_le.len()));
-                                restored_rw_entry_ids.push(current_rw_id);
+                                    }
+                                    // Auto-restored entries are counted towards disk read bytes.
+                                    disk_read_bytes = disk_read_bytes
+                                        .saturating_add(saturating_usize_to_u32(encoded_le.len()));
+                                    restored_rw_entry_ids.push(current_rw_id);
                                 restored_keys = restored_keys.insert(Rc::clone(lk), (), &budget)?;
+                                }
                             }
                         }
+                        _ => {
+                            // Non-Soroban entries are counted towards disk read bytes.
+                            disk_read_bytes = disk_read_bytes
+                                .saturating_add(saturating_usize_to_u32(encoded_le.len()));
+                        }
                     }
-                    _ => {
-                        // Non-Soroban entries are counted towards disk read bytes.
-                        disk_read_bytes = disk_read_bytes
-                            .saturating_add(saturating_usize_to_u32(encoded_le.len()));
-                    }
-                }
 
-                encoded_ledger_entries.push(encoded_le);
-                if let Some(live_until_ledger) = live_until {
-                    let key_xdr = host.to_xdr_non_metered(lk.as_ref())?;
-                    let key_hash: [u8; 32] = Sha256::digest(&key_xdr).into();
-                    let ttl_entry = TtlEntry {
-                        key_hash: key_hash.try_into().map_err(|_| {
+                    encoded_ledger_entries.push(encoded_le);
+                    if let Some(live_until_ledger) = live_until {
+                        let key_xdr = host.to_xdr_non_metered(lk.as_ref())?;
+                        let key_hash: [u8; 32] = Sha256::digest(&key_xdr).into();
+                        let ttl_entry = TtlEntry {
+                            key_hash: key_hash.try_into().map_err(|_| {
                             host.err(
                                 ScErrorType::Context,
                                 ScErrorCode::InternalError,
                                 "failed to convert key hash to Hash in recording mode",
                                 &[],
                             )
-                        })?,
-                        live_until_ledger_seq: live_until_ledger,
-                    };
-                    encoded_ttl_entries.push(host.to_xdr_non_metered(&ttl_entry)?);
-                } else {
-                    encoded_ttl_entries.push(vec![]);
+                            })?,
+                            live_until_ledger_seq: live_until_ledger,
+                        };
+                        encoded_ttl_entries.push(host.to_xdr_non_metered(&ttl_entry)?);
+                    } else {
+                        encoded_ttl_entries.push(vec![]);
+                    }
+                }
+                if matches!(*access_type, AccessType::ReadWrite) {
+                    current_rw_id += 1;
                 }
             }
-            if matches!(*access_type, AccessType::ReadWrite) {
-                current_rw_id += 1;
-            }
-        }
         // Build a temporary enforcing storage map and populate it from the
         // encoded entries. This performs the same metered operations as the
         // enforcing mode (build_storage_footprint_from_xdr +
@@ -808,17 +860,17 @@ pub fn invoke_host_function_in_recording_mode(
         let init_entries = host.populate_storage_from_xdr(
             &mut storage_map_for_init,
             &key_order_for_init,
-            encoded_ledger_entries.iter(),
-            encoded_ttl_entries.iter(),
-            ledger_seq,
-            true,
-        )?;
+                encoded_ledger_entries.iter(),
+                encoded_ttl_entries.iter(),
+                ledger_seq,
+                true,
+            )?;
         (
-            footprint,
-            disk_read_bytes,
+                footprint,
+                disk_read_bytes,
             init_entries,
-            restored_rw_entry_ids,
-            restored_keys,
+                restored_rw_entry_ids,
+                restored_keys,
         )
     };
     let mut resources = SorobanResources {
@@ -898,7 +950,7 @@ pub fn encode_contract_events(budget: &Budget, events: &Events) -> Result<Vec<Ve
         .iter()
         .filter(|e| !e.failed_call && e.event.type_ != ContractEventType::Diagnostic)
         .map(|e| {
-            let mut buf = vec![];
+            let mut buf = take_output_buffer();
             metered_write_xdr(budget, &e.event, &mut buf)?;
             Ok(buf)
         })
@@ -969,7 +1021,7 @@ fn build_storage_map_and_footprint_from_xdr(
             let has_ttl = get_key_durability(&key_rc).is_some();
             let storage_entry = StorageEntry::new(access_type, has_ttl, None);
             storage_map.insert(key_rc, storage_entry, budget)?;
-        }
+    }
         Ok(())
     };
 
@@ -1002,76 +1054,76 @@ impl Host {
         &self,
         storage_map: &mut StorageMap,
         key_order: &[(Rc<LedgerKey>, AccessType)],
-        encoded_ledger_entries: I,
-        encoded_ttl_entries: I,
-        ledger_num: u32,
-        #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
+    encoded_ledger_entries: I,
+    encoded_ttl_entries: I,
+    ledger_num: u32,
+    #[cfg(any(test, feature = "recording_mode"))] is_recording_mode: bool,
     ) -> Result<LedgerEntryMap, HostError> {
-        if encoded_ledger_entries.len() != encoded_ttl_entries.len() {
+    if encoded_ledger_entries.len() != encoded_ttl_entries.len() {
             return Err(self.err(
                 ScErrorType::Storage,
                 ScErrorCode::InternalError,
                 "ledger entries and TTL entries have different lengths",
                 &[],
             ));
-        }
+    }
         let budget = self.as_budget();
         let mut init_entries = LedgerEntryMap::new();
 
-        for (entry_buf, ttl_buf) in encoded_ledger_entries.zip(encoded_ttl_entries) {
-            let mut live_until_ledger: Option<u32> = None;
+    for (entry_buf, ttl_buf) in encoded_ledger_entries.zip(encoded_ttl_entries) {
+        let mut live_until_ledger: Option<u32> = None;
 
-            let le = Rc::metered_new(
-                metered_from_xdr_with_budget::<LedgerEntry>(entry_buf.as_ref(), budget)?,
-                budget,
-            )?;
-            let key = Rc::metered_new(ledger_entry_to_ledger_key(&le, budget)?, budget)?;
+        let le = Rc::metered_new(
+            metered_from_xdr_with_budget::<LedgerEntry>(entry_buf.as_ref(), budget)?,
+            budget,
+        )?;
+        let key = Rc::metered_new(ledger_entry_to_ledger_key(&le, budget)?, budget)?;
 
-            if !ttl_buf.as_ref().is_empty() {
+        if !ttl_buf.as_ref().is_empty() {
                 let ttl_entry: TtlEntry = metered_from_xdr_with_budget(ttl_buf.as_ref(), budget)?;
-                // In the default host flow (i.e. enforcing storage only) we don't
-                // expect expired entries to ever appear in the storage map, so
-                // that's always an internal error.
-                #[cfg(not(any(test, feature = "recording_mode")))]
-                if ttl_entry.live_until_ledger_seq < ledger_num {
+            // In the default host flow (i.e. enforcing storage only) we don't
+            // expect expired entries to ever appear in the storage map, so
+            // that's always an internal error.
+            #[cfg(not(any(test, feature = "recording_mode")))]
+            if ttl_entry.live_until_ledger_seq < ledger_num {
                     return Err(self.err(
                         ScErrorType::Storage,
                         ScErrorCode::InternalError,
                         "unexpected expired entry in enforcing mode",
                         &[],
                     ));
-                }
-                // In the recording mode we still compile both recording and
-                // enforcing functions, and we do allow expired entries in the
-                // recording mode when allow_expired_entries is true.
-                #[cfg(any(test, feature = "recording_mode"))]
-                if ttl_entry.live_until_ledger_seq < ledger_num {
-                    if !is_recording_mode {
+            }
+            // In the recording mode we still compile both recording and
+            // enforcing functions, and we do allow expired entries in the
+            // recording mode when allow_expired_entries is true.
+            #[cfg(any(test, feature = "recording_mode"))]
+            if ttl_entry.live_until_ledger_seq < ledger_num {
+                if !is_recording_mode {
                         return Err(self.err(
-                            ScErrorType::Storage,
-                            ScErrorCode::InternalError,
+                        ScErrorType::Storage,
+                        ScErrorCode::InternalError,
                             "unexpected expired entry in non-recording mode",
                             &[],
                         ));
-                    }
-                    // Skip expired temp entries, as these can't actually appear in
-                    // storage.
-                    if !crate::storage::is_persistent_key(key.as_ref()) {
-                        continue;
-                    }
                 }
+                // Skip expired temp entries, as these can't actually appear in
+                // storage.
+                if !crate::storage::is_persistent_key(key.as_ref()) {
+                    continue;
+                }
+            }
 
-                live_until_ledger = Some(ttl_entry.live_until_ledger_seq);
-            } else if matches!(le.as_ref().data, LedgerEntryData::ContractData(_))
-                || matches!(le.as_ref().data, LedgerEntryData::ContractCode(_))
-            {
+            live_until_ledger = Some(ttl_entry.live_until_ledger_seq);
+        } else if matches!(le.as_ref().data, LedgerEntryData::ContractData(_))
+            || matches!(le.as_ref().data, LedgerEntryData::ContractCode(_))
+        {
                 return Err(self.err(
-                    ScErrorType::Storage,
-                    ScErrorCode::InternalError,
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
                     "contract data or code entry is missing TTL",
                     &[],
                 ));
-            }
+        }
 
             // Store raw LedgerEntry in init_entries for later diff computation.
             let init_entry: Option<EntryWithLiveUntil> = Some((Rc::clone(&le), live_until_ledger));
@@ -1084,21 +1136,21 @@ impl Host {
             // Update the existing StorageEntry's value at depth 0
             let storage_entry = storage_map.get_mut(&key, budget)?.ok_or_else(|| {
                 self.err(
-                    ScErrorType::Storage,
-                    ScErrorCode::InternalError,
+                ScErrorType::Storage,
+                ScErrorCode::InternalError,
                     "entry key not found in storage footprint",
                     &[],
-                )
+            )
             })?;
             storage_entry.set_base_frame_value(entry_data, live_until_ledger, self)?;
-        }
+    }
 
         // Add entries for footprint keys not present in the input (non-existing entries).
         for (k, _) in key_order {
             if init_entries.get(k, budget)?.is_none() {
                 init_entries.insert(Rc::clone(k), None, budget)?;
-            }
         }
+    }
 
         Ok(init_entries)
     }
