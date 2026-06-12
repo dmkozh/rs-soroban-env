@@ -5,9 +5,9 @@ homepage = "https://github.com/stellar/rs-soroban-env"
 repository = "https://github.com/stellar/rs-soroban-env"
 authors = ["Stellar Development Foundation <info@stellar.org>"]
 license = "Apache-2.0"
-version.workspace = true
+version = "26.0.0"
 edition = "2021"
-rust-version.workspace = true
+rust-version = "1.84.0"
 
 [lib]
 proc-macro = true

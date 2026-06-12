@@ -5,19 +5,19 @@ homepage = "https://github.com/stellar/rs-soroban-env"
 repository = "https://github.com/stellar/rs-soroban-env"
 authors = ["Stellar Development Foundation <info@stellar.org>"]
 license = "Apache-2.0"
-version.workspace = true
+version = "26.0.0"
 readme = "../README.md"
 edition = "2021"
-rust-version.workspace = true
+rust-version = "1.84.0"
 
 [build-dependencies]
 crate-git-revision = "0.0.6"
 
 [dependencies]
-soroban-env-macros = { workspace = true }
-stellar-xdr = { workspace = true, default-features = false }
-wasmi = { workspace = true, optional = true }
-wasmparser = { workspace = true, optional = true}
+soroban-env-macros = { version = "=26.0.0", path = "../soroban-env-macros" }
+stellar-xdr = { version = "=26.0.0", default-features = false, features = ["curr"] }
+wasmi = { package = "soroban-wasmi", version = "=0.31.1-soroban.20.0.1", git = "https://github.com/stellar/wasmi", rev = "0ed3f3dee30dc41ebe21972399e0a73a41944aa0" , optional = true }
+wasmparser = { version = "=0.116.1", optional = true }
 serde = { version = "1.0.192", features = ["derive"], optional = true }
 static_assertions = "1.1.0"
 ethnum = "1.5.0"

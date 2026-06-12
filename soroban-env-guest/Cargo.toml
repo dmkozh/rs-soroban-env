@@ -5,13 +5,13 @@ homepage = "https://github.com/stellar/rs-soroban-env"
 repository = "https://github.com/stellar/rs-soroban-env"
 authors = ["Stellar Development Foundation <info@stellar.org>"]
 license = "Apache-2.0"
-version.workspace = true
+version = "26.0.0"
 readme = "../README.md"
 edition = "2021"
-rust-version.workspace = true
+rust-version = "1.84.0"
 
 [dependencies]
-soroban-env-common = { workspace = true, features = [] }
+soroban-env-common = { version = "=26.0.0", path = "../soroban-env-common", default-features = false, features = [] }
 static_assertions = "1.1.0"
 
 [package.metadata.docs.rs]
