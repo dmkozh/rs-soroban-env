@@ -150,6 +150,17 @@ pub struct ParsedModule {
     pub wasmi_module: wasmi::Module,
     pub proto_version: u32,
     pub cost_inputs: VersionedContractCodeCostInputs,
+    /// Memoized result of a successful
+    /// [`ParsedModule::check_contract_imports_match_host_protocol`] call:
+    /// the checked ledger protocol plus one (zero means "not checked yet"),
+    /// packed together with the import-symbol count observed during that
+    /// check (needed to replicate the check's budget charge on the memoized
+    /// path). The module's imports are immutable, so a successful check only
+    /// depends on the ledger protocol; instantiations re-running under the
+    /// same protocol can skip rebuilding and re-scanning the symbol set.
+    /// Failed checks are not memoized (they return an error either way).
+    /// Layout: bits 0..32 = ledger protocol + 1, bits 32..64 = symbol count.
+    import_check_cache: core::sync::atomic::AtomicU64,
 }
 
 pub fn wasm_module_memory_cost(
@@ -224,6 +235,7 @@ impl ParsedModule {
             wasmi_module,
             proto_version,
             cost_inputs,
+            import_check_cache: core::sync::atomic::AtomicU64::new(0),
         }))
     }
 
@@ -421,8 +433,20 @@ impl ParsedModule {
         //    contract (in the earlier protocol where it belongs), we need
         //    to return the same error.
         let _span = tracy_span!("ParsedModule::check_contract_imports_match_host_protocol");
+        use core::sync::atomic::Ordering;
         let ledger_proto = host.with_ledger_info(|li| Ok(li.protocol_version))?;
+        // Fast path: this module already passed the check under this ledger
+        // protocol. Only the budget charge of the slow path (which depends
+        // solely on the import-symbol count) needs to be replicated.
+        let cached = self.import_check_cache.load(Ordering::Relaxed);
+        if cached as u32 == ledger_proto.saturating_add(1) {
+            let symbols_len = cached >> 32;
+            Vec::<(&str, &str)>::charge_bulk_init_cpy(symbols_len, host)?;
+            return Ok(());
+        }
+        let mut symbols_len: u64 = 0;
         self.with_import_symbols(host, |module_symbols| {
+                symbols_len = module_symbols.len() as u64;
                 for hf in HOST_FUNCTIONS {
                     if !module_symbols.contains(&(hf.mod_str, hf.fn_str)) {
                         continue;
@@ -450,6 +474,12 @@ impl ParsedModule {
                 }
                 Ok(())
             })?;
+        // Memoize the successful check for this ledger protocol along with
+        // the symbol count needed to replicate the budget charge above.
+        self.import_check_cache.store(
+            (symbols_len << 32) | (ledger_proto.saturating_add(1) as u64),
+            Ordering::Relaxed,
+        );
         Ok(())
     }
 

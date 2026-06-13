@@ -1290,6 +1290,28 @@ impl Budget {
         Ok(budget)
     }
 
+    /// Creates a fresh, unused `Budget` sharing this budget's cost model
+    /// configuration, with the given limits.
+    ///
+    /// This is observationally equivalent to calling
+    /// [`Budget::try_from_configs`] with the same cost params that `self` was
+    /// created from, but skips re-decoding and re-validating those params.
+    /// Embedders that invoke many host functions under the same network
+    /// configuration can use this to avoid the per-invocation setup work.
+    pub fn fresh_clone_with_limits(&self, cpu_limit: u64, mem_limit: u64) -> Result<Self, HostError> {
+        let mut fresh = self.0.try_borrow_or_err()?.clone();
+        // Mirror `BudgetImpl::try_from_configs` exactly: both dimensions get
+        // their limit and shadow limit set to the respective limit with zero
+        // consumption, the tracker starts out fresh, and shadow mode is off.
+        // The cost models, fuel costs and depth limit carry over unchanged
+        // from the source budget's configuration.
+        fresh.cpu_insns.reset(cpu_limit);
+        fresh.mem_bytes.reset(mem_limit);
+        fresh.tracker = BudgetTracker::default();
+        fresh.is_in_shadow_mode = false;
+        Ok(Self(Rc::new(RefCell::new(fresh))))
+    }
+
     // Helper function to avoid panics from multiple borrow_muts
     fn with_mut_budget<T, F>(&self, f: F) -> Result<T, HostError>
     where

@@ -120,14 +120,19 @@ impl Host {
             .checked_mul(val_sz)
             .ok_or_else(|| self.err_arith_overflow())?;
 
-        let mem_end = mem_pos
+        // Overflow check only; the actual bounds check happens in
+        // `data_mut_range` below.
+        mem_pos
             .checked_add(byte_len)
             .ok_or_else(|| self.err_arith_overflow())?;
-        let mem_range = (mem_pos as usize)..(mem_end as usize);
 
-        let mem_data = vm.get_memory(self)?.data_mut(vmcaller.try_mut()?);
-        let mem_slice = mem_data
-            .get_mut(mem_range)
+        // Use the range-restricted accessor (rather than `data_mut`) so the
+        // VM knows precisely which memory region is written: the unrestricted
+        // accessor forces it to conservatively treat the whole linear memory
+        // as written, defeating its dirty-region-based buffer reuse.
+        let mem_slice = vm
+            .get_memory(self)?
+            .data_mut_range(vmcaller.try_mut()?, mem_pos as usize, byte_len as usize)
             .ok_or_else(|| self.err_oob_linear_memory())?;
 
         self.charge_budget(ContractCostType::MemCpy, Some(byte_len as u64))?;
